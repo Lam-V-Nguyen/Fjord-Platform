@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="/src_frontend/styles/tabControler.css">
+    <link rel="stylesheet" href="/src_frontend/styles/flowPreparation.css">
+    <link rel="stylesheet" href="/src_frontend/styles/calibration.css">
+</head>
+<body>
+    <div class="wrapper">
+        <section class="main-tab" id="control-tab">
+            <div class="tab-header" id="main-tabs">
+                <div class="tabs-list">
+                    <button class="tab-btn" data-tab="preparation-tab">Data Preparation</button>
+                    <button class="tab-btn" data-tab="analysis-tab">Result Analysis</button>
+                    <button class="tab-btn" data-tab="optimization-tab">Optimization</button>
+                    <button class="tab-btn" data-tab="comparison-tab">Comparison</button>
+                </div>
+            </div>
+            <div class="tabs-content">
+                <!-- Tab 1: Data Preparation -->
+                <div class="tabpanel main-panel" data-panel="preparation-tab">
+                    <div class="grid">
+                        <div class="tile" style="grid-column: span 3;"><h3>1. HYD Scenario</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <label for="project-name">HYD Scenario:</label>
+                                    <div class="project-name-wrapper">
+                                        <input type="text" class="project-name" id="project-name" 
+                                            placeholder="Click to select a scenario" 
+                                            style="max-width: 200px; line-height: 1.8; height: 40px;">
+                                        <ul class="project-list" id="project-list" style="max-width: 200px;"></ul>
+                                    </div>
+                                    <button id="project-btn">Open Scenario</button>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="sim-start-date">Start Time:</label>
+                                    <input type="text" id="sim-start-date" placeholder="YYYY-mm-dd HH:mm:ss">
+                                </div>
+                                <div class="field-inline">    
+                                    <label for="sim-end-date">End Time:</label>
+                                    <input type="text" id="sim-end-date" placeholder="YYYY-mm-dd HH:mm:ss">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 5;"><h3>2. Initial Calibration Parameters</h3>
+                            <div class="parameter-container"></div>
+                        </div>
+                        <div class="tile" style="grid-column: span 3;"><h3>3. Iteration & Run Simulations</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <label for="iteration-number">Number of Iterations:</label>
+                                    <input type="number" id="iteration-number" min="1" value="50">
+                                </div>
+                                <div class="field-inline-4cols">
+                                    <label style="text-align: center;">From:</label>
+                                    <input type="text" id="iteration-start" value="1">
+                                    <label style="text-align: center;">To:</label>
+                                    <input type="text" id="iteration-end" value="50">
+                                </div>
+                                <div class="field-inline">
+                                    <button id="iteration-btn">3.1. Run Iterations</button>
+                                    <button id="run-simulation-btn">3.2. Run Simulations</button>
+                                </div>
+                            </div>
+                            <div class="progress-container" id="progressbar-container">
+                                <progress id="progressbar" value="0" max="100"></progress>
+                                <label id="progress-text"></label>
+                            </div>
+                        </div>
+                        <div class="tile model-container" style="grid-column: span 5;">
+                            <div class="field-inline"><h3 style="margin-top: 5px;">4. View Logs</h3>
+                                <div class="row" style="margin-top: -15px;">
+                                    <button type="button" style="font-size: 11px; height: 30px;"
+                                        id="calibration-load-log-btn">Load the last Calibration Log
+                                    </button>
+                                </div>
+                            </div>
+                            <textarea wrap="off" id="calibration-text" placeholder="Logs..." readonly></textarea>
+                        </div>
+                    </div>
+                </div>
+                <!-- Tab 2: Result Analysis -->
+                <div class="tabpanel main-panel" data-panel="analysis-tab">
+                    <div class="grid">
+                        <div class="tile"><h3>Observed Measurements</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <button id="observation-btn">Open an Observation (*.csv)</button>
+                                    <input type="file" id="observation-file" accept=".csv" hidden>
+                                    <input type="text" id="observation-name">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="observation-start-date">Start:</label>
+                                    <input type="text" id="observation-start-date" placeholder="YYYY-mm-dd HH:mm:ss">
+                                    <label for="observation-end-date">End:</label>
+                                    <input type="text" id="observation-end-date" placeholder="YYYY-mm-dd HH:mm:ss">
+                                </div>
+                            </div>
+                            <div class="table-container">
+                                <table class="attributes-table" id="observation-table">
+                                    <thead><tr>
+                                        <th>Time</th><th>Temperature (°C)</th><th>Depth (m)</th>
+                                    </tr></thead>
+                                    <tbody style="max-height: 150px;">
+                                        <tr>
+                                            <td><input type="text" placeholder="YYYY-mm-dd HH:mm:ss"></td>
+                                            <td><input type="text" placeholder="Temperature (°C)"></td>
+                                            <td><input type="text" placeholder="Depth (m)"></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="tile"><h3>Simulation Station</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <button id="extract-station-btn">Extract Stations from Simulation</button>
+                                    <select id="station-select">
+                                        <option value="">-- Select a station --</option>
+                                    </select>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="depth-selection">Depth Selection:</label>
+                                    <input type="text" id="depth-selection" placeholder="5, 10, 30, 40, 50"
+                                        value="5, 10, 30, 40, 50">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="criteria-select">Optimization Target:</label>
+                                    <select id="criteria-select">
+                                        <option value="RMSE" selected>Minimize RMSE</option>
+                                        <option value="R2">Maximize R²</option>
+                                    </select>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="weight-select">Weight Method:</label>
+                                    <select id="weight-select">
+                                        <option value="equal" selected>Equal Weight (All Layers have an equal weight)</option>
+                                        <option value="surface">Surface-Weighted (Higher weight at shallower depths)</option>
+                                        <option value="deep">Deep-Weighted (Higher weight at deeper depths)</option>
+                                    </select>
+                                </div>
+                                <div class="field-inline">
+                                    <button id="summary-btn">Summarize Outputs for Selected Station</button>
+                                    <button id="correlation-btn">Correlation Analysis</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile sensitivity-layout" id="sensitivity-analysis"
+                            style="grid-column: span 8; display: none;"><h3>Correlation Analysis Results</h3>
+                            <div id="sensitivity-container"></div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Tab 3: Optimization -->
+                <div class="tabpanel main-panel" data-panel="optimization-tab">
+                    <div class="grid">
+                        <div class="tile" style="grid-column: span 2;"><h3>Surrogate Model</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <label for="surrogate-select">Model:</label>
+                                    <select id="surrogate-select">
+                                        <option value="gaussian-process" selected>Gaussian Process</option>
+                                    </select>
+                                </div>
+                                <button id="surrogate-btn">Run Surrogate Model</button>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 2;"><h3>Run Optimization</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <label for="direction-select">Direction:</label>
+                                    <select id="direction-select">
+                                        <option value="minimize" selected>Minimize Target</option>
+                                        <option value="maximize">Maximize Target</option>
+                                    </select>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="iteration-value">Nr. of Iterations:</label>
+                                    <input type="text" id="iteration-value" value="2000">
+                                </div>
+                                <button id="optimization-btn">Run Optimization</button>
+                                <div class="progress-container" id="progressbar-optimization-container" style="margin-top: -10px;">
+                                    <progress id="progressbar-optimization" value="0" max="100"></progress>
+                                    <label id="progress-optimization-text"></label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 4; display: none;" 
+                            id="optimization-results"><h3>Optimization Results</h3>
+                            <div class="parameter-optimal"></div>
+                            <div class="row">
+                                <button id="plot-optimization-btn">Plot Results</button>
+                                <button id="save-optimization-btn">Save Results</button>
+                            </div>
+                        </div>
+                        <div class="tile model-container" id="optimization-log"
+                            style="grid-column: span 8; display: none;"><h3>View Logs</h3>
+                            <textarea wrap="off" id="model-text" placeholder="Logs..." readonly></textarea>
+                        </div>
+                        <div class="tile sensitivity-layout" id="optimization-chart"
+                            style="grid-column: span 8; display: none;"><h3>Optimization Analysis</h3>
+                            <div id="optimization-container"></div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Tab 4: Comparison -->
+                <div class="tabpanel main-panel" data-panel="comparison-tab">
+                    <div class="grid">
+                        <div class="tile"><h3>Simulation</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <label for="project-name-comparison">HYD Simulation:</label>
+                                    <div class="project-name-wrapper">
+                                        <input type="text" class="project-name" id="project-name-comparison" placeholder="Click to select a scenario">
+                                        <ul class="project-list" id="project-list-comparison"></ul>
+                                    </div>
+                                    <button id="project-comparison-btn">Open Simulation</button>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="sim-start">Start Time:</label>
+                                    <input type="text" id="sim-start" placeholder="YYYY-mm-dd HH:mm:ss">
+                                </div>
+                                <div class="field-inline">    
+                                    <label for="sim-end">End Time:</label>
+                                    <input type="text" id="sim-end" placeholder="YYYY-mm-dd HH:mm:ss">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="depth-comparison">Tested Depth(s):</label>
+                                    <input type="text" id="depth-comparison" placeholder="5, 10, 30, 40, 50"
+                                        value="5, 10, 30, 40, 50">
+                                    <label for="comparison-select">Station</label>
+                                    <select id="comparison-select">
+                                        <option value="">-- Select a station --</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile"><h3>Observation</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <button id="obs-comparison-btn">Open an Observation (*.csv)</button>
+                                    <input type="file" id="obs-comparison-file" accept=".csv" hidden>
+                                    <input type="text" id="obs-comparison-name">
+                                    <button id="comparison-plot-btn">Comparison Plot</button>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="obs-start-date">Start:</label>
+                                    <input type="text" id="obs-start-date" placeholder="YYYY-mm-dd HH:mm:ss">
+                                    <label for="obs-end-date">End:</label>
+                                    <input type="text" id="obs-end-date" placeholder="YYYY-mm-dd HH:mm:ss">
+                                </div>
+                            </div>
+                            <div class="table-container">
+                                <table class="attributes-table" id="obs-table">
+                                    <thead><tr>
+                                        <th>Time</th><th>Temperature (°C)</th><th>Depth (m)</th>
+                                    </tr></thead>
+                                    <tbody style="max-height: 100px;">
+                                        <tr>
+                                            <td><input type="text" placeholder="YYYY-mm-dd HH:mm:ss"></td>
+                                            <td><input type="text" placeholder="Temperature (°C)"></td>
+                                            <td><input type="text" placeholder="Depth (m)"></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="tile sensitivity-layout" id="plot-container"
+                            style="grid-column: span 8; display: none;"> <h3>Comparison Results</h3>
+                            <div id="comparison-container"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.plot.ly/plotly-2.26.1.min.js"></script>
+    <script>
+        flatpickr(".datetime", {
+            enableTime: true, enableSeconds: true, dateFormat: "Y-m-d H:i:S", time_24hr: true,
+            defaultHour: 0, defaultMinute: 0, defaultSecond: 0
+        });
+    </script>
+    <script type="module" src="/src_frontend/services/calibrationManager.js"></script>
+</body>
+</html>

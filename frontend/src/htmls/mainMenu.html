@@ -1,0 +1,88 @@
+<div class="menu-item">
+    <a class="menu-link" id="timezone-menu">
+        Change Time Zone<span class="arrow">&#x27A4;</span>
+    </a>
+    <div class="submenu" class="timezone-submenu">
+        <input type="text" class="tz-search" id="tz-search"
+            placeholder="Search... (Oslo, New York, UTC)" autocomplete="off">
+        <div id="tz-results" class="tz-results"></div>
+        <div class="tz-modal-footer">
+            <small>Use IANA. Default: Get from browser.</small>
+        </div>
+    </div>
+</div>
+<hr style="width: 100%; border-top: 1px solid #0414f5; margin: 0 15px 0 0;">
+
+<div class="menu-item">
+    <a class="menu-link" id="data-download"
+        data-url="/src_frontend/htmls/dataDownload.html">Data Download</a>
+</div>
+<hr style="width: 100%; border-top: 1px solid #0414f5; margin: 0 15px 0 0;">
+
+<div class="menu-item">
+    <a class="menu-link">Hydrodynamics - HYD<span class="arrow">&#x27A4;</span></a>
+    <div class="submenu">
+        <div class="submenu-item" id="preparation-hyd"
+            data-url="/src_frontend/htmls/hydPreparation.html">Data Preparation
+        </div>
+        <div class="submenu-item" id="grid-generation"
+            data-url="/src_frontend/htmls/unstructuredGrid.html">Grid Generation
+        </div>
+        <hr style="width: 100%; border-top: 1px solid #0414f5; margin: 0 15px 0 0;">
+        <div class="submenu-item" id="new-hyd"
+            data-url="/src_frontend/htmls/hydCreator.html">Create HYD Scenario
+        </div>
+        <div class="submenu-item" id="run-hyd"
+            data-url="/src_frontend/htmls/hydRunner.html">Run HYD Scenario
+        </div>
+    </div>
+</div>
+
+<div class="menu-item">
+    <a class="menu-link">Water Quality - WAQ<span class="arrow">&#x27A4;</span></a>
+    <div class="submenu">
+        <div class="submenu-item" id="new-waq"
+            data-url="/src_frontend/htmls/waqCreator.html">Create WAQ Scenario
+        </div>
+        <div class="submenu-item" id="run-waq"
+            data-url="/src_frontend/htmls/waqRunner.html">Run WAQ Scenario
+        </div>
+    </div>
+</div>
+
+<hr style="width: 100%; border-top: 1px solid #0414f5; margin: 0 15px 0 0;">
+<div class="menu-item">
+    <a class="menu-link" id="visualization"
+        data-url="/src_frontend/htmls/visualization.html">Visualization</a>
+</div>
+
+<div class="menu-item">
+    <a class="menu-link" id="calibration"
+        data-url="/src_frontend/htmls/calibration.html">Model Calibration</a>
+</div>
+
+<div class="menu-item">
+    <a class="menu-link">Flow Estimation<span class="arrow">&#x27A4;</span></a>
+    <div class="submenu">
+        <div class="submenu-item" id="flow-preparation"
+            data-url="/src_frontend/htmls/flowPreparation.html">Data Preparation
+        </div>
+        <div class="submenu-item" id="run-flow-model"
+            data-url="/src_frontend/htmls/flowModel.html">Run Flow Model
+        </div>
+        <div class="submenu-item" id="flow-estimation"
+            data-url="/src_frontend/htmls/flowRunner.html">Flow Estimation
+        </div>
+    </div>
+</div>
+
+<hr style="width: 100%; border-top: 1px solid #0414f5; margin: 5px;">
+<div class="menu-item">
+    <a class="menu-link">Help<span class="arrow">&#x27A4;</span></a>
+    <div class="submenu">
+        <a class="submenu-item" id="help-docs" data-url="QuickManual.pdf">User Manual</a>
+        <a class="submenu-item" id="about" 
+            data-url="/src_frontend/htmls/about.html">About Us
+        </a>        
+    </div>
+</div>

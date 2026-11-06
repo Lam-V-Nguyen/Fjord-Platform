@@ -218,3 +218,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Files
+/backend/allowed_users.json
+
+# Folder
+/backend/softs
+/backend/projects
+/backend/src/lakes_database
+/test
+/Calibration

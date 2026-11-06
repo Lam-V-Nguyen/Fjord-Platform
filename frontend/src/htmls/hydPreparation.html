@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="/src_frontend/styles/tabControler.css">
+    <link rel="stylesheet" href="/src_frontend/styles/flowPreparation.css">
+    <link rel="stylesheet" href="/src_frontend/styles/mapConfiguration.css">
+</head>
+<body>
+    <div class="wrapper">
+        <section class="main-tab" id="control-tab">
+            <div class="tab-header" id="main-tabs">
+                <div class="tabs-list">
+                    <button class="tab-btn" data-tab="hyd-tab-1">Download Settings</button>
+                    <button class="tab-btn" data-tab="hyd-tab-2">Hydrological Source</button>
+                    <button class="tab-btn" data-tab="hyd-tab-3">Meteo Parameters</button>
+                    <button class="tab-btn" data-tab="hyd-tab-4">Weather Parameters</button>
+                </div>
+            </div>
+            <div class="tabs-content">
+                <!-- Tab 1: Download Settings -->
+                <div class="tabpanel main-panel" data-panel="hyd-tab-1">
+                    <div class="grid">
+                        <div class="tile" style="grid-column: span 2;"><h3>Download Period</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <label for="nve-start">Start Time:</label>
+                                    <input type="text" class="datetime" id="nve-start" placeholder="YYYY-MM-DD HH:MM:SS">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="nve-end">End Time:</label>
+                                    <input type="text" class="datetime" id="nve-end" placeholder="YYYY-MM-DD HH:MM:SS">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Tab 2: Hydrological Source -->
+                <div class="tabpanel main-panel" data-panel="hyd-tab-2">
+                    <div class="grid">
+                        <div class="tile" style="grid-column: span 2;"><h3>NVE Options</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <div class="field-row">
+                                        <label for="nve-client-id">NVE API Key:</label>
+                                        <div class="input-with-icon">
+                                            <input type="password" id="nve-client-id">
+                                            <button type="button" data-target="nve-client-id" class="toggle-password">👁️</button>
+                                        </div>
+                                        <button type="button" id="nve-remember-btn" style="max-width: 100px;">Remember</button>
+                                    </div>
+                                    <button type="button" id="nve-stations-btn">Get NVE Stations</button>
+                                </div>
+                                <div class="field-inline">
+                                    <input type="text" id="station-id" placeholder="Station ID">
+                                    <input type="text" id="station-name" placeholder="Station Name">
+                                    <input type="text" id="basin-area" placeholder="Basin Area (km²)">
+                                </div>
+                                <button type="button" id="nve-download-btn">Download Discharge</button>
+                                <div class="field-inline">
+                                    <a style="margin-top: 0; font-size: 14px;">References:</a>
+                                    <a class="data-link" style="font-size: 14px; color: aqua; margin-top: 0;"
+                                        href="https://sildre.nve.no/" target="_blank">Sildre Portal
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 2;" id="discharge-container"><h3>Discharge</h3>
+                            <table class="attributes-table" id="discharge-table" style="display: none;">
+                                <thead></thead><tbody></tbody>
+                            </table>
+                            <div class="log-container" id="discharge-log-container" style="height: 250px;">
+                                <textarea wrap="off" class="log-text" id="discharge-log-text" placeholder="Logs..." readonly></textarea>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 2;"><h3>Terrain Processing</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <button type="button" id="hyd-source-draw-btn">1. Select Area of Interest</button>
+                                </div>
+                                <div class="field-inline">
+                                    <input type="text" id="hyd-source-top-left" placeholder="Top-left Corner">
+                                    <input type="text" id="hyd-source-bottom-right" placeholder="Bottom-right Corner">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="hyd-source-terrain-resolution">Resolution:</label>
+                                    <select id="hyd-source-terrain-resolution">
+                                        <option value="1">1 m</option>
+                                        <option value="5" selected>5 m</option>
+                                        <option value="10">10 m</option>
+                                        <option value="20">20 m</option>
+                                        <option value="50">50 m</option>
+                                        <option value="100">100 m</option>
+                                        <option value="200">200 m</option>
+                                        <option value="500">500 m</option>
+                                        <option value="1000">1 km</option>
+                                    </select>
+                                    <button type="button" id="hyd-source-terrain-download-btn">2. Download DEM</button>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="hyd-source-threshold">Stream Order:</label>
+                                    <input type="text" id="hyd-source-threshold" placeholder="Threshold" value="3">
+                                    <button type="button" id="hyd-source-flow-btn">3. Detect Stream</button>
+                                </div>
+                                <div class="field-inline">
+                                    <a style="margin-top: 0; font-size: 13px;">References:</a>
+                                    <a class="data-link" style="font-size: 13px; color: aqua; margin-top: 0;"
+                                        href="https://kartkatalog.geonorge.no/metadata?DistributionProtocols=WCS-tjeneste&organizations=Kartverket&theme=H%C3%B8ydedata&type=service" target="_blank">WCS Services,
+                                    </a>
+                                    <a class="data-link" style="font-size: 13px; color: aqua; margin-top: 0;"
+                                        href="https://www.kartverket.no/programoppdatering/Fysak_main/Fysak_Hjelp_Beta/Fysak_pdf_1.html" target="_blank">FYSAK Beta manual
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 2;"><h3>Hydrological Parameters</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <button type="button" id="hyd-source-picker-btn">Pick Source</button>
+                                    <input type="text" id="hyd-source-area" style="max-width: 210px;" placeholder="Sub-area (km²)">
+                                </div>
+                                <div class="field-inline">
+                                    <input type="text" id="hyd-source-lat" placeholder="Latitude (°)">
+                                    <input type="text" id="hyd-source-lon" placeholder="Longitude (°)">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="hyd-source-salinity" style="width: 220px;">Initial Salinity (ppt):</label>
+                                    <input type="text" id="hyd-source-salinity" placeholder="Salinity" value="0.02">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="hyd-source-temperature" style="width: 220px;">Initial Temperature (°C):</label>
+                                <input type="text" id="hyd-source-temperature" placeholder="Temperature" value="0.02">
+                                </div>
+                                <button type="button" id="hyd-source-compute-btn">Recompute Discharge</button>
+                            </div>
+                        </div>
+                        <div class="tile" id="hyd-source-container" style="grid-column: span 8; display: none;">
+                            <div class="row">
+                                <h3>Attribute Table</h3>
+                                <button type="button" id="hyd-source-save-btn"
+                                    style="margin-top: -20px; max-width: 200px;">Save Source Data</button>
+                            </div>
+                            <table class="attributes-table" id="hyd-source-table">
+                                <thead><tr>
+                                    <th>Time</th><th>Discharge (m³/s)</th><th>Salinity (ppt)</th><th>Water Temperature (°C)</th>
+                                </tr></thead>
+                                <tbody>
+                                    <tr>
+                                        <td><input type="text" placeholder="YYYY-MM-DD HH:MM:SS"></td>
+                                        <td><input type="text" placeholder="Discharge"></td>
+                                        <td><input type="text" placeholder="Salinity"></td>
+                                        <td><input type="text" placeholder="Water Temperature"></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <!-- Tab 3: Meteo Parameters -->
+                <div class="tabpanel main-panel" data-panel="hyd-tab-3">
+                    <div class="grid">
+                        <div class="tile" style="grid-column: span 2;"><h3>Initial Settings</h3>
+                            <div class="row">
+                                <button type="button" id="meteo-picker-btn">Pick Location</button>
+                                <div class="field-inline">
+                                    <input type="text" id="meteo-lat" placeholder="Latitude (°)">
+                                    <input type="text" id="meteo-lon" placeholder="Longitude (°)">
+                                </div>
+                                <div class="field-inline" id="hyd-meteo-station-container">
+                                    <label for="hyd-meteo-station">Source:</label>
+                                    <select id="hyd-meteo-station" style="width: 100%;">
+                                        <option value="era5" selected>Climate Data Store - ERA5</option>
+                                    </select>
+                                </div>
+                                <div class="field-row">
+                                    <label for="era5-meteo-id">ERA5 API Key:</label>
+                                    <div class="input-with-icon">
+                                        <input type="password" id="era5-meteo-id">
+                                        <button type="button" data-target="era5-meteo-id" class="toggle-password">👁️</button>
+                                    </div>
+                                    <button type="button" id="era5-meteo-remember-btn" style="max-width: 100px;">Remember</button>
+                                </div>
+                                <div class="field-inline" style="margin-top: -5px;">
+                                    <button type="button" id="meteo-download-btn">Download Data</button>
+                                    <button type="button" id="meteo-cancel-btn" style="display: none;">Cancel</button>
+                                </div>
+                                <div class="field-inline">
+                                    <a style="margin-top: 0;">References:</a>
+                                    <a class="data-link" style="margin-top: -3px;"
+                                        href="https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download"
+                                        target="_blank">ERA5 - Hourly Data
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 6;">
+                            <div class="row"><h3 style="margin-top: 0;">Attribute Table</h3>
+                                <button type="button" id="meteo-save-btn" style="margin-top: -20px; max-width: 200px;">Save Meteo Data</button>
+                                <table class="attributes-table" id="meteo-table" style="margin-top: -15px; display: none;">
+                                    <thead><tr>
+                                        <th>Time</th><th>Humidity (%)</th><th>Air Temperature (°C)</th>
+                                        <th>Cloud Coverage (%)</th><th>Solar Radiation (W/m²)</th>
+                                    </tr></thead>
+                                    <tbody><tr>
+                                        <td><input type="text" placeholder="YYYY-MM-DD HH:MM:SS"></td>
+                                        <td><input type="text" placeholder="Humidity"></td>
+                                        <td><input type="text" placeholder="Air temperature"></td>
+                                        <td><input type="text" placeholder="Cloud coverage"></td>
+                                        <td><input type="text" placeholder="Solar radiation"></td>
+                                    </tr></tbody>
+                                </table>
+                                <div class="log-container" id="meteo-log-container" style="height: 260px; margin-top: -20px;">
+                                    <textarea wrap="off" class="log-text" id="meteo-log-text" placeholder="Logs..." readonly></textarea>
+                                </div>
+
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Tab 4: Weather Parameters -->
+                <div class="tabpanel main-panel" data-panel="hyd-tab-4">
+                    <div class="grid">
+                        <div class="tile" style="grid-column: span 2;"><h3>Initial Settings</h3>
+                            <div class="row">
+                                <button type="button" id="weather-picker-btn">Pick Location</button>
+                                <div class="field-inline">
+                                    <input type="text" id="weather-lat" placeholder="Latitude (°)">
+                                    <input type="text" id="weather-lon" placeholder="Longitude (°)">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="hyd-weather-station">Source:</label>
+                                    <select id="hyd-weather-station" style="width: 100%;">
+                                        <option value="nve-gts" selected>GridTimeSeries - NVE</option>
+                                        <option value="era5">Climate Data Store - ERA5</option>
+                                    </select>
+                                </div>
+                                <div class="field-row" id="gts-container">
+                                    <label for="gts-weather-id">NVE API Key:</label>
+                                    <div class="input-with-icon">
+                                        <input type="password" id="gts-weather-id">
+                                        <button type="button" data-target="gts-weather-id" class="toggle-password">👁️</button>
+                                    </div>
+                                    <button type="button" id="gts-weather-remember-btn" style="max-width: 100px;">Remember</button>
+                                </div>
+                                <div class="field-row" id="era5-container" style="display: none;">
+                                    <label for="era5-weather-id">ERA5 API Key:</label>
+                                    <div class="input-with-icon">
+                                        <input type="password" id="era5-weather-id">
+                                        <button type="button" data-target="era5-weather-id" class="toggle-password">👁️</button>
+                                    </div>
+                                    <button type="button" id="era5-weather-remember-btn" style="max-width: 100px;">Remember</button>
+                                </div>
+                                <div class="field-inline" style="margin-top: -10px;">
+                                    <button type="button" id="weather-download-btn">Download Data</button>
+                                    <button type="button" id="weather-cancel-btn" style="display: none;">Cancel</button>
+                                </div>
+                                <div class="field-inline" style="margin-top: -15px;">
+                                    <a style="margin-top: 12px;">References:</a>
+                                    <a class="data-link" href="https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download"
+                                        target="_blank">ERA5,
+                                    </a>
+                                    <a class="data-link" href="https://api.nve.no/doc/gridtimeseries-data-gts/#gridtimeseries"
+                                        target="_blank">GridTimeSeries
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile model-container" style="grid-column: span 3;"><h3>Process Log</h3>
+                            <textarea wrap="off" id="weather-text" placeholder="Logs..." readonly></textarea>
+                        </div>
+                        <div class="tile" style="grid-column: span 3;">
+                            <div class="row"><h3>Attribute Table</h3>
+                                <button type="button" id="weather-save-btn"
+                                    style="margin-top: -20px; max-width: 180px;">Save Weather Data</button>
+                            </div>
+                            <table class="attributes-table" id="weather-table">
+                                <thead><tr><th>Time</th><th>Wind Speed (m/s)</th><th>Wind Direction (°)</th></tr></thead>
+                                <tbody><tr>
+                                    <td><input type="text" placeholder="YYYY-MM-DD HH:MM:SS"></td>
+                                    <td><input type="text" placeholder="Wind Speed"></td>
+                                    <td><input type="text" placeholder="Wind Direction"></td>
+                                </tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <!-- Add the map -->
+        <div class="map-container" id="map-container">
+            <div class="leaflet-map" id="leaflet-map-hyd-preparation"></div>
+            <img class="leaflet-compass" src="/src_frontend/images/compass.png">
+            <div class="basemap-container">
+                <button type="button" class="leaflet-basemap-btn" id="basemap-btn">
+                    <img src="/src_frontend/images/basemap.png">
+                </button>
+                <div class="basemap-popup">
+                    <div><strong>Select Base Map</strong></div>
+                    <button class="basemap-option" data-url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png">Open
+                        Street Map</button>
+                    <button class="basemap-option"
+                        data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}">Satellite</button>
+                    <button class="basemap-option"
+                        data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}">Street</button>
+                </div>
+            </div>
+            <!-- Legend -->
+            <div class="colorbar-container" id="custom-colorbar">
+                <div class="colorbar-wrapper">
+                    <div class="colorbar-title" id="colorbar-title">Legend</div>
+                    <div class="colorbar-gradient" id="colorbar-gradient"></div>
+                    <div class="colorbar-labels" id="colorbar-label">
+                        <div></div> <!-- max -->
+                        <div></div> <!-- 75% -->
+                        <div></div> <!-- 50% -->
+                        <div></div> <!-- 25% -->
+                        <div></div> <!-- min -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script>
+        flatpickr(".datetime", {
+            enableTime: true, enableSeconds: true, dateFormat: "Y-m-d H:i:s", time_24hr: true,
+            defaultHour: 0, defaultMinute: 0, defaultSecond: 0
+        });
+    </script>
+    <script type="module" src="/src_frontend/services/hydPreparation.js"></script>
+</body>
+</html>

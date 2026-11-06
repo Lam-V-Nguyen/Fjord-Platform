@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/png" href="/src_frontend/images/logo16x16.png" />
+    <title>FjordFlow AI · Fjord Water Intelligence</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" />
+    <!-- Third-party libraries (Leaflet CSS và JS cùng phiên bản 1.9.4) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.2.0/dist/gridstack.min.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Styles: cũ (giữ cho các widget) + mới (dashboard) -->
+    <link rel="stylesheet" href="/src_frontend/styles/index.css">
+    <link rel="stylesheet" href="/src_frontend/styles/gridLayout.css">
+    <link rel="stylesheet" href="/src_frontend/styles/theme.css">
+    <link rel="stylesheet" href="/src_frontend/styles/layout.css">
+    <link rel="stylesheet" href="/src_frontend/styles/dashboard.css">
+  </head>
+  <body>
+    <div class="app" id="app">
+      <!-- ================================================= SIDEBAR -->
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <img src="/src_frontend/images/logo.png" alt="FjordFlow AI logo" />
+          <div class="brand-text">
+            <div class="brand-title">FjordFlow AI</div>
+            <div class="brand-sub">HydroAI Fjord Platform</div>
+          </div>
+        </div>
+
+        <div class="sidebar-scroll">
+          <!-- Điều hướng chính -->
+          <nav class="nav" id="nav-main">
+            <button class="nav-item" data-view="overview" title="Overview">
+              <span data-icon="overview"></span><span class="label">Overview</span>
+            </button>
+            <button class="nav-item" data-view="map" title="Map View">
+              <span data-icon="map"></span><span class="label">Map View</span>
+            </button>
+            <button class="nav-item" data-view="workspace" title="Workspace">
+              <span data-icon="workspace"></span><span class="label">Workspace</span>
+              <span class="badge" id="ws-count">0</span>
+            </button>
+          </nav>
+
+          <!-- Công cụ mô hình (sinh từ toolRegistry.js) -->
+          <div class="nav-section-title">Modelling Tools</div>
+          <nav class="nav" id="nav-tools"></nav>
+
+          <!-- Lớp bản đồ (sinh từ dashboardMap.js) -->
+          <div class="nav-section-title">
+            <span>Map Layers</span>
+            <button type="button" id="layers-toggle-all">Toggle all</button>
+          </div>
+          <div class="layer-list" id="layer-list"></div>
+
+          <div class="nav-section-title">System</div>
+          <nav class="nav" id="nav-system">
+            <button class="nav-item" id="btn-settings" title="Settings">
+              <span data-icon="settings"></span><span class="label">Settings</span>
+            </button>
+            <button class="nav-item" data-tool="help-docs" title="User Manual">
+              <span data-icon="book"></span><span class="label">User Manual</span>
+            </button>
+            <button class="nav-item" data-tool="about" title="About">
+              <span data-icon="info"></span><span class="label">About</span>
+            </button>
+          </nav>
+        </div>
+
+        <!-- Chân sidebar: giữ nguyên class .project-note / .time-zone / .github-last-update -->
+        <div class="sidebar-footer">
+          <div class="sf-row">
+            <span class="sf-label">Data Source</span>
+            <span class="sf-value"><span class="dot" id="source-dot"></span><span id="data-source">Loading…</span></span>
+          </div>
+          <div class="sf-row">
+            <span class="sf-label">Model Pipeline <span id="pipeline-pct"></span></span>
+            <div class="pipeline" id="pipeline"></div>
+          </div>
+          <div class="sf-row">
+            <span class="sf-label">Project</span>
+            <span class="project-note">...</span>
+          </div>
+          <div class="sf-row">
+            <span class="sf-label">Last Updated</span>
+            <span class="sf-value" id="last-updated">—</span>
+            <span class="time-zone">...</span>
+          </div>
+          <div class="github-last-update">Loading last update...</div>
+        </div>
+      </aside>
+
+      <!-- ================================================= MAIN -->
+      <main class="main">
+        <header class="topbar">
+          <button class="btn icon-only ghost" id="sidebar-toggle" title="Toggle sidebar"><span data-icon="menu"></span></button>
+          <div class="title-block">
+            <h1 id="page-title" style="font-size: xx-large;">Fjord Water Intelligence Dashboard</h1>
+            <p id="page-subtitle">Hydrodynamic &amp; water-quality insight for planning, monitoring and decision-making</p>
+          </div>
+          <div class="toolbar" id="dash-toolbar">
+            <button class="btn project-chip" id="project-chip" title="Change project">
+              <span data-icon="folder"></span><span class="label" id="project-chip-label">demo</span>
+            </button>
+            <div class="segmented" id="period-select" role="tablist" aria-label="Analysis window">
+              <button data-period="1d">1D</button>
+              <button data-period="7d">7D</button>
+              <button data-period="30d">30D</button>
+              <button data-period="all" class="active">All</button>
+            </div>
+            <label class="date-field" title="End of the analysis window (within the simulation period)">
+              <span data-icon="calendar"></span>
+              <input type="date" id="end-date" />
+            </label>
+            <button class="btn icon-only" id="btn-refresh" title="Refresh data"><span data-icon="refresh"></span></button>
+            <button class="btn" id="btn-share" title="Copy link to this view"><span data-icon="share"></span><span class="label-optional">Share</span></button>
+            <button class="btn primary" id="btn-filters" title="Alert filters"><span class="label-optional">Filters</span><span data-icon="filter"></span></button>
+          </div>
+        </header>
+
+        <div class="views">
+          <!-- ============================== OVERVIEW / MAP VIEW -->
+          <section class="view" id="view-overview">
+            <div class="overview" id="dash-overview">
+              <div class="kpi-row" id="kpi-row"></div>
+              <div class="dash-grid">
+                <div class="panel panel-map" id="panel-map">
+                  <div id="main-map"></div>
+                  <div class="map-controls">
+                    <div class="map-ctrl-group">
+                      <button id="map-zoom-in" title="Zoom in"><span data-icon="plus"></span></button>
+                      <button id="map-zoom-out" title="Zoom out"><span data-icon="minus"></span></button>
+                    </div>
+                    <div class="map-ctrl-group">
+                      <button id="map-home" title="Zoom to model domain"><span data-icon="home"></span></button>
+                      <button id="map-expand" title="Toggle Map View"><span data-icon="expand"></span></button>
+                    </div>
+                  </div>
+                  <!-- Bộ chọn trường mô phỏng (HYD / WAQ) -->
+                  <div class="field-picker" id="field-picker">
+                    <select id="field-var" title="Simulated variable"></select>
+                    <select id="field-layer" title="Layer">
+                      <option value="surface">Surface</option>
+                      <option value="bottom">Bottom</option>
+                      <option value="average">Depth-avg</option>
+                    </select>
+                  </div>
+                  <div class="basemap-switch" id="basemap-switch"></div>
+                  <div class="map-legend" id="map-legend"></div>
+                  <div class="map-coords" id="map-coords"></div>
+                  <!-- Thanh thời gian -->
+                  <div class="time-bar" id="time-bar">
+                    <button class="tb-btn" id="tb-play" title="Play / pause"><span data-icon="play"></span></button>
+                    <input type="range" id="tb-slider" min="0" max="0" value="0" />
+                    <span class="tb-label" id="tb-label">—</span>
+                  </div>
+                </div>
+
+                <div class="side-col">
+                  <div class="panel panel-profile">
+                    <div class="panel-head">
+                      <div>
+                        <div class="panel-title">Vertical Profile</div>
+                        <div class="panel-sub" id="profile-sub">Select a station on the map</div>
+                      </div>
+                      <div class="mini-selects">
+                        <select id="profile-station" title="Station"></select>
+                        <select id="profile-var" title="Variable"></select>
+                      </div>
+                    </div>
+                    <div class="panel-body"><div id="profile-chart"></div></div>
+                  </div>
+
+                  <div class="panel">
+                    <div class="panel-head">
+                      <div>
+                        <div class="panel-title">Environmental Monitoring</div>
+                        <div class="panel-sub" id="monitor-sub">Lake condition</div>
+                      </div>
+                    </div>
+                    <div class="monitor-grid" id="monitor-grid"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bottom-row">
+                <div class="panel">
+                  <div class="panel-head">
+                    <div><div class="panel-title" id="status-title">Water Quality Status</div><div class="panel-sub" id="status-sub">Worst value vs. high limit</div></div>
+                    <div class="tabs" id="status-tabs">
+                      <button data-tab="quality" class="active">Quality</button>
+                      <button data-tab="sources">Sources</button>
+                    </div>
+                  </div>
+                  <div class="panel-body" id="status-body"></div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head">
+                    <div><div class="panel-title">Station Time Series</div><div class="panel-sub" id="ts-sub">Simulated at observation stations</div></div>
+                    <div class="mini-selects">
+                      <select id="ts-var" title="Variable"></select>
+                      <select id="ts-layer" title="Layer">
+                        <option value="surface">Surface</option>
+                        <option value="bottom">Bottom</option>
+                        <option value="average">Avg</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="panel-body"><div id="ts-chart"></div></div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head">
+                    <div><div class="panel-title">Risk Distribution</div><div class="panel-sub">By check severity</div></div>
+                  </div>
+                  <div class="panel-body">
+                    <div class="donut-wrap"><div id="donut-chart"></div><div class="donut-legend" id="donut-legend"></div></div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head">
+                    <div><div class="panel-title">Recent Alerts</div><div class="panel-sub" id="alerts-sub">Latest warnings</div></div>
+                  </div>
+                  <div class="panel-body"><div class="alert-list" id="alert-list"></div></div>
+                  <div class="panel-foot"><button class="link-btn" id="btn-all-alerts">View all alerts →</button></div>
+                </div>
+              </div>
+
+              <!-- Trạng thái trống: dự án chưa có kết quả HYD/WAQ -->
+              <div class="empty-card" id="empty-card">
+                <div class="empty-icon"><span data-icon="waves"></span></div>
+                <h2>No simulation results in this project yet</h2>
+                <p>The overview is built from Hydrodynamic (HYD) and Water-quality (WAQ) results.
+                  Complete the modelling steps below; each opens the matching tool in the Workspace.</p>
+                <div class="steps" id="empty-steps"></div>
+                <p class="hint">Developers: <code>Lam Van Nguyen</code> creates synthetic results for testing the dashboard.</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================== WORKSPACE (công cụ cũ trên Gridstack) -->
+          <section class="view" id="view-workspace">
+            <div class="workspace-head">
+              <div>
+                <h2>Workspace</h2>
+                <p>Modelling tools open as widgets. Drag by the header, resize from the edges.</p>
+              </div>
+              <div style="display:flex; gap:8px">
+                <button class="btn small" id="ws-close-all"><span data-icon="x"></span>Close all</button>
+              </div>
+            </div>
+            <div class="workspace-empty" id="workspace-empty">
+              <h3>No tools open</h3>
+              <div>Pick a modelling tool in the sidebar, or start with one of these:</div>
+              <div class="quick-tools" id="quick-tools"></div>
+            </div>
+            <div class="grid-stack" id="grid-stack"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <!-- ================================================= POPOVERS / MODALS -->
+    <div class="popover" id="filters-popover">
+      <div class="pop-section">
+        <h4>Alert severity</h4>
+        <label class="check-row"><input type="checkbox" data-sev="high" checked> High</label>
+        <label class="check-row"><input type="checkbox" data-sev="medium" checked> Medium</label>
+        <label class="check-row"><input type="checkbox" data-sev="info" checked> Info</label>
+      </div>
+      <div class="pop-section">
+        <h4>Category</h4>
+        <div id="filter-categories"></div>
+      </div>
+      <div class="pop-actions">
+        <button class="btn small" id="filters-reset">Reset</button>
+        <button class="btn small primary" id="filters-apply">Apply</button>
+      </div>
+    </div>
+
+    <div class="popover" id="settings-popover" style="width: 300px">
+      <div class="pop-section">
+        <h4>Time zone</h4>
+        <!-- Giữ id cũ để tái sử dụng logic tìm múi giờ -->
+        <input type="text" class="tz-search" id="tz-search" placeholder="Search... (Oslo, New York, UTC)" autocomplete="off">
+        <div id="tz-results" class="tz-results"></div>
+        <div style="font-size:11px; color: var(--muted); margin-top:6px">IANA names. Default comes from the browser.</div>
+      </div>
+      <div class="pop-section">
+        <h4>Maintenance</h4>
+        <div style="display:flex; flex-direction:column; gap:6px">
+          <button class="btn small" id="reload-thresholds"><span data-icon="refresh"></span>Reload alert thresholds</button>
+          <button class="btn small" id="reset-layout"><span data-icon="grid"></span>Reset workspace layout</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="alerts-modal">
+      <div class="modal">
+        <div class="modal-head">
+          <span data-icon="alert"></span><h3>All alerts</h3>
+          <button class="btn icon-only ghost" data-close-modal title="Close"><span data-icon="x"></span></button>
+        </div>
+        <div class="modal-body" id="alerts-modal-body"></div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <!-- Loading screen (dùng chung với các widget cũ: showOverlay / hideOverlay) -->
+    <div class="loading-container">
+      <div class="spinner"></div>
+      <div class="loading-text">Processing Data. Please wait...</div>
+    </div>
+
+    <script src="https://cdn.plot.ly/plotly-2.26.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gridstack@10.2.0/dist/gridstack-all.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script type="module" src="/src_frontend/services/mainManager.js"></script>
+  </body>
+</html>

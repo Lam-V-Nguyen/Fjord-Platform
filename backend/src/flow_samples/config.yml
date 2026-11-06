@@ -1,0 +1,132 @@
+meta:
+  version: "1.0"
+  hydromt_version: ">=1.0"
+  name: wflow_local
+  root: path
+
+dtm:
+  data_type: RasterDataset
+  uri: hydro/elevtn.tif  
+  driver:
+    name: rasterio
+  metadata:
+    category: topography
+    crs: 25833
+    nodata: -9999.0
+    unit: m
+
+my_hydro:
+  data_type: RasterDataset
+  uri: hydro/{variable}.tif
+  driver:
+    name: rasterio
+  metadata:
+    category: hydrology
+    crs: 25833
+
+# Forcing data
+weather_forcing:
+  data_type: RasterDataset
+  uri: forcing/weather_forcing.nc
+  driver:
+    name: raster_xarray
+  data_adapter:
+    unit_mult:
+      press_msl: 0.01
+  metadata:
+    category: meteo
+    crs: 25833
+    nodata: -9999.0
+
+# River data
+river_network:
+  data_type: GeoDataFrame
+  uri: river/river.gpkg
+  driver:
+    name: pyogrio
+  metadata:
+    category: hydrography
+    crs: 25833
+
+river_manning_mapping:
+  data_type: DataFrame
+  uri: river/river_manning.csv
+  driver:
+    name: pandas
+    options:
+      index_col: 0
+  metadata:
+    category: hydrography
+    description: Mapping of stream order to Manning's n roughness coefficient, based on Chow (1959) and Dingman (2015)
+
+# Soil data
+soilgrids:
+  data_type: RasterDataset
+  uri: soil/{variable}.tif
+  driver:
+    name: rasterio
+  metadata:
+    category: soil
+    crs: 25833
+    nodata: -9999.0
+    url_2017: https://files.isric.org/soilgrids/former/2017-03-10/data/
+    url_2020: https://files.isric.org/soilgrids/latest/data/
+
+# Land cover data
+corine:
+  data_type: RasterDataset
+  uri: landcover/corine.tif
+  driver:
+    name: rasterio
+  metadata:
+    category: landuse
+    crs: 25833
+    nodata: 255
+    author: Copernicus / European Environment Agency
+    info: landuse parameters based on corine classification for Europe
+    resolution: 100m
+    url: https://land.copernicus.eu/en/products/corine-land-cover
+corine_mapping:
+  data_type: DataFrame
+  uri: landcover/corine.csv
+  driver:
+    name: pandas
+    options:
+      index_col: 0
+  metadata:
+    category: landuse
+    version: 1.0
+    legend: https://image.discomap.eea.europa.eu/arcgis/rest/services/Corine/CLC2018_WM/MapServer/legend
+lai_corine:
+  data_type: DataFrame
+  uri: landcover/corine_lai.csv
+  driver:
+    name: pandas
+    options:
+      index_col: 0
+  metadata:
+    category: landuse
+
+# esa_worldcover:
+#   data_type: RasterDataset
+#   driver: rasterio
+#   uri: landcover/esa_worldcover.tif
+#   metadata:
+#     category: landuse & landcover
+#     info: landuse parameters for the world
+#     resolution: 10m
+#     url: https://esa-worldcover.org/en
+# esa_worldcover_mapping:
+#   data_type: DataFrame
+#   driver: pandas
+#   uri: landcover/esa_worldcover.csv
+#   metadata:
+#     category: landuse & landcover
+#     version: 2021
+#     legend: https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/docs/WorldCover_PUM_V2.0.pdf
+# lai_esa:
+#   data_type: DataFrame
+#   driver: pandas
+#   uri: landcover/esa_lai.csv
+#   metadata:
+#     category: landuse & landcover

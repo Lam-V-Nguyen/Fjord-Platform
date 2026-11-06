@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+    <link rel="stylesheet" href="/src_frontend/styles/tabControler.css">
+    <link rel="stylesheet" href="/src_frontend/styles/flowPreparation.css">
+    <link rel="stylesheet" href="/src_frontend/styles/mapConfiguration.css">
+</head>
+<body>
+    <div class="wrapper">
+        <div class="page-title">
+            <label for="project-name">Scenario:</label>
+            <div class="project-name-wrapper">
+                <input type="text" id="project-name" placeholder="Select a scenario">
+                <ul id="project-list"></ul>
+            </div>
+            <button class="tab-btn" id="open-btn">Open Scenario</button>
+        </div>
+        <section class="main-tab" id="control-tab">
+            <div class="tab-header" id="main-tabs">
+                <div class="tabs-list">
+                    <button class="tab-btn" data-tab="settings-tab">Settings</button>
+                    <button class="tab-btn" data-tab="model-run-tab">Model Execution</button>
+                </div>
+            </div>
+            <div class="tabs-content">
+                <!-- Tab 1: Settings -->
+                <div class="tabpanel main-panel" data-panel="settings-tab">
+                    <div class="grid">
+                        <div class="tile" style="grid-column: span 2;"><h3>Simulation Options</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <label for="model-start">Start Time:</label>
+                                    <input type="text" class="datetime" id="model-start" placeholder="YYYY-mm-dd HH:mm:ss" style="width: auto;">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="model-end">End Time:</label>
+                                    <input type="text" class="datetime" id="model-end" placeholder="YYYY-mm-dd HH:mm:ss" style="width: auto;">
+                                </div>
+                                <div class="field-inline">
+                                    <label for="model-step">Interval:</label>
+                                    <select id="model-step">
+                                        <option value="3600" selected>Hourly</option>
+                                        <option value="86400">Daily</option>
+                                        <option value="604800">Weekly</option>
+                                        <option value="18144000">Monthly</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile input-parameters" style="grid-column: span 6;"><h3>Initial Conditions</h3>
+                            <div class="single-row">
+                                <label for="k_sat_ratio">Subsurface Conductivity Ratio:</label>
+                                <input type="text" id="k_sat_ratio" value='100'>
+                            </div>
+                            <div class="single-row">
+                                <label for="dd_snow">Snow Degree-day Coefficient (mm/°C/day):</label>
+                                <input type="text" id="dd_snow" value='3.75653'>
+                            </div>
+                            <div class="single-row">
+                                <label for="inf_red">Infiltration Reduction:</label>
+                                <input type="text" id="inf_red" value='0.038'>
+                            </div>
+                            <div class="single-row">
+                                <label for="canopy_evap_ratio">Canopy Evaporation Ratio:</label>
+                                <input type="text" id="canopy_evap_ratio" value='0.11'>
+                            </div>
+                            <div class="single-row">
+                                <label for="inf_cap">Compacted Soil Infiltration Capacity (mm/h):</label>
+                                <input type="text" id="inf_cap" value='10'>
+                            </div>
+                            <div class="single-row">
+                                <label for="leak_max">Max Leakage Flux (mm/h):</label>
+                                <input type="text" id="leak_max" value='0'>
+                            </div>
+                            <div class="single-row">
+                                <label for="soil_sigmoid">Sigmoid Function Shape:</label>
+                                <input type="text" id="soil_sigmoid" value='-500'>
+                            </div>
+                            <div class="single-row">
+                                <label for="snowfall_t0">Snowfall Temperature Threshold (°C):</label>
+                                <input type="text" id="snowfall_t0" value='0'>
+                            </div>
+                            <div class="single-row">
+                                <label for="snowfall_dt">Snowfall Temperature Interval (°C):</label>
+                                <input type="text" id="snowfall_dt" value='2'>
+                            </div>
+                            <div class="single-row">
+                                <label for="melt_t0_snow">Snow melting temperature threshold (°C):</label>
+                                <input type="text" id="melt_t0_snow" value='0'>
+                            </div>
+                            <div class="single-row">
+                                <label for="snow_liq_cap">Liquid Water Holding Capacity:</label>
+                                <input type="text" id="snow_liq_cap" value='0.1'>
+                            </div>
+                            <div class="single-row">
+                                <label for="dd_glacier">Glacier Degree-day Coefficient (mm/°C/day):</label>
+                                <input type="text" id="dd_glacier" value='3'>
+                            </div>
+                            <div class="single-row">
+                                <label for="firn_dry_frac">Dry Snow Equivalent Depth Fraction:</label>
+                                <input type="text" id="firn_dry_frac" value='0.001'>
+                            </div>
+                            <div class="single-row">
+                                <label for="melt_t0_glacier">Glacier Melting Temperature Threshold (°C):</label>
+                                <input type="text" id="melt_t0_glacier" value='0'>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Tab 2: Model Execution -->
+                <div class="tabpanel main-panel" data-panel="model-run-tab">
+                    <div class="grid">
+                        <div class="tile output-parameters" style="grid-column: span 6;"><h3>Model Outputs</h3>
+                            <div class="tab-header" id="sub-main-tabs">
+                                <div class="tabs-list">
+                                    <button class="tab-btn" data-tab="wflow-setting-1">Overland Flow Outputs</button>
+                                    <button class="tab-btn" data-tab="wflow-setting-2">Soil Outputs</button>
+                                    <button class="tab-btn" data-tab="wflow-setting-3">Lake Outputs</button>
+                                    <button class="tab-btn" data-tab="wflow-setting-4">Reservoir Outputs</button>
+                                    <button class="tab-btn" data-tab="wflow-setting-5">River Outputs</button>
+                                    <button class="tab-btn" data-tab="wflow-setting-6">Vegetation Outputs</button>
+                                    <button class="tab-btn" data-tab="wflow-setting-7">Snow Outputs</button>
+                                    <button class="tab-btn" data-tab="wflow-setting-8">Glacier Outputs</button>
+                                </div>
+                            </div>
+                            <div class="tabs-content">
+                                <!-- Sub Tab 1: Overland flow Settings -->
+                                <div class="tabpanel" data-panel="wflow-setting-1">
+                                    <div class="tile output-columns">
+                                        <div class="single-row">
+                                            <input type="checkbox" id="overland_flow" checked>
+                                            <label for="overland_flow">Overland Discharge Flow (m³/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="overland_depth" checked>
+                                            <label for="overland_depth">Overland Depth (m)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="overland_volume" checked>
+                                            <label for="overland_volume">Overland Volume (m³)</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Sub Tab 2: Soil Output Settings -->
+                                <div class="tabpanel" data-panel="wflow-setting-2">
+                                    <div class="tile output-columns">
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_evapotranspiration">
+                                            <label for="soil_evapotranspiration">Actual Evapotranspiration (mm)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_storage_total">
+                                            <label for="soil_storage_total">Total Storage (mm)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_infiltration_volume">
+                                            <label for="soil_infiltration_volume">Infiltration Volume (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_transpiration_volume">
+                                            <label for="soil_transpiration_volume">Transpiration Volume (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_runoff" checked>
+                                            <label for="soil_runoff">Total Surface Runoff (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_net_runoff">
+                                            <label for="soil_net_runoff">Net Surface Runoff (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_volume_fraction">
+                                            <label for="soil_water_volume_fraction">Water Volume Fraction</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_volume_percentage">
+                                            <label for="soil_water_volume_percentage">Water Volume Percentage (%)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_rootzone_volume_fraction">
+                                            <label for="soil_water_rootzone_volume_fraction">Volumetric Water Content Fraction (Root Zone)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_rootzone_volume_percentage">
+                                            <label for="soil_water_rootzone_volume_percentage">Volumetric Water Content Percentage (Root Zone) (%)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_rootzone_depth">
+                                            <label for="soil_water_rootzone_depth">Root Water Storage Depth (mm)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_unsatzone_depth">
+                                            <label for="soil_water_unsatzone_depth">Unsaturated Water Storage Depth (mm)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_satzone_capillary_volume_flux">
+                                            <label for="soil_water_satzone_capillary_volume_flux">Actual Capillary Rise (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_satzone_recharge_volume_flux">
+                                            <label for="soil_water_satzone_recharge_volume_flux">Downward Flux from Unsaturated to Saturated Zone (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_satzone_net_recharge_volume_flux">
+                                            <label for="soil_water_satzone_net_recharge_volume_flux">Net Recharge to Saturated Zone (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_satzone_leakage_volume_flux">
+                                            <label for="soil_water_satzone_leakage_volume_flux">Actual Leakage from Saturated Store (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="soil_water_satzone_depth">
+                                            <label for="soil_water_satzone_depth">Pseudo-water Table Depth (mm)</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Sub Tab 3: Lake Output Settings -->
+                                <div class="tabpanel" data-panel="wflow-setting-3">
+                                    <div class="tile output-columns">
+                                        <div class="single-row">
+                                            <input type="checkbox" id="lake_volume">
+                                            <label for="lake_volume">Lake Volume (m³)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="lake_level">
+                                            <label for="lake_level">Lake Level (m)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="lake_inflow">
+                                            <label for="lake_inflow">Lake Inflow (m³/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="lake_outflow">
+                                            <label for="lake_outflow">Lake Outflow (m³/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="lake_evaporation">
+                                            <label for="lake_evaporation">Average Actual Lake Evaporation (mm/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="lake_precipitation">
+                                            <label for="lake_precipitation">Average Actual Lake Precipitation (mm/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="lake_potential_evaporation">
+                                            <label for="lake_potential_evaporation">Average Potential Lake Evaporation (mm/s)</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Sub Tab 4: Reservoir Output Settings -->
+                                <div class="tabpanel" data-panel="wflow-setting-4">
+                                    <div class="tile output-columns">
+                                        <div class="single-row">
+                                            <input type="checkbox" id="reservoir_volume">
+                                            <label for="reservoir_volume">Reservoir Volume (m³)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="reservoir_inflow">
+                                            <label for="reservoir_inflow">Reservoir Inflow (m³/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="reservoir_outflow">
+                                            <label for="reservoir_outflow">Reservoir Outflow (m³/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="reservoir_evaporation">
+                                            <label for="reservoir_evaporation">Average Actual Reservoir Evaporation (mm/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="reservoir_precipitation">
+                                            <label for="reservoir_precipitation">Average Actual Reservoir Precipitation (mm/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="reservoir_potential_evaporation">
+                                            <label for="reservoir_potential_evaporation">Average Potential Reservoir Evaporation (mm/s)</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Sub Tab 5: River Output Settings -->
+                                <div class="tabpanel" data-panel="wflow-setting-5">
+                                    <div class="tile output-columns">
+                                        <div class="single-row">
+                                            <input type="checkbox" id="river_discharge" checked>
+                                            <label for="river_discharge">River Discharge (m³/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="river_depth" checked>
+                                            <label for="river_depth">River Depth (m)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="river_volume" checked>
+                                            <label for="river_volume">River Volume (m³)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="river_lateral_inflow">
+                                            <label for="river_lateral_inflow">River Lateral Inflow (m³/s)</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Sub Tab 6: Vegetation Output Settings -->
+                                <div class="tabpanel" data-panel="wflow-setting-6">
+                                    <div class="tile output-columns">
+                                        <div class="single-row">
+                                            <input type="checkbox" id="vegetation_stemflow">
+                                            <label for="vegetation_stemflow">Vegetation Stemflow (mm/s)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="vegetation_throughfall">
+                                            <label for="vegetation_throughfall">Vegetation Throughfall (mm/s)</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Sub Tab 7: Snow Output Settings -->
+                                <div class="tabpanel" data-panel="wflow-setting-7">
+                                    <div class="tile output-columns">
+                                        <div class="single-row">
+                                            <input type="checkbox" id="snow_water">
+                                            <label for="snow_water">Snow Water (mm)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="snow_melt">
+                                            <label for="snow_melt">Snow Melt (mm/Δt)</label>
+                                        </div>
+                                        <div class="single-row">
+                                            <input type="checkbox" id="snow_runoff">
+                                            <label for="snow_runoff">Snow Runoff from Snowpack (mm/Δt)</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Sub Tab 8: Glacier Output Settings -->
+                                <div class="tabpanel" data-panel="wflow-setting-8">
+                                    <div class="tile output-columns">
+                                        <div class="single-row">
+                                            <input type="checkbox" id="glacier_melt">
+                                            <label for="glacier_melt">Glacier Melt (mm/Δt)</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 2;"><h3>Model Runner</h3>
+                            <div class="row">
+                                <button type="button" id="model-check-btn">Check Wflow Model</button>
+                                <div class="field-inline">
+                                    <label>Outlet</label>
+                                    <input type="text" id="model-lat" placeholder="Latitude (°)" style="width: auto;">
+                                    <input type="text" id="model-lon" placeholder="Longitude (°)" style="width: auto;">
+                                </div>
+                                <button type="button" id="model-run-btn">Run Wflow Model</button>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 8;" id="model-log-container"><h3>Process Log</h3>
+                            <div class="log-container">
+                                <textarea wrap="off" class="log-text" id="model-log" placeholder="Logs..." readonly></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script>
+        flatpickr(".datetime", {
+            enableTime: true, enableSeconds: true, dateFormat: "Y-m-d H:i:S", time_24hr: true,
+            defaultHour: 0, defaultMinute: 0, defaultSecond: 0
+        });
+    </script>
+    <script type="module" src="/src_frontend/services/flowModel.js"></script>
+</body>
+</html>
