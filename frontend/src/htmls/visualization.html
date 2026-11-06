@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.css">
+        <!-- My styles -->
+        <link rel="stylesheet" href="/src_frontend/styles/menu.css">
+        <link rel="stylesheet" href="/src_frontend/styles/movement.css">
+        <link rel="stylesheet" href="/src_frontend/styles/visualization.css">
+    </head>
+    <body>
+        <header class="header">
+            <nav class="nav">
+                <ul class="nav-left" id="menu-left">
+                    <li><a class="menu" data-info="project-open">Open Project</a></li>
+                    <li><a class="menu" data-info="gis-upload">GIS Upload</a></li>
+                    <input type="file" id="gis-file" accept=".geojson,.zip" hidden>
+                    <li style="border-left:3px solid #e6d005;">
+                        <a class="menu" style="color: #e6d005;" data-info="0|waqMenu.html">WAQ Scenario</a></li>
+                    <li style="border-left:3px solid #e6d005;">
+                        <a class="menu" data-info="1|generalOption.html">General Options</a>
+                    </li>
+                    <li><a class="menu" data-info="2|timeSeries.html">Time-series Measurements</a></li>
+                    <li><a class="menu" data-info="3|spatialMap.html">Map</a></li>
+                </ul>
+                <ul class="nav-right">
+                    <li class="search-box">
+                        <label for="search"><i class="fa fa-search"></i></label>
+                        <input type="text" id="search" placeholder="Search..." />
+                        <div class="suggestions" id="suggestions" style="display:none;"></div>
+                    </li>
+                    <li><a class="menu" data-info="home">Home</a></li>
+                </ul>
+            </nav>
+        </header>
+        <!-- Add a popup menu -->
+        <div class="popup-menu" id="popup-menu">
+            <div id="popup-content"></div>
+        </div>
+        <!-- Add the map -->
+        <div class="map-container" id="map-container">
+            <div class="leaflet-map" id="leaflet-map"></div>
+            <div class="time-controls" id="time-controls">
+                <label for="time-slider-speed">Speed:</label>
+                <select id="time-slider-speed" style="width: 70px; padding: 3px;">
+                    <option value="0.5">-2x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="2">+2x</option>
+                </select>
+                <button id="play-btn">▶ Play</button>
+                <div class="time-slider" id="time-slider"></div>
+            </div>
+            <img class="leaflet-compass" src="/src_frontend/images/compass.png">
+            <div class="basemap-container">
+                <button type="button" class="leaflet-basemap-btn" id="basemap-btn">
+                    <img src="/src_frontend/images/basemap.png">
+                </button>
+                <div class="basemap-popup">
+                    <div><strong>Select Base Map</strong></div>
+                    <button class="basemap-option" data-url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png">Open Street Map</button>
+                    <button class="basemap-option" data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}">Satellite</button>
+                    <button class="basemap-option" data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}">Street</button>
+                </div>
+            </div>
+            <!-- Legend -->
+            <div id="colorbar-container">
+                <div id="custom-colorbar">
+                    <div class="colorbar-wrapper">
+                        <div class="colorbar-title" id="colorbar-title">Legend</div>
+                        <div class="colorbar-gradient" id="colorbar-gradient"></div>
+                        <div class="colorbar-labels" id="colorbar-labels">
+                            <div></div> <!-- max -->
+                            <div></div> <!-- 75% -->
+                            <div></div> <!-- 50% -->
+                            <div></div> <!-- 25% -->
+                            <div></div> <!-- min -->
+                        </div>
+                    </div>
+                </div>
+                <div id="custom-colorbar-vector">
+                    <div class="colorbar-wrapper">
+                        <div class="colorbar-title" id="colorbar-title-vector">Legend</div>
+                        <div class="colorbar-gradient" id="colorbar-gradient-vector"></div>
+                        <div class="colorbar-labels" id="colorbar-labels-vector">
+                            <div></div> <!-- max -->
+                            <div></div> <!-- 75% -->
+                            <div></div> <!-- 50% -->
+                            <div></div> <!-- 25% -->
+                            <div></div> <!-- min -->
+                        </div>
+                    </div>
+                    <div id="custom-colorbar-scaler">Scaler</div>
+                </div>
+            </div>
+        </div>
+        <!-- Add the summary window -->
+        <div class="overlay-window" id="summary-container">
+            <div class="plot-header" id="summary-header">
+                <span class="plot-title" id="summary-title">Summary</span>
+                <span class="close-plot-btn" id="close-summary-btn">×</span>
+            </div>
+            <div class="plot-area">
+                <div id="summaryChart"></div>
+            </div>
+        </div>
+        <!-- Time-series window -->
+        <div class="time-series-window" id="time-series-container">
+            <div class="plot-header" id="time-series-header">
+                <span class="plot-title" id="time-series-title">Time-series Plot</span>
+                <span class="close-plot-btn" id="close-time-series-btn">×</span>
+            </div>
+            <div class="plot-controls">
+                <label for="select-object">Select:</label>
+                <div class="select-object">
+                    <div class="select-box">
+                        <span class="label-text">Select one or more options</span>
+                        <span class="arrow">▼</span>
+                    </div>
+                    <div class="checkbox-list"></div>
+                </div>
+                <div class="button-group">
+                    <button type="button" id="viewDataBtn">View Data</button>
+                    <button type="button" id="downloadExcel">Download as Excel File</button>                
+                </div>
+            </div>
+            <div class="plot-area">
+                <div id="myChart"></div>
+            </div>
+        </div>
+        <!-- Add a floating window for substance selector -->
+        <div class=substance-window id="substance-container">
+            <div class="plot-header" id="substance-header">
+                <span class="plot-title" id="substance-title">Substance</span>
+                <span class="close-plot-btn" id="close-substance-btn">×</span>
+            </div>
+            <div id="substance-content"></div>
+        </div>
+        <!-- Add a floating window for drawing a profile -->
+        <div class="profile-window" id="profile-window">
+            <div class="plot-header" id="profile-header">
+                <span class="plot-title" id="profile-title">Dynamic Profile</span>
+                <span class="close-plot-btn" id="close-profile-btn">×</span>
+            </div>
+            <div class="profile-content">
+                <div class="profile-plot-area" id="chart-div"></div>
+                <div class="profile-time-controls">
+                    <!-- Slider -->
+                    <input class="profile-time-slider" id="time-slider" 
+                        type="range" min="0" max="100" step="1" value="0">
+                    <div class="profile-time-labels">
+                        <span class="time-left" id="time-start">Start: --</span>
+                        <span class="time-center" id="time-center">Time: --</span>
+                        <span class="time-right" id="time-end">End: --</span>
+                    </div>
+                </div>
+                <div class="profile-controls">
+                    <label style="margin-left: 5px;">Duration:</label>
+                    <select id="chart-duration-value">
+                        <option value="0.1">0.1 s</option>
+                        <option value="0.2" selected>0.2 s</option>
+                        <option value="0.5">0.5 s</option>
+                        <option value="1.0">1.0 s</option>
+                    </select>
+                    <label id="chart-min-label">Min:</label><input type="text" id="chart-min-value" readonly>
+                    <label id="chart-max-label">Max:</label><input type="text" id="chart-max-value" readonly>
+                    <label for="chart-color-combobox" id="chart-color-label" style="margin-left: 30px;">Colors:</label>
+                    <select id="chart-color-combobox">
+                        <option value="5">5 colors</option>
+                        <option value="10" selected>10 colors</option>
+                        <option value="15">15 colors</option>
+                        <option value="20">20 colors</option>
+                    </select>
+                    <button id="profile-btn">▶ Play</button>
+                </div>
+            </div>
+        </div>
+        <!-- Add a panel for velocity -->
+        <div class="velocity-container" id="velocity-container" style="display: none;">
+            <aside class="panel" id="panel">
+                <header class="panel-head">
+                    <p class="model-name" id="modelName">Loading Data…</p>
+                    <time class="clock" id="clock">--:--</time>
+                    <p class="date" id="date"></p>
+                    <div class="panel-actions">
+                        <button class="collapse" id="collapse" aria-expanded="true" aria-controls="panelBody" title="Collapse panel">–</button>
+                        <button class="collapse" id="close" title="Close panel">x</button>
+                    </div>
+                </header>
+                <div class="panel-body" id="panelBody">
+                <section>
+                    <h2>Grid Resolution</h2>
+                    <div class="row4">
+                        <label for="resInput">Resolution</label>
+                        <input type="text" id="resInput" inputmode="decimal" placeholder="auto" style="text-align: center;"
+                            title="Grid cell size in metres, or 'auto'. Press Enter to rebuild.">
+                        <label for="layerInput">Layer</label>
+                        <select class="rate" id="layerInput"></select>
+                    </div>
+                    <p class="hint">Resolution in metres (empty or <b>auto</b> = automatic, Enter to rebuild).</p>
+                </section>
+                <section>
+                    <h2>Background Layer</h2>
+                    <div class="seg" role="radiogroup" data-key="raster">
+                        <button role="radio" data-v="speed" aria-checked="true">Velocity</button>
+                        <button role="radio" data-v="depth">Depth</button>
+                        <button role="radio" data-v="none">Hide</button>
+                    </div>
+                    <div class="legend" id="legend">
+                        <div class="ramp" id="ramp"></div>
+                        <div class="ticks"><span id="legMin">0</span><span id="legMid"></span><span id="legMax"></span></div>
+                    </div>
+                </section>
+                <section><h2>Flow Particles</h2>
+                    <div class="row2">
+                        <label for="motion">Motion</label>
+                        <select id="motion">
+                            <option value="always" selected>Always moving</option>
+                            <option value="playing">Freeze when paused</option>
+                            <option value="physical">Real simulation time</option>
+                        </select>
+                    </div>
+                    <div class="row2">
+                        <label for="curve">Speed curve</label>
+                        <select id="curve">
+                            <option value="linear">Linear</option>
+                            <option value="sqrt" selected>Square root – boost slow flow</option>
+                            <option value="log">Logarithmic – strong boost</option>
+                        </select>
+                    </div>
+                    <label class="row">Particles Density<output id="countOut"></output>
+                    <input type="range" id="count" min="1000" max="20000" step="500" value="5000"></label>
+                    <label class="row">Particles Speed<output id="speedOut"></output>
+                    <input type="range" id="pspeed" min="0.2" max="4" step="0.1" value="1"></label>
+                    <label class="row">Trail Length<output id="trailOut"></output>
+                    <input type="range" id="trail" min="0.80" max="0.985" step="0.005" value="0.93"></label>
+                    <div class="seg small" role="radiogroup" data-key="pcolor">
+                        <button role="radio" data-v="white" aria-checked="true">White Particles</button>
+                        <button role="radio" data-v="speed">Color by Speed</button>
+                    </div>
+                </section>
+                <section class="probe" id="probe">
+                    <h2>Observation Point</h2>
+                    <p class="hint" id="probeHint">Click on a point inside the area to view the time series.</p>
+                    <dl class="readout" id="readout" hidden>
+                        <div><dt>Velocity</dt><dd id="rSpeed">–</dd></div>
+                        <div><dt>Direction</dt><dd id="rDir">–</dd></div>
+                        <div><dt>Depth</dt><dd id="rDepth">–</dd></div>
+                    </dl>
+                </section>
+                </div>
+            </aside>
+            <footer class="timebar">
+                <button class="play" id="play" aria-label="Play">
+                    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                        <path id="playIcon" d="M7 4l13 8-13 8z"/>
+                    </svg>
+                </button>
+                <button class="step" id="back" aria-label="Back 1 hour">−1 h</button>
+                <button class="step" id="fwd" aria-label="Forward 1 hour">+1 h</button>
+                <label class="rate">Speed
+                    <select id="rate">
+                        <option value="0.5">0,5 h/s</option>
+                        <option value="1">1 h/s</option>
+                        <option value="3" selected>3 h/s</option>
+                        <option value="6">6 h/s</option>
+                        <option value="12">12 h/s</option>
+                        <option value="24">1 d/s</option>
+                    </select>
+                </label>
+                <div class="track" id="track">
+                    <svg class="trace" id="trace" preserveAspectRatio="none" aria-hidden="true"></svg>
+                    <div class="months" id="months"></div>
+                    <input type="range" id="time" min="0" max="1" step="0.01" value="0" aria-label="Simulation Period">
+                </div>
+                <button type="button" id="download-data-btn"
+                    class="footer-download-btn" title="Download data" aria-label="Download data">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg" width="15" height="15"
+                        viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>
+                    </svg>
+                </button>
+                <span class="loading" id="loading" hidden>Loading Frame…</span>
+            </footer>
+        </div>
+        <script src="https://cdn.plot.ly/plotly-2.26.1.min.js"></script>
+        <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+        <script src="https://unpkg.com/leaflet.vectorgrid@1.3.0/dist/Leaflet.VectorGrid.bundled.js"></script>
+        <script type="module" src="/src_frontend/services/tooltipManager.js?v=0"></script>
+        <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/nouislider@15.7.1/dist/nouislider.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+        <script type="module" src="/src_frontend/services/visualizationManager.js"></script>
+    </body>
+</html>

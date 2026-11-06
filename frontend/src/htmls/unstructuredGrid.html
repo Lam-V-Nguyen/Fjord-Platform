@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+        <link rel="stylesheet" href="/src_frontend/styles/unstructuredGrid.css">
+        <link rel="stylesheet" href="/src_frontend/styles/tabControler.css">
+        <link rel="stylesheet" href="/src_frontend/styles/mapConfiguration.css">
+    </head>
+    <body>
+        <div class="data-source">
+            <input type="radio" id="new-database" name="project" checked=true>
+            <label for="new-database">Use Pre-defined Database</label>
+            <input type="radio" id="new-map" name="project" style="margin-left: 100px;">
+            <label for="new-map">Draw on Map</label>
+        </div>
+        <div class="data-source" id="select-container">
+            <label style="font-weight: normal;">Municipality</label>
+            <div class="municipality-container">
+                <input type="text" id="municipality-name"
+                    placeholder="Choose from the list"/>
+                <ul id="municipality-list"></ul>
+            </div>
+            <label id="lake-name-label" style="font-weight: normal; margin-left: 50px;">Lake</label>
+            <select id="lake-name"><option value="">-- No selected --</option></select>
+            <div class="search-box">
+                <label><i class="fas fa-search"></i></label>
+                <div class="search-input-wrapper">
+                    <input type="text" id="lake-search" placeholder="Search lake..."/>
+                    <div id="lake-suggestions"></div>
+                </div>
+            </div>
+        </div>
+        <div class="group-container" id="table-of-contents">
+            <div><h3>Table of contents</h3></div>
+            <table class="attributes-table" id="lake-table">
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Municipality</th><th>Area (m²)</th><th>Perimeter (m)</th>
+                        <th>Max Depth (m)</th><th>Min Depth (m)</th><th>Average Depth (m)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><input type="text" placeholder="Name"></td>
+                        <td><input type="text" placeholder="Municipality"></td>
+                        <td><input type="text" placeholder="Area"></td>
+                        <td><input type="text" placeholder="Perimeter"></td>
+                        <td><input type="text" placeholder="Max Depth"></td>
+                        <td><input type="text" placeholder="Min Depth"></td>
+                        <td><input type="text" placeholder="Average Depth"></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="wrapper" id="menu-container" style="margin: 0 10px 10px 10px;">
+            <section class="main-tab" id="control-tab">
+                <div class="tab-header" id="main-tabs">
+                    <div class="tabs-list">
+                        <button class="tab-btn" data-tab="grid-show-tab">Grid Layer</button>
+                        <button class="tab-btn" data-tab="grid-edit-tab">Grid Modification</button>
+                        <button class="tab-btn" data-tab="grid-generation-tab">Grid Generation</button>
+                        <button class="tab-btn" data-tab="grid-optimization-tab">Grid Optimization</button>
+                        <button class="tab-btn" data-tab="grid-interpolation-tab">Grid Interpolation</button>
+                        <button class="tab-btn" data-tab="grid-save-tab">Export Grid</button>
+                    </div>
+                </div>
+                <div class="tabs-content">
+                    <div class="tabpanel main-panel" data-panel="grid-show-tab">
+                        <div class="single-line">
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="polygon-checkbox"><span>Show Polygon</span>
+                            </label>
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="depth-checkbox"><span>Show Depth</span>
+                            </label>
+                            <button id="get-depth-btn">Export Depth Data</button>
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="depth-grid-checkbox"><span>Show Depth Grid</span>
+                            </label>
+                            <button id="export-depth-btn">View Interpolated Depths</button>
+                        </div>
+                    </div>
+                    <div class="tabpanel main-panel" data-panel="grid-edit-tab">
+                        <div class="single-line">
+                            <button id="vertexes-btn">Get/Reset Vertices</button>
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="refinement-checkbox"><span>Refine Vertices</span>
+                            </label>
+                            <div id ="refinement-container" style="display: none;"> 
+                                <input type="text" id="refinement-value" style="width: 100px; text-align: center;"
+                                    placeholder="Enter refinement value" value="200.0"> 
+                                <label style="width: 5px;">(m)</label> 
+                            </div>
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="move-checkbox"><span>Move Vertice</span>
+                            </label>
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="delete-checkbox"><span>Delete Vertices</span>
+                            </label>
+                            <div class="checkbox-item">
+                                <label for="scale-factor">Mode (and Level)</label>
+                                <select id="scale-factor">
+                                    <option value="auto" selected>Auto</option>
+                                    <option value="custom">Custom</option>
+                                </select>
+                                <input type="number" style="width: 100px; text-align: center; margin-left: 10px;"
+                                    id="custom-scale-factor" placeholder="Scale" step="0.1" value="1.0" hidden>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tabpanel main-panel" data-panel="grid-generation-tab">
+                        <div class="single-line">
+                            <button class="button-grid" id="generate-grid">Generate Grid</button>
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="orthogonality-checkbox"><span>Orthogonality</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="tabpanel main-panel" data-panel="grid-optimization-tab">
+                        <div class="single-line">
+                            <label class="checkbox-item">
+                                <span>Iterations</span>
+                                <input type="text" id="iterations" value="500">
+                            </label>
+                            <label class="checkbox-item">
+                                <span>Level</span>
+                                <input type="text" id="detail-level-from" value="5"> 
+                                <span style="width: 22px;"> --> </span> 
+                                <input type="text" id="detail-level-to" value="500"> 
+                            </label>
+                            <button class="button-grid" id="optimize-grid">Optimize Orthogonality</button>
+                        </div>
+                    </div>
+                    <div class="tabpanel main-panel" data-panel="grid-interpolation-tab">
+                        <div class="single-line">
+                            <button class="button-grid" id="interpolate-grid-csv-btn" 
+                                style="background-color: rgb(59, 116, 97);" 
+                                title="CSV file must have columns: Lat, Lon, Depth">Import from CSV</button>
+                            <input type="file" id="interpolate-grid-csv" accept=".csv" hidden>
+                            <button class="button-grid" id="interpolate-grid-pick-btn" 
+                                style="background-color: sandybrown;">Define from Map</button>
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="interpolate-grid-delete"><span>Delete Point</span>
+                            </label>
+                            <label class="checkbox-item">
+                                <input type="checkbox" id="interpolate-grid-hide"><span>Hide Point</span>
+                            </label>
+                            <button class="button-grid" id="interpolate-grid">Interpolation</button>
+                        </div>
+                    </div>
+                    <div class="tabpanel main-panel" data-panel="grid-save-tab">
+                        <div class="single-line">
+                            <button class="save-grid" id="save-grid">Save Grid</button>
+                            <button class="save-grid" id="recheck-grid">Recheck Grid</button>
+                            <input type="file" id="recheck-grid-file" accept=".nc" hidden>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+        <!-- Add the map -->
+        <div class="map-container" id="map-container">
+            <div class="leaflet-map" id="leaflet-map-grid"></div>
+            <img class="leaflet-compass" src="/src_frontend/images/compass.png">
+            <div class="basemap-container">
+                <button type="button" class="leaflet-basemap-btn" id="basemap-btn">
+                    <img src="/src_frontend/images/basemap.png">
+                </button>
+                <div class="basemap-popup">
+                    <div><strong>Select Base Map</strong></div>
+                    <button class="basemap-option" data-url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png">Open Street Map</button>
+                    <button class="basemap-option" data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}">Satellite</button>
+                    <button class="basemap-option" data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}">Street</button>
+                </div>
+            </div>
+            <!-- Legend -->
+            <div class="colorbar-container" id="custom-colorbar-grid">
+                <div class="colorbar-wrapper">
+                    <div class="colorbar-title" id="colorbar-title">Legend</div>
+                    <div class="colorbar-gradient" id="colorbar-gradient"></div>
+                    <div class="colorbar-labels" id="colorbar-label">
+                        <div></div> <!-- max -->
+                        <div></div> <!-- 75% -->
+                        <div></div> <!-- 50% -->
+                        <div></div> <!-- 25% -->
+                        <div></div> <!-- min -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Grid Optimization Plot -->
+        <div class="grid-optimization-container" id="plot-container" style="display: none;">
+            <div class="table-header"><h3>Optimization Progress</h3></div>
+            <div class="control-tab-inline-grid">
+                <div class="progress-container">
+                    <progress id="progressbar-grid" value="0" max="100"></progress>
+                    <label id="progress-text-grid"></label>
+                </div>
+                <div class="single-line">
+                    <button class="button-grid" id="optimization-close">Stop</button>
+                </div>
+            </div>
+            <div class="table-header"><h3>Optimization History</h3></div>
+            <div id="myChart-grid"></div>
+        </div>
+        <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+        <script src="https://cdn.plot.ly/plotly-2.26.1.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+        <script type="module" src="/src_frontend/services/unstructuredGridManager.js"></script>
+    </body>
+</html>

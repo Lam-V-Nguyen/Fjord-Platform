@@ -1,0 +1,311 @@
+/* =====================================================================
+   layout.css – Khung ứng dụng: sidebar, topbar, các view, popover, modal
+   ===================================================================== */
+.app {
+    display: grid; grid-template-columns: var(--sidebar-w) 1fr;
+    height: 100vh; width: 100vw; overflow: hidden;
+}
+.app.sidebar-collapsed { grid-template-columns: 68px 1fr; }
+
+/* ------------------------------------------------------------ Sidebar */
+.sidebar {
+    background: linear-gradient(180deg, #0a1322 0%, #08101d 100%);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+}
+.brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 16px 14px; border-bottom: 1px solid var(--border);
+}
+.brand img { width: 36px; height: 36px; border-radius: 9px; object-fit: contain; background: #0f1d33; padding: 3px; }
+.brand-text { min-width: 0; }
+.brand-title { font-weight: 700; font-size: 15px; letter-spacing: 0.2px; white-space: nowrap; }
+.brand-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+
+.sidebar-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 10px 6px; }
+
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+    display: flex; align-items: center; gap: 11px; width: 100%;
+    padding: 9px 11px; border-radius: var(--radius-sm);
+    background: transparent; border: 1px solid transparent;
+    color: var(--text-2); text-align: left; font-size: 13.5px; font-weight: 500;
+    transition: background .15s, color .15s, border-color .15s;
+}
+.nav-item:hover { background: var(--panel); color: var(--text); }
+.nav-item.active {
+    background: var(--accent-soft); color: var(--accent);
+    border-color: rgba(52, 211, 153, 0.35);
+}
+.nav-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-item .badge {
+    min-width: 20px; padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: 600;
+    background: var(--panel-2); color: var(--text-2); text-align: center;
+}
+.nav-item.active .badge { background: rgba(52, 211, 153, 0.22); color: var(--accent); }
+.nav-item .chev { color: var(--faint); transition: transform .2s; }
+.nav-group.open > .nav-item .chev { transform: rotate(90deg); }
+.nav-sub {
+    display: none; flex-direction: column; gap: 1px;
+    margin: 2px 0 4px 20px; padding-left: 10px; border-left: 1px solid var(--border);
+}
+.nav-group.open > .nav-sub { display: flex; }
+.nav-sub .nav-item { padding: 7px 10px; font-size: 12.8px; color: var(--muted); }
+.nav-sub .nav-item:hover { color: var(--text); }
+.nav-sub .nav-item.open-widget { color: var(--accent-2); }
+.nav-sub .nav-item.open-widget::after {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-2);
+}
+
+.nav-section-title {
+    margin: 16px 8px 6px; font-size: 10.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; color: var(--faint);
+    display: flex; align-items: center; justify-content: space-between;
+}
+.nav-section-title button {
+    background: none; border: none; color: var(--faint); font-size: 10.5px; padding: 0;
+    text-transform: none; letter-spacing: 0;
+}
+.nav-section-title button:hover { color: var(--accent); }
+
+/* Danh sách lớp bản đồ trong sidebar */
+.layer-list { display: flex; flex-direction: column; gap: 1px; padding: 0 2px; }
+.layer-item {
+    display: flex; align-items: center; gap: 9px; padding: 5px 8px;
+    border-radius: 6px; font-size: 12.8px; color: var(--text-2); cursor: pointer; user-select: none;
+}
+.layer-item:hover { background: var(--panel); }
+.layer-item input { display: none; }
+.layer-check {
+    width: 15px; height: 15px; border-radius: 4px; flex: 0 0 auto;
+    border: 1.5px solid var(--border-strong); display: grid; place-items: center;
+    transition: all .15s;
+}
+.layer-item input:checked + .layer-check { background: var(--accent); border-color: var(--accent); }
+.layer-item input:checked + .layer-check::after {
+    content: ""; width: 7px; height: 4px; border-left: 2px solid #062016; border-bottom: 2px solid #062016;
+    transform: translateY(-1px) rotate(-45deg);
+}
+.layer-item .swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; margin-left: auto; }
+.layer-item .layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Chân sidebar: nguồn dữ liệu, dự án, cập nhật */
+.sidebar-footer {
+    border-top: 1px solid var(--border); padding: 12px 16px 14px;
+    display: flex; flex-direction: column; gap: 8px; font-size: 11.5px;
+}
+.sf-row { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sf-label { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
+.sf-value { color: var(--text-2); display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); flex: 0 0 auto; }
+.dot.warn { background: var(--sev-medium); box-shadow: 0 0 0 3px var(--sev-medium-soft); }
+.pipeline { display: flex; gap: 4px; margin-top: 3px; }
+.pipeline span { flex: 1; height: 4px; border-radius: 2px; background: var(--panel-2); }
+.pipeline span.done { background: var(--accent); }
+
+/* Giữ lại class cũ (.project-note / .time-zone / .github-last-update) – các iframe
+   đọc .project-note qua postMessage GET_USER, nên KHÔNG được đổi tên. */
+.sidebar-footer .project-note, .sidebar-footer .time-zone, .sidebar-footer .github-last-update {
+    all: unset; display: block; color: var(--text-2); font-size: 11.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-footer .github-last-update { color: var(--faint); font-size: 10.5px; }
+
+/* Sidebar thu gọn */
+.app.sidebar-collapsed .brand-text,
+.app.sidebar-collapsed .nav-item .label,
+.app.sidebar-collapsed .nav-item .badge,
+.app.sidebar-collapsed .nav-item .chev,
+.app.sidebar-collapsed .nav-section-title,
+.app.sidebar-collapsed .layer-list,
+.app.sidebar-collapsed .nav-sub,
+.app.sidebar-collapsed .sidebar-footer { display: none !important; }
+.app.sidebar-collapsed .nav-item { justify-content: center; padding: 10px; }
+.app.sidebar-collapsed .brand { justify-content: center; padding: 16px 8px; }
+
+/* ------------------------------------------------------------ Main + Topbar */
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.topbar {
+    height: var(--topbar-h); flex: 0 0 auto;
+    display: flex; align-items: center; gap: 14px; padding: 0 18px;
+    border-bottom: 1px solid var(--border); background: rgba(9, 16, 29, 0.85);
+    position: relative; z-index: 1200;
+}
+.title-block { flex: 1; min-width: 0; }
+.title-block h1 {
+    margin: 0; font-size: 19px; font-weight: 700; letter-spacing: 0.1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.title-block p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.toolbar { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.btn {
+    display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px;
+    border-radius: var(--radius-sm); border: 1px solid var(--border-strong);
+    background: var(--panel); color: var(--text-2); font-size: 13px; font-weight: 500;
+    transition: background .15s, border-color .15s, color .15s; white-space: nowrap;
+}
+.btn:hover { background: var(--panel-hover); color: var(--text); }
+.btn.primary { background: var(--accent-soft); border-color: rgba(52, 211, 153, 0.45); color: var(--accent); }
+.btn.primary:hover { background: rgba(52, 211, 153, 0.24); }
+.btn.icon-only { width: 34px; padding: 0; justify-content: center; }
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.ghost:hover { background: var(--panel); }
+.btn.small { height: 28px; font-size: 12px; padding: 0 10px; }
+.btn.danger { color: var(--sev-high); }
+.btn.spinning .ico { animation: rot 0.9s linear infinite; }
+@keyframes rot { to { transform: rotate(360deg); } }
+
+.segmented {
+    display: inline-flex; height: 34px; padding: 3px; gap: 2px;
+    background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+}
+.segmented button {
+    border: none; background: transparent; color: var(--muted); padding: 0 10px;
+    border-radius: 5px; font-size: 12.5px; font-weight: 600;
+}
+.segmented button:hover { color: var(--text); }
+.segmented button.active { background: var(--panel-2); color: var(--accent); }
+
+.date-field {
+    display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
+    border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--panel);
+    color: var(--muted);
+}
+.date-field input {
+    background: transparent; border: none; outline: none; color: var(--text); width: 118px; font-size: 13px;
+}
+.date-field input::-webkit-calendar-picker-indicator { filter: invert(0.8); cursor: pointer; }
+
+.project-chip { max-width: 190px; }
+.project-chip .label { overflow: hidden; text-overflow: ellipsis; }
+
+/* ------------------------------------------------------------ Views */
+.views { position: relative; flex: 1; min-height: 0; }
+/* Dùng visibility thay vì display:none để Leaflet/Gridstack/Plotly luôn giữ kích thước */
+.view {
+    position: absolute; inset: 0; overflow: auto; padding: 14px 16px 16px;
+    visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .18s ease;
+}
+.view.active { visibility: visible; opacity: 1; pointer-events: auto; }
+
+/* Workspace (Gridstack – các công cụ cũ) */
+#view-workspace { padding: 10px 10px 30px; }
+.workspace-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 2px 6px 10px;
+}
+.workspace-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.workspace-head p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+.workspace-empty {
+    display: none; margin: 40px auto; max-width: 560px; text-align: center; color: var(--muted);
+    border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); padding: 34px 24px;
+}
+.workspace-empty.show { display: block; }
+.workspace-empty h3 { all: unset; display: block; color: var(--text); font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.quick-tools { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+
+/* ------------------------------------------------------------ Popover / modal / toast */
+.popover {
+    position: absolute; z-index: 1500; min-width: 240px;
+    background: var(--panel); border: 1px solid var(--border-strong);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px;
+    display: none;
+}
+.popover.show { display: block; }
+.popover h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+.popover .pop-section + .pop-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.check-row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 13px; cursor: pointer; }
+.check-row input { accent-color: var(--accent); }
+.pop-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
+.modal-backdrop {
+    position: fixed; inset: 0; z-index: 5000; background: rgba(2, 6, 14, 0.66);
+    display: none; align-items: center; justify-content: center; padding: 20px;
+}
+.modal-backdrop.show { display: flex; }
+.modal {
+    width: min(760px, 100%); max-height: 86vh; display: flex; flex-direction: column;
+    background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+}
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.modal-head h3 { margin: 0; font-size: 15px; flex: 1; }
+.modal-body { overflow: auto; padding: 12px 16px 16px; }
+
+.toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px);
+    background: var(--panel-2); border: 1px solid var(--border-strong); color: var(--text);
+    padding: 10px 16px; border-radius: 9px; box-shadow: var(--shadow); font-size: 13px;
+    opacity: 0; pointer-events: none; transition: all .25s ease; z-index: 6000;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ------------------------------------------------------------ Responsive */
+@media (max-width: 1280px) {
+    .toolbar .btn .label-optional { display: none; }
+    .title-block p { display: none; }
+}
+@media (max-width: 980px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar {
+        position: fixed; inset: 0 auto 0 0; width: var(--sidebar-w); z-index: 3000;
+        transform: translateX(-100%); transition: transform .2s ease; box-shadow: var(--shadow);
+    }
+    .app.sidebar-open .sidebar { transform: none; }
+    .app.sidebar-collapsed { grid-template-columns: 1fr; }
+    .topbar { gap: 8px; padding: 0 10px; height: auto; min-height: var(--topbar-h); flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; }
+    .toolbar { flex-wrap: wrap; }
+}
+
+/* Nút Filters khi đang có bộ lọc */
+.btn.active-filter { position: relative; }
+.btn.active-filter::after {
+    content: ""; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--sev-medium); box-shadow: 0 0 0 2px var(--bg);
+}
+
+/* Tiêu đề trong modal/popover không dùng kiểu h3 gradient của index.css */
+.modal-head h3, .pm-modal h3 {
+    background: none !important; -webkit-text-fill-color: currentColor !important;
+    color: var(--text) !important; text-align: left; font-size: 15px;
+}
+
+@media (max-width: 640px) {
+    .toolbar { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+    .title-block h1 { font-size: 16px; }
+    .map-legend { display: none; }
+}
+
+/* ---------------------------------------------------------------------
+   Hộp thoại chọn dự án (projectManager.js -> .pm-overlay / .pm-modal)
+   Định nghĩa đầy đủ tại đây để luôn nằm giữa màn hình, không phụ thuộc index.css
+   --------------------------------------------------------------------- */
+.pm-overlay {
+    position: fixed; inset: 0; z-index: 5000;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+    background: rgba(2, 6, 14, 0.66); backdrop-filter: blur(3px);
+}
+.pm-modal {
+    width: min(440px, 100%); padding: 18px 20px 14px !important;
+    background: var(--panel) !important; color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow); font-family: var(--font) !important;
+}
+.pm-modal h3 { margin: 0 0 12px !important; font-size: 16px !important; font-weight: 650; }
+.pm-modal .pm-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+.pm-modal .pm-row label { flex: 0 0 auto; width: auto; font-size: 13px; color: var(--text-2); }
+.pm-modal select, .pm-modal input {
+    flex: 1; width: 100%; height: 34px; margin: 0; font-size: 13px;
+    background-color: var(--bg-elev); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 7px; padding: 0 28px 0 10px;
+}
+.pm-modal select:focus, .pm-modal input:focus { outline: none; border-color: var(--accent); }
+.pm-modal > div:last-child { display: flex; justify-content: flex-end; gap: 8px; margin: 14px 0 0 !important; }
+.pm-modal .button-grid {
+    height: 34px; padding: 0 16px; font-size: 13px; font-weight: 600; border-radius: 7px;
+    background: var(--panel-2); color: var(--text-2); border: 1px solid var(--border-strong);
+}
+.pm-modal .button-grid:hover { background: var(--panel-hover); color: var(--text); }
+.pm-modal #okBtn { background: var(--accent-soft); color: var(--accent); border-color: rgba(52, 211, 153, 0.45); }
+.pm-modal #okBtn:hover { background: rgba(52, 211, 153, 0.24); }

@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="/src_frontend/styles/tabControler.css">
+    <link rel="stylesheet" href="/src_frontend/styles/dataDownload.css">
+    <link rel="stylesheet" href="/src_frontend/styles/mapConfiguration.css">
+</head>
+<body>
+    <div class="wrapper">
+        <section class="main-tab" id="control-tab">
+            <div class="tab-header" id="main-tabs">
+                <div class="tabs-list">
+                    <button class="tab-btn" data-tab="eklima-tab">MET</button>
+                    <button class="tab-btn" data-tab="nve-tab">NVE</button>
+                    <button class="tab-btn" data-tab="regnbyge-tab">Regnbyge.no</button>
+                    <button class="tab-btn" data-tab="era5-tab">Climate Data Store (ERA5)</button>
+                </div>
+            </div>
+            <div class="tabs-content">
+                <!-- eKlima/MET -->
+                <div class="tabpanel main-panel" data-panel="eklima-tab">
+                    <h3 style="text-align: center;">
+                        The data is sourced through the official
+                        <a href="https://api.met.no/" target="_blank" rel="noopener noreferrer" style="color: aqua;">
+                            MET Norway</a> platform
+                    </h3>
+                    <div class="tab-header">
+                        <div class="tabs-list">
+                            <button class="tab-btn" data-tab="met-tab-1">Login</button>
+                            <button class="tab-btn" data-tab="met-tab-2">Map</button>
+                            <button class="tab-btn" data-tab="met-tab-3">Download Settings</button>
+                            <button class="tab-btn" data-tab="met-tab-4">Download Data</button>
+                        </div>
+                    </div>
+                    <div class="tabs-content">
+                        <div class="tabpanel" data-panel="met-tab-1">
+                            <div class="grid">
+                                <div class="tile" style="grid-column: span 2;"><h3>Registration</h3>
+                                    <div class="row">
+                                        <div class="field-inline" style="flex-direction: column;">
+                                            <div class="field-row">
+                                                <label for="met-client-id" style="min-width: 150px;">Frost API
+                                                    Key:</label>
+                                                <div class="input-with-icon">
+                                                    <input type="password" id="met-client-id">
+                                                    <button type="button" data-target="met-client-id" class="toggle-password">👁️</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button id="met-remember-btn">Remember me</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tabpanel" data-panel="met-tab-2">
+                            <div class="grid">
+                                <div class="tile" style="grid-column: span 2;"><h3>Observation Stations</h3>
+                                    <div class="row">
+                                        <div class="field-inline">
+                                            <button type="button" id="met-location-btn">Get Stations</button>
+                                        </div>
+                                        <div class="field-inline"
+                                            style="display: flex; font-size: 13px; margin: 0 0 5px 20px;">
+                                            <label id="met-station-label"
+                                                style="text-align: center; color: greenyellow;">Number of Station(s): 0
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="variables-grid">
+                                        <label class="checkbox-right" style="min-width: 300px; margin-left: -10px;">
+                                            <input type="checkbox" id="met-station-checkbox">Select Station(s)
+                                        </label>
+                                    </div>
+                                    <div class="row">
+                                        <a style="margin-top: 0; font-size: 15px;">References:</a>
+                                        <a class="data-link" style="font-size: 15px; color: aqua;"
+                                            href="https://frost.met.no/elementtable" target="_blank">Element Table
+                                        </a>
+                                    </div>
+                                </div>
+                                <div class="tile" style="grid-column: span 6;">
+                                    <div class="field-inline">
+                                        <h3>Selected Stations</h3>
+                                        <div style="display: flex; font-size: 13px; margin-top: -15px;">
+                                            <label id="met-station-selected-label"
+                                                style="text-align: center; color: greenyellow;">(Selected Stations: 0/0)
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <table class="attributes-table" id="met-station-table" 
+                                        style="margin-top: -10px; max-height: 150px;">
+                                        <thead><tr>
+                                            <th>ID</th><th>Name</th><th>Country</th><th>Latitude</th><th>Longitude</th>
+                                        </tr></thead>
+                                        <tbody></tbody>
+                                    </table>
+                                    <div class="row">
+                                        <div class="field-inline">
+                                            <button type="button" id="met-delete-btn">Delete Selected Stations</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tabpanel" data-panel="met-tab-3">
+                            <div class="grid">
+                                <div class="tile" style="grid-column: span 2;"><h3>Download Period</h3>
+                                    <div class="row">
+                                        <div class="field-inline">
+                                            <label for="met-start">Start Time:</label>
+                                            <input type="text" class="date" id="met-start" placeholder="YYYY-mm-dd">
+                                        </div>
+                                        <div class="field-inline">
+                                            <label for="met-end">End Time:</label>
+                                            <input type="text" class="date" id="met-end" placeholder="YYYY-mm-dd">
+                                        </div>
+                                        <div class="field-inline">
+                                            <a style="margin-top: 0; font-size: 14px;">References:</a>
+                                            <a class="data-link" style="font-size: 14px; color: aqua;"
+                                                href="/src_frontend/pdfs/CropEvapotranspiration.pdf" target="_blank">FAO-56 - Eq. 28
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="tile" style="grid-column: span 6;">
+                                    <div class="field-inline"><h3 style="margin-top: 5px;">Variables</h3>
+                                        <div class="row" style="margin-top: -15px;">
+                                            <button type="button" style="font-size: 11px; height: 30px;" id="met-variable-btn">Get All MET Variables</button>
+                                        </div>
+                                    </div>
+                                    <div class="variables-grid"
+                                        style="max-height: 150px; overflow-y: auto; overflow-x: auto; padding-right: 8px;" id="met-variables-grid">
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="mean(air_temperature PT1H)" checked>Hourly Mean Air Temperature (at 2m) (°C)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="sum(precipitation_amount PT1H)" checked>Amount of Precipitation/Hour (mm)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="mean(wind_from_direction PT1H)" checked>Hourly Mean Wind Speed (at 10m) (m/s)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="mean(wind_speed PT1H)" checked>Hourly Mean Wind Direction (at 10m) (°C)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="mean(surface_downwelling_shortwave_flux_in_air PT1H)" checked>Hourly Mean Shortwave Radiation (W/m²)
+                                        </label>
+                                        <label class="checkbox-right" style="color: yellow; font-weight: bold;">
+                                            <input type="checkbox" value="compute_toa_MET" checked>Compute Top of Atmosphere Incident Solar Radiation (W/m²)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="mean(surface_air_pressure PT1H)" checked>Hourly Mean Surface Air Pressure (at 2m) (Pa)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="cloud_area_fraction" checked>Total Cloud Cover (%)
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tabpanel" data-panel="met-tab-4">
+                            <div class="grid">
+                                <div class="tile" style="grid-column: span 12;">
+                                    <div class="row">
+                                        <div class="field-inline">
+                                            <button type="button" id="met-download-btn"
+                                                style="max-width: 150px;">Download</button>
+                                            <button type="button" id="met-save-btn"
+                                                style="max-width: 150px; display: none;">Save</button>
+                                        </div>
+                                        <table class="attributes-table" id="met-table" style="display: none;">
+                                            <thead></thead><tbody></tbody>
+                                        </table>
+                                        <div class="log-container" id="met-log-container">
+                                            <textarea wrap="off" class="log-text" id="met-log-text"
+                                                placeholder="Logs..." readonly></textarea>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- NVE -->
+                <div class="tabpanel main-panel" data-panel="nve-tab">
+                    <h3 style="text-align: center;">
+                        The data is sourced through the official
+                        <a href="https://api.nve.no/doc/" target="_blank" rel="noopener noreferrer" style="color: aqua;">NVE</a>
+                        platform
+                    </h3>
+                    <div class="tab-header">
+                        <div class="tabs-list">
+                            <button class="tab-btn" data-tab="nve-tab-1">Login</button>
+                            <button class="tab-btn" data-tab="nve-tab-2">Map</button>
+                            <button class="tab-btn" data-tab="nve-tab-3">Download Settings</button>
+                            <button class="tab-btn" data-tab="nve-tab-4">Download Data</button>
+                        </div>
+                    </div>
+                    <div class="tabs-content">
+                        <div class="tabpanel" data-panel="nve-tab-1">
+                            <div class="grid">
+                                <div class="tile" style="grid-column: span 2;"><h3>Registration</h3>
+                                    <div class="row">
+                                        <div class="field-inline" style="flex-direction: column;">
+                                            <div class="field-row">
+                                                <label for="nve-client-id" style="min-width: 150px;">NVE API Key:</label>
+                                                <div class="input-with-icon">
+                                                    <input type="password" id="nve-client-id">
+                                                    <button type="button" data-target="nve-client-id"
+                                                        class="toggle-password">👁️</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button id="nve-remember-btn">Remember me</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tabpanel" data-panel="nve-tab-2">
+                            <div class="grid">
+                                <div class="tile" style="grid-column: span 2;"><h3>Observation Stations</h3>
+                                    <div class="row">
+                                        <div class="field-inline">
+                                            <button type="button" id="nve-location-btn">Get Stations</button>
+                                        </div>
+                                        <div class="field-inline"
+                                            style="display: flex; font-size: 13px; margin: 0 0 5px 20px;">
+                                            <label id="nve-station-label" style="text-align: center; color: greenyellow;">
+                                                Number of Station(s): 0
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="variables-grid">
+                                        <label class="checkbox-right" style="min-width: 300px; margin-left: -10px;">
+                                            <input type="checkbox" id="nve-station-checkbox">Select Station(s)
+                                        </label>
+                                    </div>
+                                    <div class="field-inline">
+                                        <a style="margin-top: 0; font-size: 14px;">References:</a>
+                                        <a class="data-link" style="font-size: 14px; color: aqua;"
+                                            href="https://api.nve.no/doc/hydrologiske-data/"
+                                            target="_blank">Hydrologiske data
+                                        </a>
+                                    </div>
+                                </div>
+                                <div class="tile" style="grid-column: span 6;">
+                                    <div class="field-inline"><h3>Selected Stations</h3>
+                                        <div style="display: flex; font-size: 13px; margin-top: -15px;">
+                                            <label id="nve-station-selected-label"
+                                                style="text-align: center; color: greenyellow;">(Selected Stations: 0/0)
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <table class="attributes-table" id="nve-station-table"
+                                        style="margin-top: -10px; max-height: 150px;">
+                                        <thead><tr>
+                                            <th>ID</th><th>Name</th><th>River Name</th><th>Council Name</th><th>Latitude</th><th>Longitude</th>
+                                        </tr></thead>
+                                        <tbody></tbody>
+                                    </table>
+                                    <div class="row">
+                                        <div class="field-inline">
+                                            <button type="button" id="nve-delete-btn">Delete Selected Stations</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tabpanel" data-panel="nve-tab-3">
+                            <div class="grid">
+                                <div class="tile" style="grid-column: span 2;"><h3>Download Period</h3>
+                                    <div class="row">
+                                        <div class="field-inline">
+                                            <label for="nve-start">Start Time:</label>
+                                            <input type="text" class="date" id="nve-start" placeholder="YYYY-mm-dd">
+                                        </div>
+                                        <div class="field-inline">
+                                            <label for="nve-end">End Time:</label>
+                                            <input type="text" class="date" id="nve-end" placeholder="YYYY-mm-dd">
+                                        </div>
+                                        <div class="field-inline">
+                                            <label for="nve-download-interval">Interval:</label>
+                                            <select id="nve-download-interval">
+                                                <option value="0">Raw Data</option>
+                                                <option value="60">Hourly Data</option>
+                                                <option value="1440">Daily Data</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="tile" style="grid-column: span 6;">
+                                    <div class="field-inline"><h3 style="margin-top: 5px;">Variables</h3>
+                                        <div class="row" style="margin-top: -15px;">
+                                            <button type="button" style="font-size: 11px; height: 30px;"
+                                                id="nve-variable-btn">Get All NVE Variables
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="variables-grid"
+                                        style="max-height: 150px; overflow-y: auto; overflow-x: auto; padding-right: 8px;" id="nve-variables-grid">
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="1001" checked>Discharge (m³/s)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="0" checked>Precipitation (mm)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="1002" checked>Water Speed (m/s)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="1003" checked>Water Temperature (°C)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="14" checked>Wind Direction (°)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="15" checked>Wind Speed (m/s)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="17" checked>Air Temperature (°C)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="4" checked>Air Pressure (hPa)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="8" checked>Shortwave Radiation (W/m²)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="9" checked>Longwave Radiation (W/m²)
+                                        </label>
+                                        <label class="checkbox-right">
+                                            <input type="checkbox" value="5131" checked>Groundwater Level m.a.s.l. (m)
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tabpanel" data-panel="nve-tab-4">
+                            <div class="grid">
+                                <div class="tile" style="grid-column: span 8;">
+                                    <div class="row">
+                                        <div class="field-inline">
+                                            <button type="button" id="nve-download-btn" style="max-width: 150px;">Download</button>
+                                            <button type="button" id="nve-save-btn" style="max-width: 150px; display: none;">Save</button>
+                                        </div>
+                                        <table class="attributes-table" id="nve-table" style="display: none;">
+                                            <thead></thead><tbody></tbody>
+                                        </table>
+                                        <div class="log-container" id="nve-log-container">
+                                            <textarea wrap="off" class="log-text" id="nve-log-text" placeholder="Logs..." readonly></textarea>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Regnbyge -->
+                <div class="tabpanel main-panel" data-panel="regnbyge-tab">
+                    <h3 style="text-align: center;">
+                        The data is sourced through the official
+                        <a href="https://regnbyge.no/regnbyge/" target="_blank" rel="noopener noreferrer"
+                            style="color: aqua;"> Regnbyge.no</a> platform
+                    </h3>
+                    <!-- Sub Tabs -->
+                    <div class="main-tab sub-tab">
+                        <div class="tab-header">
+                            <div class="tabs-list">
+                                <button class="tab-btn" data-tab="regnbyge-tab-1">Login</button>
+                                <button class="tab-btn" data-tab="regnbyge-tab-2">Map</button>
+                                <button class="tab-btn" data-tab="regnbyge-tab-3">Download Settings</button>
+                            </div>
+                        </div>
+                        <div class="tabs-content">
+                            <div class="tabpanel" data-panel="regnbyge-tab-1">
+                                <div class="grid">
+                                    <div class="tile" style="grid-column: span 3;"><h3>Registration</h3>
+                                        <div class="row">
+                                            <div class="field-inline" style="flex-direction: column;">
+                                                <div class="field-row">
+                                                    <label for="regnbyge-client-id">Client Name:</label>
+                                                    <div class="input-with-icon">
+                                                        <input type="password" id="regnbyge-client-id">
+                                                        <button type="button" data-target="regnbyge-client-id" class="toggle-password">👁️</button>
+                                                    </div>
+                                                    <label for="regnbyge-client-secret">Client Secret:</label>
+                                                    <div class="input-with-icon">
+                                                        <input type="password" id="regnbyge-client-secret">
+                                                        <button type="button" data-target="regnbyge-client-secret" class="toggle-password">👁️</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="field-inline" style="flex-direction: column;">
+                                                <div class="field-row">
+                                                    <label for="regnbyge-client-username">Username:</label>
+                                                    <div class="input-with-icon">
+                                                        <input type="password" id="regnbyge-client-username">
+                                                        <button type="button" data-target="regnbyge-client-username" class="toggle-password">👁️</button>
+                                                    </div>
+                                                    <label for="regnbyge-client-password">Password:</label>
+                                                    <div class="input-with-icon">
+                                                        <input type="password" id="regnbyge-client-password">
+                                                        <button type="button" data-target="regnbyge-client-password" class="toggle-password">👁️</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button id="regnbyge-remember-btn">Remember me</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tabpanel" data-panel="regnbyge-tab-2">
+                                <div class="grid">
+                                    <!-- Plot options -->
+                                    <div class="tile" id="plot-container"
+                                        style="grid-column: span 2; flex-direction: column;"><h3>Plot Options</h3>
+                                        <div class="row">
+                                            <div class="field-inline">
+                                                <label for="start-plot">Start Time:</label>
+                                                <input type="text" class="datetime" id="start-plot" placeholder="YYYY-mm-dd HH:mm:ss">
+                                            </div>
+                                            <div class="field-inline">
+                                                <label for="end-plot">End Time:</label>
+                                                <input type="text" class="datetime" id="end-plot" placeholder="YYYY-mm-dd HH:mm:ss">
+                                            </div>
+                                            <div class="field-inline">
+                                                <label for="interval-plot">Interval:</label>
+                                                <select id="interval-plot">
+                                                    <option value="Raw" selected>Raw Data</option>
+                                                    <option value="Minute">1min Data</option>
+                                                    <option value="FiveMinute">5min Data</option>
+                                                    <option value="Hour">Hourly Data</option>
+                                                    <option value="Day">Daily Data</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- Stations -->
+                                    <div class="tile" style="grid-column: span 2; flex-direction: column;">
+                                        <h3>Station Types</h3>
+                                        <div class="variables-grid">
+                                            <label class="checkbox-right"><input type="checkbox"
+                                                    id="water-flow-checkbox">Water Flow</label>
+                                            <label class="checkbox-right"><input type="checkbox"
+                                                    id="water-level-checkbox">Water Level</label>
+                                            <label class="checkbox-right"><input type="checkbox"
+                                                    id="rainfall-checkbox">Rainfall</label>
+                                            <!-- <label class="checkbox-right"><input type="checkbox" id="overflow-checkbox">Overflow</label>
+                                            <label class="checkbox-right"><input type="checkbox" id="temperature-checkbox">Temperature</label>
+                                            <label class="checkbox-right"><input type="checkbox" id="evaporation-checkbox">Evaporation</label>
+                                            <label class="checkbox-right"><input type="checkbox" id="weir-checkbox">Weir</label> -->
+                                        </div>
+                                        <div class="row" style="justify-content: center;">
+                                            <button type="button" id="reset-station-btn">Delete All Stations</button>
+                                        </div>
+                                    </div>
+                                    <!-- Station List -->
+                                    <div class="tile" style="grid-column: span 2; flex-direction: column;">
+                                        <h3>List of Stations</h3>
+                                        <table class="attributes-table" id="station-table">
+                                            <thead><tr><th>Name</th><th>Type</th></tr></thead><tbody></tbody>
+                                        </table>
+                                    </div>
+                                    <!-- GIS Data Upload -->
+                                    <div class="tile" style="grid-column: span 2; flex-direction: column;">
+                                        <h3>Upload GIS File</h3>
+                                        <div class="row">
+                                            <div class="field-inline">
+                                                <button type="button" id="upload-gis-btn">Upload GIS Data</button>
+                                                <input type="file" id="data-gis-file" accept=".geojson" hidden>
+                                            </div>
+                                            <div class="data-gis-container" id="data-gis-container"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tabpanel" data-panel="regnbyge-tab-3">
+                                <div class="grid">
+                                    <!-- Selected Names -->
+                                    <div class="tile"
+                                        style="grid-column: span 2; display: flex; flex-direction: column; height: 100%;"><h3>Selected Stations</h3>
+                                        <table class="attributes-table" id="station-selected-table"
+                                            style="flex: 1; height: inherit; min-height: 0; display: flex; flex-direction: column;">
+                                            <thead
+                                                style="flex-shrink: 0; display: table; width: 100%; table-layout: fixed;">
+                                                <tr><th>Name</th><th>id</th><th>Type</th></tr>
+                                            </thead>
+                                            <tbody
+                                                style="flex: 1; display: block; overflow-y: auto; width: 100%; max-height: 200px;">
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <!-- Download period -->
+                                    <div class="tile" id="plot-container"
+                                        style="grid-column: span 2; flex-direction: column;">
+                                        <h3>Download Period</h3>
+                                        <div class="row">
+                                            <div class="field-inline">
+                                                <label for="start-download">Start Time:</label>
+                                                <input type="text" class="datetime" id="start-download" placeholder="YYYY-mm-dd HH:mm:ss">
+                                            </div>
+                                            <div class="field-inline">
+                                                <label for="end-download">End Time:</label>
+                                                <input type="text" class="datetime" id="end-download" placeholder="YYYY-mm-dd HH:mm:ss">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- Download Options -->
+                                    <div class="tile" style="grid-column: span 2;"><h3>Download Options</h3>
+                                        <div class="row">
+                                            <div class="field-inline">
+                                                <label for="type-download">Data type:</label>
+                                                <select id="type-download">
+                                                    <option value="flow">Water Flow</option>
+                                                    <option value="level">Water Level</option>
+                                                    <option value="rain">Rainfall</option>
+                                                    <!-- <option value="temperature">Temperature</option> -->
+                                                </select>
+                                            </div>
+                                            <div class="field-inline">
+                                                <label for="interval-download">Interval:</label>
+                                                <select id="interval-download">
+                                                    <option value="Raw" selected>Raw Data</option>
+                                                    <option value="Minute">1min Data</option>
+                                                    <option value="FiveMinute">5min Data</option>
+                                                    <option value="Hour">Hourly Data</option>
+                                                    <option value="Day">Daily Data</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div
+                                            style="display: flex; font-size: 13px; margin: 15px 0 15px 0; text-align: center; color: greenyellow;">
+                                            <label id="station-selected-label"></label>
+                                        </div>
+                                        <div class="row" style="display: flex; justify-content: center;">
+                                            <button type="button" id="download-btn">Download</button>
+                                        </div>
+                                    </div>
+                                    <!-- Download List -->
+                                    <div class="tile" id="download-list-container"
+                                        style="grid-column: span 2; flex-direction: column; display: none;"><h3>Downloaded File(s)</h3>
+                                        <textarea class="data-textarea" id="download-list" readonly></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- ERA5 -->
+                <div class="tabpanel main-panel" data-panel="era5-tab">
+                    <!-- Sub Tabs -->
+                    <div class="main-tab sub-tab">
+                        <h3 style="text-align: center;">
+                            The data is sourced through the official
+                            <a href="https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=overview"
+                                target="_blank" rel="noopener noreferrer" style="color: aqua;">Climate Data Store</a> website
+                        </h3>
+                        <div class="tab-header">
+                            <div class="tabs-list">
+                                <button class="tab-btn" data-tab="era5-tab-1">Login</button>
+                                <button class="tab-btn" data-tab="era5-tab-2">Download Settings</button>
+                                <button class="tab-btn" data-tab="era5-tab-3">Download Data</button>
+                            </div>
+                        </div>
+                        <div class="tabs-content">
+                            <div class="tabpanel" data-panel="era5-tab-1">
+                                <div class="grid">
+                                    <div class="tile" style="grid-column: span 2;"><h3>Registration</h3>
+                                        <div class="row">
+                                            <div class="field-inline" style="flex-direction: column;">
+                                                <div class="field-row">
+                                                    <label for="era5-api-key">API Key:</label>
+                                                    <div class="input-with-icon">
+                                                        <input type="password" id="era5-api-key">
+                                                        <button type="button" data-target="era5-api-key" class="toggle-password">👁️</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button id="era5-remember-btn">Remember me</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tabpanel" data-panel="era5-tab-2">
+                                <div class="grid">
+                                    <div class="tile" style="grid-column: span 3;"><h3>Location & Period</h3>
+                                        <div class="row">
+                                            <div class="field-inline">
+                                                <button type="button" id="era5-location-btn">Pick Average Location on Map</button>
+                                            </div>
+                                            <div class="field-inline">
+                                                <input type="text" id="era5-latitude" placeholder="Avg. Latitude (°)">
+                                                <input type="text" id="era5-longitude" placeholder="Avg. Longitude (°)">
+                                            </div>
+                                            <div class="field-inline">
+                                                <label for="era5-start">Start Time:</label>
+                                                <input type="text" class="datetime" id="era5-start" placeholder="YYYY-mm-dd HH:mm:ss">
+                                            </div>
+                                            <div class="field-inline">
+                                                <label for="era5-end">End Time:</label>
+                                                <input type="text" class="datetime" id="era5-end" placeholder="YYYY-mm-dd HH:mm:ss">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="tile" style="grid-column: span 5;"><h3>Variables</h3>
+                                        <div class="variables-grid" id="era5-variables-grid">
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="2m_temperature"
+                                                    data-label="Temperature (at 2m) (°C)" checked>Air Temperature (at 2m) (°C)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="total_precipitation"
+                                                    data-label="Total Precipitation (mm)" checked>Total Precipitation (mm)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" id="wind-u-checkbox"
+                                                    value="10m_u_component_of_wind"
+                                                    data-label="Wind (u Component) (m/s)" checked>Wind (u-component at 10m)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" id="wind-v-checkbox"
+                                                    value="10m_v_component_of_wind"
+                                                    data-label="Wind (v Component) (m/s)" checked>Wind (v-component at 10m)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="surface_solar_radiation_downwards"
+                                                    data-label="Surface Solar Radiation Downwards (W/m²)" checked>Surface Solar Radiation Downwards (W/m²)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="toa_incident_solar_radiation"
+                                                    data-label="TOA Incident Solar Radiation (W/m²)" checked>Top of Atmosphere Incident Solar Radiation (W/m²)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="mean_sea_level_pressure"
+                                                    data-label="Mean Sea Level Pressure (Pa)" checked>Mean Sea Level Pressure (Pa)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="total_cloud_cover"
+                                                    data-label="Total Cloud Cover (%)" checked>Total Cloud Cover (%)
+                                            </label>
+                                            <label class="checkbox-right" style="color: yellow; font-weight: bold;">
+                                                <input type="checkbox" value="wind_speed" id="wind-speed-checkbox"
+                                                    data-label="Total Wind" checked>Compute Wind Speed (m/s) & Direction (°)
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tabpanel" data-panel="era5-tab-3">
+                                <div class="grid">
+                                    <div class="tile" style="grid-column: span 12;">
+                                        <div class="row">
+                                            <div class="field-inline" style="margin-top: -10px;">
+                                                <button type="button" id="era5-download-btn" style="max-width: 150px;">Download</button>
+                                                <button type="button" id="era5-cancel-btn" style="max-width: 150px; display: none;">Cancel</button>
+                                                <button type="button" id="era5-save-btn" style="max-width: 150px; display: none;">Save</button>
+                                                <button type="button" id="era5-clear-btn" style="max-width: 150px; margin-left: auto; color: red; background-color: white;" 
+                                                title="Use with caution! 'Maximum number queued requests ...'">Clear Queue</button>
+                                            </div>
+                                            <table class="attributes-table" id="era5-table" style="display: none; margin-top: -10px;">
+                                                <thead></thead><tbody></tbody>
+                                            </table>
+                                            <div class="log-container" id="era5-log-container">
+                                                <textarea wrap="off" class="log-text" id="era5-log-text" placeholder="Logs..." readonly></textarea>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <!-- Add the map -->
+        <div class="map-container" id="map-container">
+            <div class="leaflet-map" id="leaflet-map-data"></div>
+            <img class="leaflet-compass" src="/src_frontend/images/compass.png">
+            <div class="basemap-container">
+                <button type="button" class="leaflet-basemap-btn" id="basemap-btn">
+                    <img src="/src_frontend/images/basemap.png">
+                </button>
+                <div class="basemap-popup">
+                    <div><strong>Select Base Map</strong></div>
+                    <button class="basemap-option" data-url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png">Open Street Map</button>
+                    <button class="basemap-option" data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}">Satellite</button>
+                    <button class="basemap-option" data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}">Street</button>
+                </div>
+            </div>
+            <!-- Legend -->
+            <div class="colorbar-container" id="custom-colorbar">
+                <div class="colorbar-wrapper">
+                    <div class="colorbar-title" id="colorbar-title">Legend</div>
+                    <div class="colorbar-gradient" id="colorbar-gradient"></div>
+                    <div class="colorbar-labels" id="colorbar-label">
+                        <div></div> <!-- max -->
+                        <div></div> <!-- 75% -->
+                        <div></div> <!-- 50% -->
+                        <div></div> <!-- 25% -->
+                        <div></div> <!-- min -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Add a floating plot window -->
+        <div class="overlay-window" id="plot-station-window">
+            <div class="plot-header" id="plot-station-header">
+                <span class="plot-title" id="plot-title">Time-series Plot</span>
+                <span class="close-plot-btn" id="close-station-plot">×</span>
+            </div>
+            <div class="plot-controls">
+                <label for="select-object">Select:</label>
+                <div class="select-object" id="select-object">
+                    <div class="select-box">
+                        <span class="label-text">Select one or more options</span>
+                        <span class="arrow">▼</span>
+                    </div>
+                    <div class="checkbox-list" id="checkbox-list"></div>
+                </div>
+                <div class="button-group">
+                    <button type="button" id="viewDataBtn">View Data</button>
+                    <button type="button" id="downloadExcel">Download as Excel File</button>
+                </div>
+            </div>
+            <div class="plot-area-data" id="plot-station-content">
+                <div class="myChart-data" id="myChart"></div>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.26.1.min.js"></script>
+    <script src="/src_frontend/services/tooltipManager.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script>
+        flatpickr(".datetime", {
+            enableTime: true, enableSeconds: true, dateFormat: "Y-m-d H:i:S", time_24hr: true,
+            defaultHour: 0, defaultMinute: 0, defaultSecond: 0
+        });
+        flatpickr(".date", {
+            enableTime: false, dateFormat: "Y-m-d", time_24hr: true,
+            defaultHour: 0, defaultMinute: 0, defaultSecond: 0
+        });
+    </script>
+    <script type="module" src="/src_frontend/services/dataDownload.js"></script>
+</body>
+
+</html>

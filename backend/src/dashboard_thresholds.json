@@ -1,0 +1,142 @@
+{
+    "_comment": "Ngưỡng cảnh báo cho Dashboard (áp dụng cho kết quả HYD/WAQ). 'direction': 'above' = vượt ngưỡng trên là xấu, 'below' = thấp hơn ngưỡng là xấu. Khóa trong 'substances' là tên biến WAQ (không có tiền tố mesh2d_). Đây là ngưỡng minh hoạ – cần hiệu chỉnh theo quy chuẩn áp dụng.",
+    "substances": {
+        "EColi": {
+            "label": "E. coli",
+            "unit": "MPN/m³",
+            "direction": "above",
+            "medium": 100,
+            "high": 500,
+            "category": "Microbiology",
+            "weight": 25
+        },
+        "ZNWTOT": {
+            "label": "Zinc (total)",
+            "unit": "mg/L",
+            "direction": "above",
+            "medium": 0.05,
+            "high": 0.2,
+            "category": "Metals",
+            "weight": 15
+        },
+        "Zn": {
+            "label": "Zinc",
+            "unit": "mg/L",
+            "direction": "above",
+            "medium": 0.05,
+            "high": 0.2,
+            "category": "Metals",
+            "weight": 15
+        },
+        "Cd": {
+            "label": "Cadmium",
+            "unit": "mg/L",
+            "direction": "above",
+            "medium": 0.0002,
+            "high": 0.001,
+            "category": "Metals",
+            "weight": 15
+        },
+        "IM1": {
+            "label": "Suspended sediment 1",
+            "unit": "g/m³",
+            "direction": "above",
+            "medium": 0.4,
+            "high": 1.0,
+            "category": "Sediment",
+            "weight": 10
+        },
+        "IM2": {
+            "label": "Suspended sediment 2",
+            "unit": "g/m³",
+            "direction": "above",
+            "medium": 0.4,
+            "high": 1.0,
+            "category": "Sediment",
+            "weight": 10
+        },
+        "IM3": {
+            "label": "Suspended sediment 3",
+            "unit": "g/m³",
+            "direction": "above",
+            "medium": 0.4,
+            "high": 1.0,
+            "category": "Sediment",
+            "weight": 10
+        },
+        "OXY": {
+            "label": "Dissolved oxygen",
+            "unit": "mg/L",
+            "direction": "below",
+            "medium": 6.0,
+            "high": 4.0,
+            "category": "Oxygen",
+            "weight": 25
+        },
+        "BOD5": {
+            "label": "BOD5",
+            "unit": "mg/L",
+            "direction": "above",
+            "medium": 3.0,
+            "high": 6.0,
+            "category": "Organic",
+            "weight": 15
+        },
+        "NH4": {
+            "label": "Ammonium",
+            "unit": "g/m³",
+            "direction": "above",
+            "medium": 0.2,
+            "high": 0.5,
+            "category": "Nutrients",
+            "weight": 10
+        },
+        "Chlfa": {
+            "label": "Chlorophyll-a",
+            "unit": "g/m³",
+            "direction": "above",
+            "medium": 0.008,
+            "high": 0.02,
+            "category": "Nutrients",
+            "weight": 10
+        },
+        "TotP": {
+            "label": "Total phosphorus",
+            "unit": "g/m³",
+            "direction": "above",
+            "medium": 0.011,
+            "high": 0.02,
+            "category": "Nutrients",
+            "weight": 10
+        },
+        "cTR1": {
+            "label": "Conservative tracer 1",
+            "unit": "g/m³",
+            "direction": "above",
+            "medium": 0.1,
+            "high": 0.5,
+            "category": "Tracer",
+            "weight": 5
+        }
+    },
+    "physics": {
+        "surface_temperature": {
+            "label": "Max surface water temperature",
+            "unit": "°C",
+            "direction": "above",
+            "medium": 15.0,
+            "high": 20.0,
+            "category": "Temperature",
+            "weight": 10
+        },
+        "current_speed": {
+            "label": "Max current speed",
+            "unit": "m/s",
+            "direction": "above",
+            "medium": 0.3,
+            "high": 0.6,
+            "category": "Hydrodynamics",
+            "weight": 5
+        }
+    }
+}

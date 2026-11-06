@@ -1,0 +1,54 @@
+html, body { 
+  margin: 0; padding: 0; height: 100%; overflow: auto;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.form-box {
+  border-radius: 12px; padding: 20px 25px; height: 100%;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 100%; 
+  justify-content: flex-start; display: flex; 
+  flex-direction: column; box-sizing: border-box;
+}
+form { display: flex; flex-direction: column; height: auto; gap: 5px; }
+.form-row {
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 10px;
+}
+.form-row label { flex: 1; white-space: nowrap; font-weight: bold;}
+#label-waq { font-weight: normal; }
+.checkbox-label { 
+  cursor: pointer; font-size: 14px; font-weight: normal;
+}
+
+select { 
+  flex: 2; padding: 8px 6px; border: 1px solid #66b2ff; 
+  border-radius: 6px; outline: none; min-width: 150px;
+}
+select:focus { border-color: #004080; box-shadow: 0 0 4px #004080; }
+button {
+  padding: 8px 16px; background-color: #004080; color: white; 
+  border: none; border-radius: 6px; cursor: pointer; width: auto;
+  transition: background-color 0.3s; white-space: nowrap;
+}
+button:hover { background-color: #065baf; }
+.progress-container {
+  display: flex; flex-direction: column; align-items: center; width: 100%;
+}
+#progressbar { width: 100%; height: 10px; }
+#progress-text {
+  align-items: center; margin-top: 5px; text-align: center; font-size: 13px;
+}
+
+progress {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 5px;
+}
+progress::-webkit-progress-bar { background-color: #838080; border-radius: 6px; }
+progress::-webkit-progress-value { background-color: #004080; border-radius: 6px; }
+progress::-moz-progress-bar { background-color: #004080; border-radius: 6px; }
+textarea {
+  width: 100%; min-height: 0; resize: none; box-sizing: border-box;
+  height: 100%; border: 1px solid #66b2ff; border-radius: 6px;
+  overflow: auto; white-space: pre; display: flex; font-family: monospace;
+}
+#form-row-textarea { 
+  width: 100%; margin-top: 10px; flex: 1 1 auto; display: none;
+} 

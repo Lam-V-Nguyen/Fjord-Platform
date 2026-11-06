@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+    <link rel="stylesheet" href="/src_frontend/styles/flowPreparation.css">
+    <link rel="stylesheet" href="/src_frontend/styles/mapConfiguration.css">
+    <link rel="stylesheet" href="/src_frontend/styles/movement.css">
+</head>
+<body>
+    <div class="wrapper">
+        <div class="page-title">
+            <label for="project-name">Scenario:</label>
+            <div class="project-name-wrapper">
+                <input type="text" id="project-name" placeholder="Select a scenario">
+                <ul id="project-list"></ul>
+            </div>
+            <button class="tab-btn" id="open-btn">Open Scenario</button>
+            <button class="tab-btn" id="show-btn" style="display: none;">Show Panel Menu</button>
+        </div>
+        <section class="main-tab" id="control-tab">
+            <div class="tile flow-map" style="grid-column: span 8; height: 800px;" id="flow-map-container">
+                <div class="map-container" id="map-container" style="height: 780px;">
+                    <div class="leaflet-map" id="leaflet-map-flow-estimation"></div>
+                    <img class="leaflet-compass" src="/src_frontend/images/compass.png">
+                    <div class="basemap-container">
+                        <button type="button" class="leaflet-basemap-btn" id="basemap-btn">
+                            <img src="/src_frontend/images/basemap.png">
+                        </button>
+                        <div class="basemap-popup">
+                            <div><strong>Select Base Map</strong></div>
+                            <button class="basemap-option" data-url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png">Open
+                                Street Map</button>
+                            <button class="basemap-option"
+                                data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}">Satellite</button>
+                            <button class="basemap-option"
+                                data-url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}">Street</button>
+                        </div>
+                    </div>
+                    <div class="colorbar-container" id="custom-colorbar">
+                        <div class="colorbar-wrapper">
+                            <div class="colorbar-title" id="colorbar-title">Legend</div>
+                            <div class="colorbar-gradient" id="colorbar-gradient"></div>
+                            <div class="colorbar-labels" id="colorbar-label">
+                                <div></div>
+                                <div></div>
+                                <div></div>
+                                <div></div>
+                                <div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Panel -->
+                <div class="velocity-container" id="wflow-viewer" style="display: none;">
+                    <aside class="panel" id="wv-panel" style="position: absolute; top: 80px; right: 0; bottom: 0; left: 20px;">
+                        <header class="panel-head">
+                            <p class="model-name">Wflow Results <br><span class="model-info" id="wv-info"></span></p>
+                            <div class="clock-block">
+                                <time class="clock" id="wv-clock">--:--</time>
+                                <span class="clock-note" id="wv-clock-note"></span>
+                            </div>
+                            <p class="date" id="wv-date"></p>
+                            <div class="panel-actions">
+                                <button class="collapse" id="wv-collapse" aria-expanded="true" aria-controls="wv-body" title="Collapse panel">–</button>
+                                <button class="collapse" id="wv-close" title="Close panel">x</button>
+                            </div>
+                        </header>
+                        <div class="panel-body" id="wv-body">
+                            <section><h2>Layers</h2>
+                                <div class="row2"><label for="wv-grid-var">Map layer</label><select id="wv-grid-var"></select></div>
+                                <div class="row2"><label for="wv-river-var">River lines</label><select id="wv-river-var"></select></div>
+                            </section>
+                            <section><h2>Display</h2>
+                                <div class="row2">
+                                    <label for="wv-res">Resolution</label>
+                                    <input type="text" id="wv-res" inputmode="decimal" autocomplete="off" spellcheck="false"
+                                        placeholder="auto" title="Display resolution in metres. Empty or 'auto' = automatic. Press Enter to apply.">
+                                </div>
+                                <p class="hint" id="wv-res-hint"></p>
+                                <div class="row2"><label for="wv-mode">Show</label>
+                                    <select id="wv-mode">
+                                        <option value="animate" selected>Animation</option>
+                                        <option value="max">Maximum</option>
+                                        <option value="mean">Mean</option>
+                                        <option value="sum">Total (fluxes)</option>
+                                        <option value="tmax">Time of peak</option>
+                                        <option value="above">Hours above threshold</option>
+                                    </select>
+                                </div>
+                                <div class="row2" id="wv-threshold-row" style="display: none;">
+                                    <label for="wv-threshold">Threshold</label>
+                                    <input id="wv-threshold" type="number" min="0" step="any" value="0.01" title="In the units of the map layer">
+                                </div>
+                                <div class="row2"><label for="wv-scale">Colour scale</label>
+                                    <select id="wv-scale">
+                                        <option value="auto" selected>Auto</option>
+                                        <option value="linear">Linear</option>
+                                        <option value="log">Logarithmic</option>
+                                    </select>
+                                </div>
+                                <label class="row">Layer opacity<output id="wv-opacity-out"></output>
+                                    <input type="range" id="wv-opacity" min="0.2" max="1" step="0.05" value="0.8">
+                                </label>
+                            </section>
+                            <section id="wv-particle-section"><h2>Flow Particles</h2>
+                                <label class="row2 check">
+                                    <input type="checkbox" id="wv-particles" checked>Show moving particles
+                                </label>
+                                <label class="row2 check">
+                                    <input type="checkbox" id="wv-pwater" 
+                                    title="Particles stop when they reach the water area (sea, fjord or lake) and are not spawned on water." checked>Stop particles at water area
+                                </label>
+                                <label class="row">Particles density<output id="wv-pcount-out"></output>
+                                    <input type="range" id="wv-pcount" min="500" max="15000" step="500" value="4000">
+                                </label>
+                                <label class="row">Particles speed<output id="wv-pspeed-out"></output>
+                                    <input type="range" id="wv-pspeed" min="0.2" max="4" step="0.1" value="1">
+                                </label>
+                                <label class="row">Trail length<output id="wv-ptrail-out"></output>
+                                    <input type="range" id="wv-ptrail" min="0.80" max="0.98" step="0.01" value="0.92">
+                                </label>
+                                <div class="row2"><label for="wv-pcurve">Speed curve</label>
+                                    <select id="wv-pcurve">
+                                        <option value="linear">Linear – true proportion</option>
+                                        <option value="sqrt" selected>Square root – balanced</option>
+                                        <option value="log">Logarithmic – strong</option>
+                                    </select>
+                                </div>
+                                <div class="row2"><label for="wv-pcolor">Colour</label>
+                                    <select id="wv-pcolor">
+                                        <option value="blue">Blue</option>
+                                        <option value="white">White</option>
+                                        <option value="dark_blue">Dark blue</option>
+                                        <option value="black">Black</option>
+                                        <option value="speed" selected>By speed</option>
+                                    </select>
+                                </div>
+                                <p class="hint" id="wv-pinfo"></p>
+                            </section>
+                            <section id="wv-legend"><h2>Legend</h2>
+                                <div class="legend" id="wv-legend-grid"></div>
+                                <div class="legend" id="wv-legend-river"></div>
+                            </section>
+                            <section class="probe"><h2>Observation Point</h2>
+                                <p class="hint" id="wv-probe-hint">Click on a point inside the basin to view the time series.</p>
+                                <div id="wv-chart"></div>
+                                <details class="pick">
+                                    <summary>Variables in Chart</summary>
+                                    <div class="pick-list" id="wv-chart-vars"></div>
+                                </details>
+                            </section>
+                            <section>
+                                <p class="hint status" id="wv-status" role="status" aria-live="polite"></p>
+                            </section>
+                        </div>
+                    </aside>
+                    <footer class="timebar">
+                        <button class="play" id="wv-play" aria-label="Play">
+                            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                                <path id="wv-play-icon" d="M7 4l13 8-13 8z"/>
+                            </svg>
+                        </button>
+                        <button class="step" id="wv-back" aria-label="Back one step">−1 h</button>
+                        <button class="step" id="wv-fwd" aria-label="Forward one step">+1 h</button>
+                        <label class="rate">Speed
+                            <select id="wv-rate">
+                                <option value="0.5">0,5 h/s</option>
+                                <option value="1">1 h/s</option>
+                                <option value="3" selected>3 h/s</option>
+                                <option value="6">6 h/s</option>
+                                <option value="12">12 h/s</option>
+                                <option value="24">1 d/s</option>
+                            </select>
+                        </label>
+                        <div class="track" id="wv-track">
+                            <svg class="trace" id="wv-trace" preserveAspectRatio="none" aria-hidden="true"></svg>
+                            <div class="months" id="wv-months"></div>
+                            <input type="range" id="wv-time" min="0" max="1" step="0.01" value="0" aria-label="Simulation Period">
+                        </div>
+                        <button type="button" id="download-data-btn"
+                            class="footer-download-btn" title="Download data" aria-label="Download data">
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg" width="15" height="15"
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>
+                            </svg>
+                        </button>
+                        <span class="loading" id="wv-loading" hidden>Loading Frame…</span>
+                    </footer>
+                </div>
+            </div>
+        </section>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script>
+        flatpickr(".datetime", {
+            enableTime: true, enableSeconds: true, dateFormat: "Y-m-d H:i:S", time_24hr: true,
+            defaultHour: 0, defaultMinute: 0, defaultSecond: 0
+        });
+    </script>
+    <script type="module" src="/src_frontend/services/flowRunner.js"></script>
+</body>
+</html>

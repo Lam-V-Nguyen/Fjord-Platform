@@ -1,0 +1,97 @@
+.grid-stack {
+  position: relative; z-index: 1;
+}
+
+.grid-stack-item {
+  position: relative; overflow: hidden;
+}
+
+.grid-stack-item-content {
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  box-sizing: border-box; flex-direction: column;
+  height: 100%; display: flex; padding: 5px;
+}
+.ui-resizable-handle {
+  opacity: 0; transition: opacity 0.2s;
+  width: 12px; height: 12px;
+}
+.grid-stack-item:hover .ui-resizable-handle { opacity: 1; }
+.grid-stack-item.ui-resizable-resizing iframe {
+  pointer-events: none;
+}
+
+.widget-header {
+  display: flex; align-items: center;
+  justify-content: space-between; cursor: grab;
+  background: linear-gradient(90deg, #203a43, #0f2027, #2c5364);
+  padding: 5px; flex: 0 0 auto;
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+}
+.widget-header:active { cursor: grabbing; }
+.widget-body { 
+  flex: 1; box-sizing: border-box; min-height: 0;
+  background: rgb(121, 119, 119); 
+  border: none; min-height: 0; overflow: hidden;
+  box-shadow: inset 0 0 0 1px #ddd;
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+.widget-title {
+  font-size: 14px; font-weight: bold;
+  color: #f7f4f4; cursor: text;
+}
+
+.remove-btn {
+  font-weight: bold; background: transparent; 
+  border: none; font-size: 18px; cursor: pointer; 
+}
+.remove-btn:hover { color: red; }
+
+.widget-leaflet, .widget-iframe { 
+  height: 100%; width: 100%;border: none; display: block; 
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+.leaflet-compass {
+  position: absolute; top: 8px; right: 8px;
+  width: 50px; height: 50px; 
+  z-index: 1000; pointer-events: none;
+}
+
+.basemap-container { 
+  position: relative; display: inline-block; z-index: 1001;
+}
+.leaflet-basemap-btn {
+  margin: 10px 0 0 10px; border: none;
+  width: 30px; height: 30px; 
+  border-radius: 10%; cursor: pointer;
+}
+.leaflet-basemap-btn img {
+  width: 100%; height: 100%; object-fit: contain;
+}
+.basemap-popup {
+  position: relative; top: 0; left: 10px;
+  background-color: #ccc; border: 1px solid #999; 
+  border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  padding: 10px; z-index: 1002; min-width: 150px;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  transition: opacity 0.3s ease, transform 0.3s ease; 
+  opacity: 0; transform: translateX(-50%); pointer-events: none;
+}
+.basemap-popup.show { 
+  opacity: 1; transform: translateX(0); 
+  pointer-events: auto; 
+}
+.basemap-popup div { color:#082bf1; font-size: 14px; }
+.basemap-option {
+  display: block; width: 100%; padding: 5px 5px; 
+  background-color: #07af8b; margin: 5px 0 0 0;
+  border: 1px solid #082bf1; border-radius: 4px; 
+  text-align: center; cursor: pointer; font-size: 13px; 
+}
+.basemap-option:hover { 
+  background-color: #a7936a; color: white; 
+}
+
+

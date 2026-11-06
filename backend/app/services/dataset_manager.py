@@ -1,0 +1,40 @@
+import os, threading
+import xarray as xr
+from typing import Dict, Any, cast
+
+class DatasetManager:
+    def __init__(self):
+        # Cache store dataset and timestamp
+        self._cache: Dict[str, xr.Dataset] = {}
+        self._timestamp: Dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def get(self, path: str) -> xr.Dataset:
+        # Get dataset from cache, if not in cache or if the file has been modified, open the dataset
+        mtime, chunks_val = os.path.getmtime(path), cast(Any, 'auto')
+        with self._lock:
+            if path not in self._cache:
+                print(f"Opening: {path}")
+                # self._cache[path] = xr.open_dataset(path, chunks='auto')
+                self._cache[path] = xr.open_zarr(path, consolidated=True, chunks=chunks_val)
+                self._timestamp[path] = mtime
+            elif self._timestamp[path] != mtime:
+                print(f"Reload dataset: {path}")
+                self._cache[path].close()
+                del self._cache[path]
+                # self._cache[path] = xr.open_dataset(path, chunks='auto')
+                self._cache[path] = xr.open_zarr(path, consolidated=True, chunks=chunks_val)
+                self._timestamp[path] = mtime
+            else: print(f"Using cached dataset: {path}")
+            return self._cache[path]
+
+    def close(self):
+        # Close all datasets, usually at shutdown
+        for path, dataset in self._cache.items():
+            try:
+                dataset.close()
+                del dataset
+                print(f"Closed dataset: {path}")
+            except Exception as e: print(f"Error closing dataset: {path} - {str(e)}")
+        self._cache.clear()
+        self._timestamp.clear()
