@@ -105,11 +105,16 @@ export function getColors(nColors){
 }
 
 export const calibrationParams = [
-    { name: "Water Clarity", value: "Secchidepth", checked: false, lower: 1.0, upper: 20.0 },
-    { name: "Vertical Viscosity", value: "Vicoww", checked: true, lower: 0.0, upper: 5e-6 },
-    { name: "Vertical Diffusivity", value: "Dicoww", checked: true, lower: 0.0, upper: 5e-6 },
-    { name: "Horizontal Viscosity", value: "Vicouv", checked: true, lower: 0.0, upper: 0.5 },
-    { name: "Horizontal Diffusivity", value: "Dicouv", checked: true, lower: 1e-4, upper: 1e-2 },
+    { name: "Water Clarity (Secchidepth, m)", value: "Secchidepth", checked: true, lower: 0.5, upper: 6.0, scale: "linear" },
+    { name: "Convective heat flux (Stanton)", value: "Stanton", checked: true, lower: -2.0, upper: -0.5, scale: "linear" },
+    { name: "Evaporative heat flux (Dalton)", value: "Dalton", checked: true, lower: -2.0, upper: -0.5, scale: "linear" },
+    { name: "Wind Drag (× all Cdbreakpoints)", value: "Cdbreakpoints_factor", checked: true, lower: 0.6, upper: 1.6, scale: "linear" },
+    { name: "Vertical Diffusivity", value: "Dicoww", checked: true, lower: 1e-7, upper: 1e-4, scale: "log" },
+    { name: "Vertical Viscosity", value: "Vicoww", checked: false, lower: 1e-6, upper: 1e-3, scale: "log" },
+    { name: "Horizontal Viscosity", value: "Vicouv", checked: false, lower: 0.01, upper: 1.0, scale: "log" },
+    { name: "Horizontal Diffusivity", value: "Dicouv", checked: false, lower: 0.01, upper: 1.0, scale: "log" },
+    { name: "Wind Drag at low wind (Cdbreakpoints[0])", value: "Cdbreakpoints[0]", checked: false, lower: 5e-4, upper: 1.5e-3, scale: "linear" },
+    { name: "Wind Drag at high wind (Cdbreakpoints[1])", value: "Cdbreakpoints[1]", checked: false, lower: 4e-3, upper: 1e-2, scale: "linear" },
 ];
 export function getCalibrationParam(value) {
     return calibrationParams.find(p => p.value === value);
