@@ -19,18 +19,15 @@ from sklearn.ensemble import RandomForestRegressor
 warnings.filterwarnings('ignore', category=UserWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-OVERRIDES_FILE = "base_overrides.json"        # khoá MDU áp cho MỌI kịch bản (sau bước kiểm tra ban đầu)
-FEATURES_FILE = "features.json"               # cách biến đổi đầu vào surrogate (log10 cho tham số thang log)
-FACTOR_SUFFIX = "_factor"                     # vd. Cdbreakpoints_factor: nhân MỌI giá trị của khoá nhiều giá trị
-_INDEXED = re.compile(r"^(?P<key>[A-Za-z0-9_]+)\[(?P<i>\d+)\]$")   # vd. Cdbreakpoints[1]: thay giá trị thứ i
+OVERRIDES_FILE = "base_overrides.json"
+FEATURES_FILE = "features.json"
+FACTOR_SUFFIX = "_factor"
+_INDEXED = re.compile(r"^(?P<key>[A-Za-z0-9_]+)\[(?P<i>\d+)\]$")
 INTERVAL_KEYS = ("HisInterval", "MapInterval", "WaqInterval", "ClassMapInterval", "RstInterval")
 
 
-# ======================================================================
 # MDU helpers
-# ======================================================================
 def mdu_number(token) -> float:
-    """Số trong MDU, chấp nhận dạng Fortran (1.d-6, 2.3d-2)."""
     return float(str(token).strip().lower().replace("d", "e"))
 
 def fmt_mdu(value) -> str:
@@ -49,7 +46,6 @@ def read_mdu(path: str) -> list:
         return f.readlines()
 
 def _split_line(line: str):
-    """'key = value # comment' -> (key_part, value_part, has_comment, comment) hoặc None."""
     if '=' not in line or line.lstrip().startswith(('#', '[')): return None
     key_part, rest = line.split('=', 1)
     value_part, sep, comment = rest.partition('#')
@@ -63,7 +59,6 @@ def has_mdu_key(mdu_lines: list, key: str) -> bool:
     return False
 
 def get_values_from_mdu(mdu_content: list, key: str):
-    """Giá trị (chuỗi, bỏ chú thích) của khoá; '' nếu không có. Giữ tương thích bản cũ."""
     k = key.lower()
     for line in mdu_content:
         p = _split_line(line)
@@ -71,12 +66,9 @@ def get_values_from_mdu(mdu_content: list, key: str):
     return ''
 
 def get_mdu_tokens(mdu_content: list, key: str) -> list:
-    """Danh sách giá trị của khoá – vd. Cdbreakpoints = 6.3d-4 7.23d-3 -> ['6.3d-4', '7.23d-3']."""
     return get_values_from_mdu(mdu_content, key).split()
 
 def modify_mdu_key(mdu_lines: list, key: str, value: str = '', max_length=None) -> list:
-    """Đổi giá trị của khoá, GIỮ chú thích, căn lề và ký tự xuống dòng.
-    (Bản cũ lỗi IndexError với dòng không có '#', và làm mất xuống dòng khi max_length != None.)"""
     mdu, k = mdu_lines.copy(), key.lower()
     for i, line in enumerate(mdu):
         p = _split_line(line)
@@ -91,7 +83,6 @@ def modify_mdu_key(mdu_lines: list, key: str, value: str = '', max_length=None) 
     raise KeyError(f"Key '{key}' not found in the MDU file")
 
 def mdu_time_info(mdu_lines: list) -> dict:
-    """RefDate/Tunit/TStart/TStop -> datetime UTC (quy ước của nền tảng: thời gian mô hình = UTC)."""
     ref = datetime.strptime(get_values_from_mdu(mdu_lines, 'RefDate')[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
     unit = (get_values_from_mdu(mdu_lines, 'Tunit') or 'S').upper()[:1]
     sec = {'S': 1, 'M': 60, 'H': 3600, 'D': 86400}.get(unit, 1)
@@ -100,10 +91,8 @@ def mdu_time_info(mdu_lines: list) -> dict:
     return {"ref": ref, "unit": unit, "unit_seconds": sec, "start": start, "stop": stop}
 
 def to_mdu_time(value, mdu_lines: list, time_zone: str) -> str:
-    """TStart/TStop: số (theo Tunit) giữ nguyên; chuỗi ngày giờ (giờ địa phương) -> số theo RefDate/Tunit."""
     s = str(value).strip()
-    try:
-        mdu_number(s); return s
+    try: mdu_number(s); return s
     except ValueError: pass
     info = mdu_time_info(mdu_lines)
     t = functions.local_to_utc(s, time_zone)
@@ -112,17 +101,12 @@ def to_mdu_time(value, mdu_lines: list, time_zone: str) -> str:
 
 # ----------------------------------------------------------------- tham số hiệu chỉnh
 def param_target(name: str):
-    """Tên tham số -> (khoá MDU, kiểu, chỉ số). Kiểu: 'value' | 'factor' | 'index'."""
     if name.endswith(FACTOR_SUFFIX): return name[:-len(FACTOR_SUFFIX)], "factor", None
     m = _INDEXED.match(name)
     if m: return m.group("key"), "index", int(m.group("i"))
     return name, "value", None
 
 def apply_param(mdu_lines: list, base_lines: list, name: str, value) -> list:
-    """Ghi một tham số vào MDU.
-      - 'Key'          : khoá 1 giá trị -> thay giá trị; khoá NHIỀU giá trị -> thay giá trị đầu, giữ các giá trị sau
-      - 'Key_factor'   : nhân TẤT CẢ giá trị gốc của khoá với hệ số (vd. Cdbreakpoints_factor)
-      - 'Key[i]'       : thay giá trị thứ i (đếm từ 0), giữ các giá trị khác (vd. Cdbreakpoints[1])"""
     key, mode, idx = param_target(name)
     base = get_mdu_tokens(base_lines, key)
     if mode == "factor":
@@ -131,8 +115,7 @@ def apply_param(mdu_lines: list, base_lines: list, name: str, value) -> list:
     elif mode == "index":
         if idx >= len(base): raise KeyError(f"Key '{key}' has only {len(base)} value(s); index {idx} is invalid")
         toks = list(base); toks[idx] = fmt_mdu(value); new = " ".join(toks)
-    else:
-        new = " ".join([fmt_mdu(value)] + base[1:]) if len(base) > 1 else fmt_mdu(value)
+    else: new = " ".join([fmt_mdu(value)] + base[1:]) if len(base) > 1 else fmt_mdu(value)
     return modify_mdu_key(mdu_lines, key, new)
 
 def validate_params(base_lines: list, names) -> list:
@@ -149,7 +132,6 @@ def validate_params(base_lines: list, names) -> list:
     return errors
 
 def normalize_params(values) -> dict:
-    """Từ giao diện: [name, lower, upper] hoặc [name, lower, upper, 'linear'|'log'] -> {name: {...}}."""
     out = {}
     for v in values:
         name, lo, hi = v[0], float(v[1]), float(v[2])
@@ -161,12 +143,11 @@ def normalize_params(values) -> dict:
     return out
 
 def param_spec(spec):
-    """parameters.json cũ ({name: [lo, hi]}) hoặc mới ({name: {bounds, scale}}) -> (lo, hi, log)."""
     if isinstance(spec, dict):
         lo, hi = spec["bounds"]; return float(lo), float(hi), spec.get("scale") == "log"
     return float(spec[0]), float(spec[1]), False
 
-# ----------------------------------------------------------------- overrides (bước kiểm tra ban đầu)
+# overrides (bước kiểm tra ban đầu)
 def load_overrides(calibration_dir: str) -> dict:
     path = os.path.join(calibration_dir, OVERRIDES_FILE)
     if not os.path.exists(path): return {}
@@ -186,18 +167,16 @@ def apply_overrides(mdu_lines: list, overrides: dict) -> list:
     for key, value in overrides.items():
         lines = modify_mdu_key(lines, key, str(value))
     if any(k.lower() in ("tstart", "tstop") for k in overrides):
-        # Các khoảng xuất có kèm start/stop cũ -> chỉ giữ khoảng (cả thời gian mô phỏng)
         for k in INTERVAL_KEYS:
             toks = get_mdu_tokens(lines, k)
             if len(toks) > 1: lines = modify_mdu_key(lines, k, toks[0])
     return lines
 
 def calibration_output_settings(mdu_lines: list, his_interval: str, write_map: bool) -> list:
-    """Cấu hình xuất gọn cho các lần chạy hiệu chỉnh: chỉ his nhiệt độ + mực nước, thư mục 'output'."""
     lines = mdu_lines
     for key, val in (('WaqInterval', '0'), ('RstInterval', '0'), ('RestartFile', ''),
-                     ('HisInterval', str(his_interval)), ('OutputDir', 'output'),
-                     ('MapInterval', str(his_interval) if write_map else '0')):
+        ('HisInterval', str(his_interval)), ('OutputDir', 'output'),
+        ('MapInterval', str(his_interval) if write_map else '0')):
         if has_mdu_key(lines, key): lines = modify_mdu_key(lines, key, val)
     keep = {'wrihis_temperature', 'wrihis_waterlevel_s1'}
     for line in list(lines):
@@ -209,7 +188,6 @@ def calibration_output_settings(mdu_lines: list, his_interval: str, write_map: b
     return lines
 
 def copy_model_inputs(src_dir: str, dst_dir: str) -> None:
-    """Sao chép mọi file (trừ .mdu) VÀ thư mục con (bản cũ bỏ qua thư mục con)."""
     os.makedirs(dst_dir, exist_ok=True)
     for f in os.listdir(src_dir):
         s = os.path.join(src_dir, f)
@@ -219,14 +197,12 @@ def copy_model_inputs(src_dir: str, dst_dir: str) -> None:
             shutil.copytree(s, os.path.join(dst_dir, f), dirs_exist_ok=True)
 
 def find_his(case_dir: str):
-    """his của một lần chạy: output/*_his.nc hoặc DFM_OUTPUT*/*_his.nc."""
     for pat in ("output/*_his.nc", "DFM_OUTPUT*/*_his.nc", "*/*_his.nc"):
         hits = sorted(glob.glob(os.path.join(case_dir, pat)))
         if hits: return hits[0]
     return None
 
 def read_obs_stations(input_dir: str, mdu_lines: list) -> list:
-    """Tên trạm trong ObsFile (*.xyn: x y 'name')."""
     out = []
     for name in get_values_from_mdu(mdu_lines, 'ObsFile').split():
         path = os.path.join(input_dir, name)
@@ -239,7 +215,6 @@ def read_obs_stations(input_dir: str, mdu_lines: list) -> list:
 
 # Setup functions
 def generate_lhs_samples(parameters_range, n_samples, seed=42) -> pd.DataFrame:
-    """LHS; tham số thang 'log' được lấy mẫu đều theo log10 (phù hợp khoảng nhiều bậc độ lớn)."""
     param_names = list(parameters_range.keys())
     specs = [param_spec(parameters_range[p]) for p in param_names]
     sampler = qmc.LatinHypercube(d=len(param_names), seed=seed, optimization='random-cd')
@@ -334,7 +309,6 @@ def run_iteration(directory: str, processes: dict, body: dict, key: str) -> None
             info["progress"] = info.get("progress", 0.0)
 
 def create_baseline(directory: str) -> str:
-    """Kịch bản kiểm tra calibration/baseline/scenarios/0: MDU gốc + overrides, chưa đổi tham số."""
     calibration_dir = os.path.join(directory, "calibration")
     input_dir = os.path.join(directory, "input")
     mdu_path = find_mdu(input_dir)
@@ -501,7 +475,7 @@ def read_and_interpolate_his(his_path: str, station_name: str, depths: list, tim
             sim_interp[i, in_bounds] = np.interp(tgt_elev[in_bounds], z_sorted, t_sorted)
         return pd.DataFrame(sim_interp, columns=[f"sim_{d}" for d in depths], index=pd.Index(sim_times, name=time_col))
     except Exception as e:
-        logging.warning(f"read_and_interpolate_his({his_path}, {station_name}): {e}")   # trước đây bị nuốt im lặng
+        logging.warning(f"read_and_interpolate_his({his_path}, {station_name}): {e}")
         return pd.DataFrame()
 
 # Remove outliers from the measured data using rolling window method
@@ -540,14 +514,11 @@ def score_depths(df_sim: pd.DataFrame, obs_df: pd.DataFrame, depths: list, time_
             if len(aligned) > 0:
                 diff = aligned[sim_col] - aligned[obs_col]
                 row.update(n=int(len(aligned)), rmse=float(np.sqrt((diff ** 2).mean())), bias=float(diff.mean()),
-                           mae=float(diff.abs().mean()),
-                           r2=float(r2_score(aligned[obs_col], aligned[sim_col])) if len(aligned) > 1 else np.nan)
+                    mae=float(diff.abs().mean()), r2=float(r2_score(aligned[obs_col], aligned[sim_col])) if len(aligned) > 1 else np.nan)
         out.append(row)
     return out
 
 def compute_weighted_rmse(depths: list, target: list, method: str = 'equal', kind: str = 'RMSE') -> float:
-    """Gộp điểm số các độ sâu. RMSE/MAE: căn của trung bình có trọng số các bình phương.
-    R²: trung bình có trọng số (bản cũ bình phương R² nên mất dấu và loại bỏ R² âm)."""
     depth_arr, val_arr = np.array([float(d) for d in depths]), np.array(target, dtype=float)
     valid = np.isfinite(depth_arr) & np.isfinite(val_arr)
     if kind != 'R2': valid &= val_arr >= 0
@@ -560,9 +531,6 @@ def compute_weighted_rmse(depths: list, target: list, method: str = 'equal', kin
     if kind == 'R2': return float(np.sum(weights * v_vals))
     return float(np.sqrt(np.sum(weights * v_vals ** 2)))
 
-# ======================================================================
-# Kiểm tra điều kiện ban đầu (trước khi tạo các kịch bản)
-# ======================================================================
 def first_profile(measured_utc: pd.DataFrame, after, window_hours: float = 12.0, time_col: str = "Time"):
     """Profile đo đầu tiên SAU thời điểm 'after': mọi bản ghi trong window_hours kể từ bản ghi đầu,
     gộp theo độ sâu làm tròn 0.5 m. Trả (thời điểm, DataFrame depth/temperature)."""
@@ -579,14 +547,12 @@ def first_profile(measured_utc: pd.DataFrame, after, window_hours: float = 12.0,
     return t0, prof
 
 def profile_mean(prof: pd.DataFrame) -> float:
-    """Trung bình theo độ sâu (hình thang) – đại diện cho nhiệt độ ban đầu đồng nhất."""
     if len(prof) == 1: return float(prof["temperature"].iloc[0])
     d, t = prof["depth"].to_numpy(float), prof["temperature"].to_numpy(float)
     if d[-1] <= d[0]: return float(t.mean())
     return float(np.sum((t[1:] + t[:-1]) / 2 * np.diff(d)) / (d[-1] - d[0]))
 
 def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFrame, station: str, time_zone: str) -> dict:
-    """So sánh điều kiện ban đầu & cấu hình MDU với số đo đầu tiên; đề xuất các khoá cần đổi."""
     input_dir = os.path.join(project_dir, "input")
     calibration_dir = os.path.join(project_dir, "calibration")
     lines = read_mdu(find_mdu(input_dir))
@@ -612,23 +578,23 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
         mean_t = profile_mean(prof)
         gap_days = (t0 - start_utc).total_seconds() / 86400
         obs = {"time": functions.utc_to_local(pd.Series([t0]), time_zone)[0], "gap_days": round(gap_days, 2),
-               "mean": round(mean_t, 3), "min": float(prof["temperature"].min()), "max": float(prof["temperature"].max()),
-               "max_depth": float(prof["depth"].max()),
-               "profile": [[float(d), round(float(t), 3)] for d, t in zip(prof["depth"], prof["temperature"])]}
+            "mean": round(mean_t, 3), "min": float(prof["temperature"].min()), "max": float(prof["temperature"].max()),
+            "max_depth": float(prof["depth"].max()),
+            "profile": [[float(d), round(float(t), 3)] for d, t in zip(prof["depth"], prof["temperature"])]}
         if gap_days > 3:
             warns.append(f"The first observed profile is {gap_days:.0f} days after the model start: the initial "
-                         f"temperature ({init_t} °C) is not constrained by observations.")
+                f"temperature ({init_t} °C) is not constrained by observations.")
             t_start = pd.Timestamp(t0).tz_convert(time_zone).floor("D")
             suggestions.append({"key": "TStart", "value": t_start.strftime("%Y-%m-%d %H:%M:%S"),
-                                "note": "Start at the first observed profile (local time). Remove this row to keep the spin-up period."})
+                "note": "Start at the first observed profile (local time). Remove this row to keep the spin-up period."})
         if init_t is None or abs(init_t - mean_t) > 0.3:
             warns.append(f"InitialTemperature = {init_t} °C but the first observed profile averages {mean_t:.2f} °C "
-                         f"(range {obs['min']:.2f}–{obs['max']:.2f} °C).")
+                f"(range {obs['min']:.2f}–{obs['max']:.2f} °C).")
             suggestions.append({"key": "InitialTemperature", "value": f"{mean_t:.2f}",
-                                "note": "Depth-averaged first observed profile"})
+                "note": "Depth-averaged first observed profile"})
         if obs["max"] - obs["min"] > 1.0:
             warns.append("The first observed profile is stratified (>1 °C top–bottom): a uniform initial temperature "
-                         "cannot represent it – use a 3D initial field (IniFieldFile) or a restart from a spin-up run.")
+                "cannot represent it – use a 3D initial field (IniFieldFile) or a restart from a spin-up run.")
     else:
         warns.append("No observation after the model start time – upload observations first.")
     if model["temperature_model"].split()[:1] != ['5']:
@@ -645,22 +611,21 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
         except Exception: lonlat = None
         warns.append("AngLon = 0: the longitude is used for the solar position in the heat flux model.")
         suggestions.append({"key": "AngLon", "value": f"{lonlat[0]:.3f}" if lonlat else "",
-                            "note": "Longitude of the lake (deg E)" + ("" if lonlat else " – please fill in")})
+            "note": "Longitude of the lake (deg E)" + ("" if lonlat else " – please fill in")})
     if kmx and kmx < 20:
         depth_hint = f" (observations go down to {obs['max_depth']:.0f} m)" if obs else ""
         warns.append(f"Kmx = {kmx} vertical layers{depth_hint}: too coarse for a stratified lake – "
-                     "numerical mixing carries surface heat downwards.")
+            "numerical mixing carries surface heat downwards.")
         suggestions.append({"key": "Kmx", "value": "30", "note": "More vertical layers (longer run time)"})
     if model["restartfile"]:
         warns.append(f"RestartFile = {model['restartfile']} is removed in calibration runs – "
-                     "initial conditions then come from InitialTemperature only.")
+            "initial conditions then come from InitialTemperature only.")
     if obs and obs["mean"] < 4.0 and info["start"].month in (11, 12, 1, 2, 3, 4):
         warns.append(f"Cold winter/spring water: the model has no ice cover (Tempmin = {g('Tempmin')}). "
-                     "Starting the model after ice-off avoids heating an ice-covered lake.")
-    # Lần chạy HYD hiện có: so với profile đầu tiên
+            "Starting the model after ice-off avoids heating an ice-covered lake.")
     existing = None
     his = sorted(glob.glob(os.path.join(project_dir, "output", "HYD", "*_his.zarr")) +
-                 glob.glob(os.path.join(project_dir, "output", "HYD", "*_his.nc")))
+        glob.glob(os.path.join(project_dir, "output", "HYD", "*_his.nc")))
     if his and station and obs:
         depths = [f"{d:g}" for d, _ in obs["profile"]]
         sim = read_and_interpolate_his(his[0], station, depths)
@@ -672,10 +637,10 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
                 ok = np.isfinite(s)
                 rows.append([d, t_obs, round(float(s), 3) if ok else None, round(float(s) - t_obs, 3) if ok else None])
             existing = {"his": os.path.basename(his[0]),
-                        "time": functions.utc_to_local(pd.Series([sim.index[i]]), time_zone)[0], "rows": rows}
+                "time": functions.utc_to_local(pd.Series([sim.index[i]]), time_zone)[0], "rows": rows}
     return {"model": model, "obs": obs, "existing_run": existing, "warnings": warns,
-            "suggestions": suggestions, "overrides": load_overrides_display(calibration_dir),
-            "stations": read_obs_stations(input_dir, lines)}
+        "suggestions": suggestions, "overrides": load_overrides_display(calibration_dir),
+        "stations": read_obs_stations(input_dir, lines)}
 
 def save_overrides(project_dir: str, rows: list, time_zone: str) -> dict:
     """rows: [[key, value, note], ...]. Khoá phải có trong MDU; TStart/TStop nhận ngày giờ địa phương."""
@@ -695,7 +660,7 @@ def save_overrides(project_dir: str, rows: list, time_zone: str) -> dict:
             if key.lower() in ("tstart", "tstop"): mdu_value = to_mdu_time(value, lines, time_zone)
             else:
                 if key.lower() not in ("restartfile", "inifieldfile"):
-                    [mdu_number(t) for t in value.split()]          # số (có thể nhiều giá trị)
+                    [mdu_number(t) for t in value.split()]
                 mdu_value = value
         except Exception as e:
             errors.append(f"'{key}' = '{value}': {e}"); continue
@@ -704,11 +669,9 @@ def save_overrides(project_dir: str, rows: list, time_zone: str) -> dict:
     with open(os.path.join(calibration_dir, OVERRIDES_FILE), "w", encoding="utf-8") as f:
         json.dump({"mdu": mdu, "display": display}, f, indent=2, ensure_ascii=False)
     return {"status": "ok", "message": f"Saved {len(mdu)} override(s). They are applied to the baseline run, "
-                                       "every calibration scenario and the final calibrated scenario."}
+        "every calibration scenario and the final calibrated scenario."}
 
-# ======================================================================
 # Surrogate & optimisation
-# ======================================================================
 def _feature_transform(X: pd.DataFrame, log_cols: list) -> pd.DataFrame:
     X = X.copy()
     for c in log_cols:
@@ -745,27 +708,28 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
             best_ll, best_kernel, best_name = -np.inf, None, None
             for kernel_obj, k_name in kernels_to_test:
                 functions.append_log(log_path, f"Testing kernel: {k_name}...")
-                gpr = GaussianProcessRegressor(kernel=kernel_obj, n_restarts_optimizer=10,
-                                               alpha=1e-6, normalize_y=True, random_state=42)
+                gpr = GaussianProcessRegressor(
+                    kernel=kernel_obj, n_restarts_optimizer=10, alpha=1e-6, normalize_y=True, random_state=42
+                )
                 gpr.fit(X_scaled, y)
                 functions.append_log(log_path, f"  log-marginal-likelihood = {gpr.log_marginal_likelihood_value_:.3f}")
                 if gpr.log_marginal_likelihood_value_ > best_ll:
                     best_ll, best_kernel, best_name = gpr.log_marginal_likelihood_value_, kernel_obj, k_name
             functions.append_log(log_path, f"Best kernel: {best_name}")
-            def make():   # bản cũ huấn luyện lại bằng kernel CUỐI trong danh sách thay vì kernel tốt nhất
-                return GaussianProcessRegressor(kernel=best_kernel, n_restarts_optimizer=30,
-                                                alpha=1e-6, normalize_y=True, random_state=42)
-            # Kiểm định chéo: độ tin cậy của surrogate trước khi tối ưu
+            def make():
+                return GaussianProcessRegressor(
+                    kernel=best_kernel, n_restarts_optimizer=30, alpha=1e-6, normalize_y=True, random_state=42
+                )
             cv = LeaveOneOut() if len(y) <= 60 else KFold(n_splits=5, shuffle=True, random_state=42)
             cv_rmse = cv_r2 = None
             try:
                 y_cv = cross_val_predict(make(), X_scaled, y, cv=cv)
                 cv_rmse, cv_r2 = float(np.sqrt(np.mean((y_cv - y) ** 2))), float(r2_score(y, y_cv))
                 functions.append_log(log_path, f"Cross-validation ({type(cv).__name__}): RMSE = {cv_rmse:.4f}, "
-                                               f"R² = {cv_r2:.3f} (target range {y.min():.4f} – {y.max():.4f})")
+                    f"R² = {cv_r2:.3f} (target range {y.min():.4f} – {y.max():.4f})")
                 if cv_r2 < 0.5:
                     functions.append_log(log_path, "[WARNING] The surrogate explains < 50% of the variance: the optimum is "
-                                                   "unreliable. Add samples or choose more influential parameters.")
+                        "unreliable. Add samples or choose more influential parameters.")
             except Exception as e:
                 functions.append_log(log_path, f"[WARNING] Cross-validation failed: {e}")
             functions.append_log(log_path, "Training the final model with the best kernel...")
