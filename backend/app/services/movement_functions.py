@@ -2,9 +2,6 @@ import glob, json, math, os, time, shapely
 import numpy as np, pandas as pd, xugrid as xu
 import geopandas as gpd, xarray as xr
 from services import functions
-from xugrid import UgridDataset
-from typing import cast
-
 
 NODATA, M_PER_DEG, FORMAT_VERSION = -32768, 111_320.0, 2
 UV_SCALE = 0.001     # 1 unit int16 = 1 mm/s
@@ -29,7 +26,7 @@ def needs_rebuild(meta_path, frame_path, mask_path, res, layer):
     if (layer or "mean") != meta.get("layer", "mean"): return f"Layer changed from {meta.get('layer')} -> {layer}"
     return None
 
-def open_map(map_path: str) -> UgridDataset | None:
+def open_map(map_path: str):
     files = sorted(glob.glob(map_path))
     if not files and os.path.exists(map_path): files = [map_path]
     if not files: return None
@@ -109,11 +106,8 @@ def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str,
     uds = open_map(map_path)
     if uds is None: return f"Cannot open: {map_path}"
     out, tmp_frames = None, frame_path + ".tmp.npy"
-    uds = open_map(map_path)
     try:
-        if uds is None: return f"Cannot open: {map_path}"
-        coords, dims = getattr(uds, "coords", {}), getattr(uds, "dims", {})
-        if "time" not in coords and "time" not in dims: return "No time in data."
+        if "time" not in uds.coords and "time" not in uds.dims: return "No time in data."
         grid = uds.ugrid.grid
         face_dim = grid.face_dimension
         uvar = vvar = None
@@ -122,14 +116,11 @@ def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str,
         if uvar is None or vvar is None:
             uvar, vvar = pick(uds, U_NAMES), pick(uds, V_NAMES)
         if uvar is None or vvar is None:
-            found_vars = list(getattr(uds, "data_vars", {}))
-            return f"Could not find velocity variables. ({U_NAMES + U_NAMES_AVG}). Found: {found_vars}"
+            return f"Could not find velocity variables. ({U_NAMES + U_NAMES_AVG}). Found: {list(uds.data_vars)}"
         dvar = pick(uds, DEPTH_NAMES)
         s1var = pick(uds, S1_NAMES) if dvar is None else None
         bedvar = pick(uds, BED_NAMES) if dvar is None else None
-        time_da = getattr(uds, "coords").get("time") or getattr(uds, "time", None)
-        if time_da is None: return "No time coordinate in data."
-        times = pd.to_datetime(time_da.values)
+        times = pd.to_datetime(uds["time"].values)
         T = len(times)
         if T == 0: return "No time steps in data."
         if not os.path.exists(polygon_path):
@@ -168,8 +159,7 @@ def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str,
         Nv = vflat.size
         out = np.lib.format.open_memmap(tmp_frames, mode="w+", dtype="<i2", shape=(T, 3, Nv))
         def get(var_name, tsel):
-            uds_ds = cast(xr.Dataset, uds)
-            da = reduce_layers(uds_ds[var_name], face_dim, layer)
+            da = reduce_layers(uds[var_name], face_dim, layer)
             if "time" in da.dims:
                 arr = np.asarray(da.isel(time=tsel).transpose("time", face_dim).values, dtype=np.float32)
             else:
@@ -227,5 +217,5 @@ def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str,
         if os.path.exists(tmp_frames):
             try: os.remove(tmp_frames)
             except OSError: pass
-        try: cast(xr.Dataset, uds).close()
+        try: uds.close()
         except Exception: pass

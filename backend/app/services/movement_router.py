@@ -35,6 +35,36 @@ def _gzip_response(request: Request, data: bytes, headers: dict):
         headers = {**headers, "Content-Encoding": "gzip", "Vary": "Accept-Encoding"}
     return Response(data, media_type="application/octet-stream", headers=headers)
 
+def _hyd_map_path(project_name, body):
+    """File HYD map dùng để dựng movement – CÙNG cách chọn với dashboard (dashboard_results.ProjectResults),
+    để Visualization và Overview hiển thị cùng một dữ liệu. body.mapPath (nếu có và tồn tại) được ưu tiên."""
+    mp = body.get("mapPath")
+    if mp:
+        cand = mp if os.path.isabs(mp) else os.path.join(PROJECT_ROOT, project_name, mp)
+        if os.path.exists(cand): return cand
+    from services.dashboard_results import ProjectResults
+    return ProjectResults(project_name).paths.get("hyd_map")
+
+def _n_layers(map_path):
+    """Số lớp sigma của HYD map (chiều nLayers / laydim), như dashboard."""
+    import xarray as xr
+    ds = xr.open_zarr(map_path) if map_path.lower().endswith(".zarr") or os.path.isdir(map_path) else xr.open_dataset(map_path)
+    try:
+        return next((int(n) for d, n in ds.sizes.items() if "nLayers" in d or d == "laydim"), 1)
+    finally:
+        ds.close()
+
+def _layer_for_file(layer, map_path):
+    """Khoá lớp của menu (layers_hyd.json: "-1" = Average, k = thứ tự TỪ MẶT XUỐNG) -> giá trị cho
+    init_data/reduce_layers ("mean", "surface", hoặc chỉ số lớp trong file, đếm TỪ ĐÁY LÊN).
+    Trước đây khoá được truyền thẳng nên bị đảo (Average -> lớp mặt, surface -> lớp đáy)."""
+    s = str(layer if layer is not None else "mean").strip().lower()
+    if s in ("", "-1", "mean", "average", "avg"): return "mean"
+    if s in ("surface", "top"): return "surface"
+    if not s.lstrip("-").replace(".", "", 1).isdigit(): return s
+    n = _n_layers(map_path) if map_path else 1
+    return str(min(max(n - 1 - int(float(s)), 0), max(n - 1, 0)))
+
 def _movement_paths(project_name, body):
     out_dir = os.path.join(PROJECT_ROOT, project_name, "output")
     move_dir = os.path.join(out_dir, "movement")
@@ -107,15 +137,14 @@ async def init_movement(request: Request, user=Depends(functions.basic_auth)):
         frame_path = paths["frame_path"]
         mask_path = paths["mask_path"]
         resolution = paths["resolution"]
-        layer = paths["layer"]
         force = paths["force"]
+        map_path = await run_in_threadpool(_hyd_map_path, project_name, body)
+        layer = await run_in_threadpool(_layer_for_file, paths["layer"], map_path)
         async with _cache_lock_for(project_name):
             reason = movement_functions.needs_rebuild(meta_path, frame_path, mask_path, resolution, layer)
             if force: reason = "Rebuilding data"
             if reason:
-                # map_path = os.path.join(out_dir, 'HYD', 'FlowFM_map.zarr')
-                map_path = os.path.join('test', 'test_map.nc')
-                if not os.path.isfile(map_path):
+                if not map_path or not os.path.exists(map_path):
                     return JSONResponse({"status": "error", "message": f"Cannot find model output (.nc/.zarr) in {paths['out_dir']}."})
                 _close_movement_cache(project_name)
                 result = await run_in_threadpool(

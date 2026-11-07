@@ -5,9 +5,12 @@
 //  - Profile thẳng đứng & chuỗi thời gian tại trạm (/dashboard/profile, /station)
 //  - Khi dự án chưa có kết quả: hiển thị các bước mô hình, mỗi bước mở công cụ tương ứng
 //  - Trạng thái (period, end, field, layer, station) đồng bộ vào URL để chia sẻ
+//  - Lớp bổ sung "Flow movement (HYD)" và "Wflow results": sáng khi có dữ liệu, mờ khi chưa có
 
 import { icon } from './icons.js';
 import { DashboardMap, fmtVal } from './dashboardMap.js';
+import { MovementLayer } from './dashboardMovement.js';
+import { WflowLayer } from './dashboardWflow.js';
 import { renderGauge, renderDonut, renderStationSeries, renderProfile, resizeCharts, showEmpty } from './dashboardCharts.js';
 
 const FILTER_KEY = 'dash-filters';
@@ -84,6 +87,9 @@ export class Dashboard {
         this.loading = false; this.playing = false; this.fieldToken = 0;
         this.map = null;
         this.profileDebounced = debounce(() => this.loadProfile(), 250);
+        this.extraLayers = {};            // key -> MovementLayer | WflowLayer
+        this.extrasProject = null;
+        this.extraTimeDebounced = debounce(() => this.syncExtraTime(), 120);
     }
 
     // ------------------------------------------------------------ init
@@ -93,6 +99,8 @@ export class Dashboard {
             switchEl: $('basemap-switch'), coordsEl: $('map-coords'), toggleAllBtn: $('layers-toggle-all'),
             onExpand: onExpandMap, onStationSelect: (name) => this.selectStation(name),
         }).init();
+        this.map.registerExtra('movement', (on) => this.toggleExtra('movement', on), () => this.openLayerSettings('movement'));
+        this.map.registerExtra('wflow', (on) => this.toggleExtra('wflow', on), () => this.openLayerSettings('wflow'));
         this.renderSkeletons();
         this.bindToolbar();
         this.bindPanels();
@@ -200,6 +208,7 @@ export class Dashboard {
             const [summary, alerts] = await Promise.all([api('summary', this.body()), api('alerts', this.body({ limit: 100 }))]);
             this.summary = summary; this.alerts = alerts.alerts || [];
             this.loadContext();
+            this.updateExtras();
             if (!catalog.has_results || summary.mode === 'empty') { this.renderEmpty(summary); return; }
             $('dash-overview').classList.remove('is-empty');
             if (changed) await this.setupSimulation();
@@ -278,16 +287,15 @@ export class Dashboard {
         // Biến trạm
         const his = c.his_variables;
         $('ts-var').innerHTML = build(his);
+        // Biến vẽ được profile: his có lớp, hoặc biến map tương ứng có lớp (WAQ his thường chỉ có lớp mặt)
         const profVars = c.profile_variables || his.filter(v => v.layered);
         $('profile-var').innerHTML = build(profVars);
         const critical = this.summary?.gauges?.critical?.[0];
         if (!this.state.tsVar || !his.some(v => `${v.source}|${v.name}` === this.state.tsVar)) {
             this.state.tsVar = critical && his.some(v => v.source === 'waq' && v.name === critical.key) ? `waq|${critical.key}` : 'hyd|temperature';
         }
-        if (!his.some(v => `${v.source}|${v.name}` === this.state.profileVar)) this.state.profileVar = his.find(v => v.layered) ? `${his.find(v => v.layered).source}|${his.find(v => v.layered).name}` : '';
-        $('ts-var').value = this.state.tsVar; 
         if (!profVars.some(v => `${v.source}|${v.name}` === this.state.profileVar)) this.state.profileVar = profVars.length ? `${profVars[0].source}|${profVars[0].name}` : '';
-        $('ts-layer').value = this.state.tsLayer;
+        $('ts-var').value = this.state.tsVar; $('profile-var').value = this.state.profileVar; $('ts-layer').value = this.state.tsLayer;
         this.map.selectStation(this.state.station);
         this.map.setStations(this.stations);
         // Lưới
@@ -344,6 +352,211 @@ export class Dashboard {
         const iso = times[this.state.tIndex];
         this._currentTime = iso;
         $('tb-label').textContent = iso ? iso.replace('T', ' ').slice(0, 16) : '—';
+        this.extraTimeDebounced();
+    }
+
+    // ------------------------------------------------------------ lớp bổ sung: movement & Wflow
+    async updateExtras() {
+        const project = this.getProject();
+        if (this.extrasProject !== project) {          // đổi dự án -> huỷ lớp cũ
+            Object.values(this.extraLayers).forEach(l => l.destroy());
+            this.extraLayers = {}; this.extrasProject = project;
+            this.closeLayerSettings();
+        }
+        let status;
+        try { status = await api('extras', this.body()); }
+        catch (err) { status = { movement: { available: false, reason: err.message }, wflow: { available: false, reason: err.message } }; }
+        for (const key of ['movement', 'wflow']) {
+            const st = status[key] || { available: false };
+            this.map.setAvailability(key, st);
+            if (!st.available && this.extraLayers[key]) { this.extraLayers[key].destroy(); delete this.extraLayers[key]; this.closeLayerSettings(key); }
+            // Đã bật từ lần trước và có dữ liệu -> bật lại
+            if (st.available && this.map.isOn(key) && !this.extraLayers[key]?.visible) this.toggleExtra(key, true);
+        }
+    }
+
+    async toggleExtra(key, on) {
+        if (!on) {
+            this.extraLayers[key]?.hide();
+            this.map.setExtraLegend(key, null);
+            this.closeLayerSettings(key);
+            return;
+        }
+        try {
+            let layer = this.extraLayers[key];
+            if (!layer) {
+                this.map.setLoading(key, true);
+                const Cls = key === 'movement' ? MovementLayer : WflowLayer;
+                layer = await new Cls(this.map.map, { projectName: this.getProject() }).init();
+                this.extraLayers[key] = layer;
+            }
+            layer.setPlaying?.(this.playing);
+            await layer.setTime(this._currentTime);
+            if (!this.map.isOn(key)) return;            // người dùng đã tắt trong lúc chờ
+            layer.show();
+            this.map.setExtraLegend(key, layer.legend());
+        } catch (err) {
+            console.warn(key, err);
+            toast(`${key === 'movement' ? 'Flow movement' : 'Wflow results'}: ${err.message}`);
+            this.map.setChecked(key, false);
+        } finally {
+            this.map.setLoading(key, false);
+        }
+    }
+
+    // Bảng ⚙ nổi trên bản đồ: nội dung do từng lớp dựng (renderSettings).
+    // Kéo tiêu đề để di chuyển, kéo góc dưới-phải để đổi kích thước; vị trí/kích thước lưu theo lớp.
+    // Nút × đóng bảng VÀ tắt lớp (bỏ tick trong Map Layers); bấm lại ⚙ chỉ đóng bảng.
+    openLayerSettings(key) {
+        const layer = this.extraLayers[key];
+        let panel = $('layer-settings');
+        if (panel?.dataset.key === key) { this.closeLayerSettings(); return; }   // bấm lại ⚙ = đóng bảng
+        this.closeLayerSettings();
+        if (!layer?.renderSettings) { toast('Layer is still loading…'); return; }
+        const title = key === 'movement' ? 'Flow movement settings' : 'Wflow results settings';
+        panel = document.createElement('div');
+        panel.id = 'layer-settings'; panel.className = 'layer-settings'; panel.dataset.key = key;
+        panel.innerHTML = `<div class="ls-head" title="Drag to move"><span>${title}</span>
+            <button type="button" class="ls-close" title="Close and hide this layer">×</button></div>
+            <div class="ls-scroll"><div class="ls-body"></div></div>
+            <div class="ls-grip ls-grip-e" data-dir="e"></div><div class="ls-grip ls-grip-s" data-dir="s"></div>
+            <div class="ls-grip ls-grip-se" data-dir="se" title="Drag to resize"></div>`;
+        const host = $('panel-map');
+        host.appendChild(panel); panel.style.overflow = 'hidden';     // chỉ .ls-scroll cuộn -> tay nắm resize cố định ở góc
+        if (window.L) { L.DomEvent.disableClickPropagation(panel); L.DomEvent.disableScrollPropagation(panel); }
+        panel.querySelector('.ls-close').onclick = () => {
+            this.closeLayerSettings();
+            this.map.toggle(key, false);                 // bỏ tick + ẩn lớp (gọi toggleExtra(key, false))
+        };
+        this.restorePanelRect(panel, key);
+        this.makePanelDraggable(panel, key);
+        this.makePanelResizable(panel, key);
+        // Dòng trạng thái (số hạt đang chạy, khung thời gian…) – cập nhật mỗi giây khi bảng mở
+        panel._timer = setInterval(() => {
+            const st = panel.querySelector('.ls-status');
+            if (st && layer.status) st.textContent = layer.status();
+        }, 1000);
+        layer.renderSettings(panel.querySelector('.ls-body'), {
+            refreshLegend: () => { if (layer.visible) this.map.setExtraLegend(key, layer.legend()); },
+            busy: (on) => this.map.setLoading(key, on),
+            toast,
+            // Mở công cụ trong Workspace (mainManager bắt click trên [data-tool] ở document;
+            // bảng nổi chặn lan truyền click nên phát một click riêng)
+            openTool: (id) => {
+                const a = document.createElement('a');
+                a.dataset.tool = id; a.hidden = true; document.body.appendChild(a); a.click(); a.remove();
+            },
+        });
+    }
+
+    closeLayerSettings(key = null) {
+        const panel = $('layer-settings');
+        if (panel && (!key || panel.dataset.key === key)) { panel._ro?.disconnect(); clearInterval(panel._timer); panel.remove(); }
+    }
+
+    restorePanelRect(panel, key) {
+        let r = null;
+        try { r = JSON.parse(localStorage.getItem(`dash.layerSettings.rect.${key}`)); } catch (e) { /* ignore */ }
+        if (r) {
+            if (r.w) panel.style.width = `${r.w}px`;
+            if (r.h) panel.style.height = `${r.h}px`;
+            if (Number.isFinite(r.x)) { panel.style.left = `${r.x}px`; panel.style.top = `${r.y}px`; }
+        }
+        this.clampPanel(panel);
+        // Lưu kích thước khi người dùng kéo góc resize
+        let t = 0;
+        panel._ro = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => this.savePanelRect(panel, key), 200); });
+        panel._ro.observe(panel);
+    }
+
+    savePanelRect(panel, key) {
+        if (!panel.isConnected) return;
+        const r = { x: panel.offsetLeft, y: panel.offsetTop, w: panel.offsetWidth,
+                    h: panel.style.height ? panel.offsetHeight : null };
+        try { localStorage.setItem(`dash.layerSettings.rect.${key}`, JSON.stringify(r)); } catch (e) { /* ignore */ }
+    }
+
+    // Giữ bảng nằm trong khung bản đồ
+    clampPanel(panel) {
+        const host = $('panel-map');
+        const maxX = Math.max(0, host.clientWidth - panel.offsetWidth), maxY = Math.max(0, host.clientHeight - 40);
+        panel.style.left = `${Math.min(Math.max(0, panel.offsetLeft), maxX)}px`;
+        panel.style.top = `${Math.min(Math.max(0, panel.offsetTop), maxY)}px`;
+        const hMax = host.clientHeight - panel.offsetTop - 8;
+        panel.style.maxHeight = `${Math.max(160, hMax)}px`;
+    }
+
+    // Đổi kích thước bằng tay nắm riêng (cạnh phải, cạnh dưới, góc dưới-phải) – không dựa vào
+    // CSS resize vì thanh cuộn của nội dung che mất góc resize trên Windows.
+    makePanelResizable(panel, key) {
+        panel.querySelectorAll('.ls-grip').forEach(grip => {
+            grip.addEventListener('pointerdown', (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault(); e.stopPropagation();
+                grip.setPointerCapture(e.pointerId);
+                const dir = grip.dataset.dir, x0 = e.clientX, y0 = e.clientY;
+                const w0 = panel.offsetWidth, h0 = panel.offsetHeight, host = $('panel-map');
+                panel.classList.add('resizing');
+                const move = (ev) => {
+                    if (dir.includes('e')) {
+                        const wMax = host.clientWidth - panel.offsetLeft - 4;
+                        panel.style.width = `${Math.min(wMax, Math.max(240, w0 + ev.clientX - x0))}px`;
+                    }
+                    if (dir.includes('s')) {
+                        const hMax = host.clientHeight - panel.offsetTop - 4;
+                        panel.style.maxHeight = `${hMax}px`;
+                        panel.style.height = `${Math.min(hMax, Math.max(140, h0 + ev.clientY - y0))}px`;
+                    }
+                };
+                const up = () => {
+                    grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up);
+                    grip.removeEventListener('pointercancel', up);
+                    panel.classList.remove('resizing');
+                    this.savePanelRect(panel, key);
+                };
+                grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up);
+                grip.addEventListener('pointercancel', up);
+            });
+        });
+    }
+
+    makePanelDraggable(panel, key) {
+        const head = panel.querySelector('.ls-head');
+        head.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0 || e.target.closest('button')) return;
+            e.preventDefault();
+            head.setPointerCapture(e.pointerId);
+            const x0 = e.clientX - panel.offsetLeft, y0 = e.clientY - panel.offsetTop;
+            panel.classList.add('dragging');
+            const move = (ev) => {
+                panel.style.left = `${ev.clientX - x0}px`; panel.style.top = `${ev.clientY - y0}px`;
+                this.clampPanel(panel);
+            };
+            const up = () => {
+                head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up);
+                head.removeEventListener('pointercancel', up);
+                panel.classList.remove('dragging');
+                this.savePanelRect(panel, key);
+            };
+            head.addEventListener('pointermove', move); head.addEventListener('pointerup', up);
+            head.addEventListener('pointercancel', up);
+        });
+        head.addEventListener('dblclick', () => {           // nhấp đúp tiêu đề: về vị trí/kích thước mặc định
+            try { localStorage.removeItem(`dash.layerSettings.rect.${key}`); } catch (e) { /* ignore */ }
+            panel.style.left = panel.style.top = panel.style.width = panel.style.height = '';
+            this.clampPanel(panel);
+        });
+    }
+
+    async syncExtraTime() {
+        for (const [key, layer] of Object.entries(this.extraLayers)) {
+            if (!layer.visible) continue;
+            try { await layer.setTime(this._currentTime); this.map.setExtraLegend(key, layer.legend()); }
+            catch (err) {
+                console.warn(key, err);
+                if (!layer._warned) { layer._warned = true; toast(`${key === 'movement' ? 'Flow movement' : 'Wflow results'}: ${err.message}`); }
+            }
+        }
     }
 
     paletteFor(meta) {
@@ -373,6 +586,7 @@ export class Dashboard {
     async togglePlay() {
         const btn = $('tb-play');
         this.playing = !this.playing;
+        Object.values(this.extraLayers).forEach(l => l.setPlaying?.(this.playing));
         btn.classList.toggle('playing', this.playing);
         btn.innerHTML = icon(this.playing ? 'pause' : 'play', 16);
         const times = this.catalog?.times?.[this.fieldSource()] || [];
@@ -647,8 +861,9 @@ export class Dashboard {
         const sim = summary.simulation || {};
         if (summary.mode !== 'empty' && sim.hyd) {
             const h = sim.hyd, w = sim.waq;
-            const parts = [`HYD: ${h.scenario || '—'} (${fmtDate(h.start)} – ${fmtDate(h.end)}${h.step_minutes ? `, ${h.step_minutes / 60} h step` : ''}${h.n_layers ? `, ${h.n_layers} layers` : ''})`];
-            parts.push(w?.available ? `WAQ: ${w.scenario}` : 'no WAQ'); $('page-subtitle').textContent = parts.join(' -- ');
+            const parts = [`HYD ${h.scenario || '—'} (${fmtDate(h.start)} – ${fmtDate(h.end)}${h.step_minutes ? `, ${h.step_minutes / 60} h step` : ''}${h.n_layers ? `, ${h.n_layers} layers` : ''})`];
+            parts.push(w?.available ? `WAQ ${w.scenario} · ${w.model_type || ''}` : 'no WAQ');
+            $('page-subtitle').textContent = parts.join(' · ');
         }
     }
 

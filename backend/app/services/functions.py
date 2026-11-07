@@ -818,15 +818,13 @@ def layerCounter(data_map: xr.Dataset, type: str='hyd') -> dict:
         ucm = data_map['mesh2d_ucmag'].data
         for i in reversed(range(len(z_layer))):
             # Use dask to speed up, keep lazy-load
-            note, counter = '', len(z_layer)-i-1
-            if counter == 0: note = ' (surface)'
-            elif counter == len(z_layer)-1: note = ' (bottom)'
+            counter = len(z_layer)-i-1
             ucx_i = ucx[:, :, i].compute()
             ucy_i = ucy[:, :, i].compute()
             ucm_i = ucm[:, :, i].compute()
             # Check if all values are nan
             if (np.isnan(ucx_i).all() or np.isnan(ucy_i).all() or np.isnan(ucm_i).all()): continue
-            layers[str(counter)] = f'Depth: {z_layer[i]} m{note}'
+            layers[str(counter)] = f'Depth: {z_layer[i]} m'
     else:
         z_layer = np.round([100*x for x in data_map['mesh2d_layer_dlwq'].data.compute()], 0)
         layers['-1'] = 'Average'

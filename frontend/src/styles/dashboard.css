@@ -318,3 +318,97 @@ select option { background: var(--panel); color: var(--text); }
 .legend-field .lf-mode button { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 4px; font-size: 10px; padding: 1px 5px; }
 .legend-field .lf-mode button.active { color: var(--accent); border-color: rgba(52, 211, 153, .45); background: var(--accent-soft); }
 .overview.no-map .field-picker, .overview.no-map .time-bar { display: none; }
+
+/* Lớp bổ sung (movement, Wflow): mờ khi chưa có dữ liệu, xoay khi đang chuẩn bị */
+.layer-item.disabled { opacity: 0.38; cursor: not-allowed; }
+.layer-item.disabled:hover { background: transparent; }
+.layer-item.loading .layer-check {
+    border-color: var(--accent); border-top-color: transparent; border-radius: 50%;
+    animation: rot 0.8s linear infinite; background: transparent !important;
+}
+.layer-item.loading .layer-check::after { display: none; }
+.legend-field .lf-note { margin-top: 3px; font-size: 10.5px; color: var(--muted); }
+.legend-extra + .legend-extra { margin-top: 2px; }
+.movement-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+
+/* ---------- Nút ⚙ & bảng cài đặt lớp bổ sung (Flow movement, Wflow) ---------- */
+.layer-gear {
+    margin-left: auto; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px;
+    background: transparent; color: var(--muted); font-size: 13px; line-height: 20px; cursor: pointer;
+}
+.layer-gear:hover { background: var(--accent-soft); color: var(--accent); }
+.layer-gear + .swatch { margin-left: 4px; }
+.layer-settings {
+    position: absolute; top: 58px; left: 56px; z-index: 950; width: 288px;
+    max-height: calc(100% - 140px); overflow: auto; min-width: 240px; min-height: 140px;
+    background: rgba(12, 22, 39, 0.96); border: 1px solid var(--border-strong); border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); font-size: 12px; color: var(--text-2);
+}
+.layer-settings .ls-head {
+    position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between;
+    padding: 9px 12px; background: rgba(12, 22, 39, 0.98); border-bottom: 1px solid var(--border);
+    font-weight: 650; color: var(--text);
+}
+.layer-settings .ls-close { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; }
+.layer-settings .ls-close:hover { color: var(--text); }
+.layer-settings .ls-body { padding: 4px 12px 10px; }
+.layer-settings .ls-body.busy { opacity: 0.55; pointer-events: none; }
+.ls-section { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.ls-section:last-of-type { border-bottom: 0; }
+.ls-title { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.ls-row { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 8px; margin: 5px 0; }
+.ls-row[hidden] { display: none; }
+.ls-label { color: var(--text-2); }
+.ls-row select, .ls-row input[type="number"], .ls-row input[type="text"] {
+    width: 100%; min-width: 0; height: 26px; padding: 0 6px; border-radius: 6px;
+    background: var(--panel-2); border: 1px solid var(--border-strong); color: var(--text); font: inherit;
+}
+.ls-range { display: flex; align-items: center; gap: 6px; }
+.ls-range input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.ls-range output { width: 46px; flex: 0 0 auto; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+.ls-seg { display: flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+.ls-seg button {
+    flex: 1; padding: 4px 2px; border: 0; background: transparent; color: var(--text-2); font: inherit; cursor: pointer;
+}
+.ls-seg button + button { border-left: 1px solid var(--border); }
+.ls-seg button.active { background: var(--accent-soft); color: var(--accent); }
+.ls-actions { display: flex; gap: 6px; margin-top: 8px; }
+.ls-btn {
+    flex: 1; height: 27px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent-soft);
+    color: var(--accent); font: inherit; font-weight: 600; cursor: pointer;
+}
+.ls-btn.ghost { border-color: var(--border-strong); background: transparent; color: var(--text-2); }
+.ls-btn:disabled { opacity: .4; cursor: not-allowed; }
+.ls-note { margin-top: 6px; font-size: 10.5px; line-height: 1.4; color: var(--muted); }
+.ls-note b { color: var(--text-2); font-weight: 600; }
+.ls-probe {
+    margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--panel-2);
+    font-size: 11px; color: var(--text); font-variant-numeric: tabular-nums;
+}
+.movement-bg { image-rendering: pixelated; }
+
+.layer-settings .ls-grip { position: absolute; z-index: 3; touch-action: none; }
+.layer-settings .ls-grip-e { top: 36px; right: 0; bottom: 14px; width: 6px; cursor: ew-resize; }
+.layer-settings .ls-grip-s { left: 0; right: 14px; bottom: 0; height: 6px; cursor: ns-resize; }
+.layer-settings .ls-grip-se {
+    right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 50%, var(--border-strong) 50%, var(--border-strong) 58%,
+        transparent 58%, transparent 70%, var(--border-strong) 70%, var(--border-strong) 78%, transparent 78%);
+    border-bottom-right-radius: 10px;
+}
+.layer-settings .ls-grip-se:hover { background-color: var(--accent-soft); }
+.layer-settings.resizing { user-select: none; }
+.layer-settings.resizing .ls-scroll { pointer-events: none; }
+.ls-status { margin-top: 6px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ls-status:empty { display: none; }
+/* Khung bảng ⚙ không tự cuộn – chỉ phần nội dung (.ls-scroll) cuộn, để tay nắm resize luôn ở
+   góc dưới-phải (nếu cả bảng cuộn, tay nắm absolute sẽ trôi lên giữa cạnh phải). */
+#layer-settings.layer-settings { overflow: hidden; display: flex; flex-direction: column; resize: none; }
+#layer-settings > .ls-head { flex: 0 0 auto; position: relative; }
+#layer-settings > .ls-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+#layer-settings > .ls-grip-se {
+    background: linear-gradient(135deg, transparent 45%, rgba(148, 163, 184, .75) 45%, rgba(148, 163, 184, .75) 53%,
+    transparent 53%, transparent 64%, rgba(148, 163, 184, .75) 64%, rgba(148, 163, 184, .75) 72%, transparent 72%);
+}
+#layer-settings > .ls-grip-se:hover { background-color: var(--accent-soft); }
+.movement-raster.hidden { visibility: hidden; }

@@ -117,11 +117,10 @@ def water_on_display(path, west, south, dlon, dlat, nx, ny):
     tr = from_origin(west, south + ny * dlat, dlon, dlat)
     w = rio_features.rasterize(((geom, 1) for geom in gdf.geometry.make_valid()),
         out_shape=(ny, nx), transform=tr, fill=0, dtype="uint8")
-    if w is None: return False
-    return w[::-1].astype(bool)
+    return w[::-1].astype(bool)                              
 
-def needs_rebuild(model_dir, res=None):
-    p = model_paths(model_dir)
+def needs_rebuild(model_dir, res=None, view_dir=VIEW_DIR):
+    p = model_paths(model_dir, view_dir)
     if not os.path.exists(p["output"]):
         raise FileNotFoundError(f"Wflow output not found: {p['output']}. Run the wflow model first.")
     meta_path = os.path.join(p["cache"], "meta.json")
@@ -144,6 +143,10 @@ def needs_rebuild(model_dir, res=None):
         return f"Resolution changed {meta['grid']['res_m']} -> {res} m"
     if "velocity" not in meta:
         return "Viewer cache has no velocity field (particles)"
+    # Cache cũ được ghi khi tạo vận tốc bị lỗi (velocity = null) dù output có dòng chảy mặt -> dựng lại
+    if meta.get("velocity") is None and not meta.get("velocity_error") and \
+            any(v in meta.get("variables", {}) for v in ("overland_flow", "river_discharge")):
+        return "Viewer cache has no velocity field although overland_flow/river_discharge exist"
     if meta.get("velocity") and not os.path.exists(os.path.join(p["cache"], meta["velocity"]["file"])):
         return "Velocity cache file is missing"
     for v, info in meta.get("variables", {}).items():
@@ -171,7 +174,7 @@ def not_ready(detail=""):
     return JSONResponse(status_code=404, content={"status": "error",
         "message": f"Viewer data not initialized. {detail} (pid {os.getpid()})".strip()})
 
-def model_paths(model_dir):
+def model_paths(model_dir, view_dir=VIEW_DIR):
     cfg = {}
     toml = os.path.join(model_dir, "wflow_sbm.toml")
     if os.path.exists(toml):
@@ -190,7 +193,7 @@ def model_paths(model_dir):
         "static": os.path.join(model_dir, static_name),
         "basins": os.path.join(model_dir, "staticgeoms", "basins.geojson"),
         "rivers_src": os.path.join(model_dir, "staticgeoms", "rivers.geojson"),
-        "cache": os.path.join(model_dir, VIEW_DIR),
+        "cache": os.path.join(model_dir, view_dir or VIEW_DIR),   # view_dir: cache riêng (vd. dashboard)
     }
 
 def get_crs(*datasets, default="EPSG:25833"):
@@ -210,10 +213,10 @@ def _pick(ds, names):
 
 def _nice(x):
     if x <= 0: return 1.0
-    e = 10.0 ** math.floor(math.log10(x))
+    e = 10 ** math.floor(math.log10(x))
     for m in (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10):
-        if m * e >= x * 0.999: return float(m * e)
-    return float(10.0 * e)
+        if m * e >= x * 0.999: return m * e
+    return 10 * e
 
 def build_velocity(cache_dir, ds, static, flip, cell, src_crs, x, ys, src, 
     domain, T, chunk, depth_threshold=1e-4, max_speed=5.0, smooth_cells=1.5):
@@ -277,18 +280,21 @@ def build_velocity(cache_dir, ds, static, flip, cell, src_crs, x, ys, src,
         with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
             if "overland_flow" in ds:
                 Q = np.abs(rd("overland_flow", sl).reshape(n, -1)[:, src])
-                if n_land is None or S_land is None: raise ValueError("n_land and S_land must not be None.")
                 if has_h: H = rd("overland_depth", sl).reshape(n, -1)[:, src]
-                else: H = (Q * n_land.ravel()[src] / (cell * np.sqrt(S_land.ravel()[src]))) ** 0.6
+                else:
+                    # n_land/S_land chỉ được tạo khi output KHÔNG có overland_depth (luôn khác None ở đây)
+                    assert n_land is not None and S_land is not None
+                    H = (Q * n_land.ravel()[src] / (cell * np.sqrt(S_land.ravel()[src]))) ** 0.6
                 wet = np.isfinite(Q) & np.isfinite(H) & (H > depth_threshold)
                 spd = np.where(wet, Q / (np.where(wet, H, 1) * cell), spd)
             if use_river:
                 Qr = np.abs(rd("river_discharge", sl).reshape(n, -1)[:, src])
-                if W_r is None or n_r is None or S_r is None or r_sel is None:
-                    raise ValueError("W_r, n_r, S_r and r_sel must not be None.")
+                assert W_r is not None and r_sel is not None        # use_river -> luôn có
                 W = W_r.ravel()[src]
                 if has_hr: Hr = rd("river_depth", sl).reshape(n, -1)[:, src]
-                else: Hr = (Qr * n_r.ravel()[src] / (W * np.sqrt(S_r.ravel()[src]))) ** 0.6
+                else:
+                    assert n_r is not None and S_r is not None      # chỉ None khi có river_depth
+                    Hr = (Qr * n_r.ravel()[src] / (W * np.sqrt(S_r.ravel()[src]))) ** 0.6
                 wet_r = r_sel[None] & np.isfinite(Qr) & np.isfinite(Hr) & (Hr > depth_threshold)
                 spd = np.where(wet_r, Qr / (np.where(wet_r, Hr, 1) * W), spd)
         spd = np.clip(spd, 0, max_speed)
@@ -306,15 +312,15 @@ def build_velocity(cache_dir, ds, static, flip, cell, src_crs, x, ys, src,
         "note": "u = east, v = north (m/s); NaN = dry cell"
     }
 
-def velocity_bytes(model_dir, meta, i):
+def velocity_bytes(model_dir, meta, i, view_dir=VIEW_DIR):
     vel = meta.get("velocity")
     if not vel:
         raise FileNotFoundError("No velocity field in the viewer cache")
-    return NpyRows(os.path.join(model_paths(model_dir)["cache"], vel["file"])).row_bytes_at(i)
+    return NpyRows(os.path.join(model_paths(model_dir, view_dir)["cache"], vel["file"])).row_bytes_at(i)
 
 def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48, 
-    crs=None, progress=None, only=None, water_path="auto"):
-    p = model_paths(model_dir)
+    crs=None, progress=None, only=None, water_path="auto", view_dir=VIEW_DIR):
+    p = model_paths(model_dir, view_dir)
     if not os.path.exists(p["output"]):
         raise FileNotFoundError(f"Wflow output not found: {p['output']} (run the model first).")
     os.makedirs(p["cache"], exist_ok=True)
@@ -372,12 +378,12 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
         lat_mid = 0.5 * (south + north)
         kx = M_PER_DEG * math.cos(math.radians(lat_mid))
         n_dom = int(domain.sum())
-        res_auto = res in (None, "", "auto", 0) 
-        if res in (None, "", "auto", 0):
+        res_auto = res in (None, "", "auto", 0)
+        if res_auto:
             area = n_dom * cell * cell
-            res_val: float = _nice(max(cell, math.sqrt(area * T * 2 / (budget_mb_per_var * 1e6))))
-        else: res_val = float(res)
-        dlat, dlon = res_val / M_PER_DEG, res_val / kx
+            res = _nice(max(cell, math.sqrt(area * T * 2 / (budget_mb_per_var * 1e6))))
+        res = float(res)
+        dlat, dlon = res / M_PER_DEG, res / kx
         nx, ny = int(math.ceil((east - west) / dlon)), int(math.ceil((north - south) / dlat))
         lon = west + (np.arange(nx) + 0.5) * dlon; lat = south + (np.arange(ny) + 0.5) * dlat
         LON, LAT = np.meshgrid(lon, lat)
@@ -472,7 +478,7 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
             }
         step_h = float((times[1] - times[0]).total_seconds() / 3600) if T > 1 else 1.0
         meta = {
-            "format": FORMAT, "version": f"{int(time.time())}-{res:g}",
+            "format": FORMAT, "version": f"{int(time.time())}-{res}",
             "output_mtime": os.path.getmtime(p["output"]), "crs": src_crs.to_string(),
             "grid": {"nx": nx, "ny": ny, "lon0": float(lon[0]), "lat0": float(lat[0]), "dlon": dlon, "dlat": dlat,
                 "bounds": [[south, west], [south + ny * dlat, west + nx * dlon]], "res_m": res,
@@ -483,9 +489,10 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
         # Particle
         try:
             meta["velocity"] = build_velocity(p["cache"], ds, static, flip, cell, src_crs, x, ys, src_idx, domain, T, chunk)
-        except Exception as e:
-            meta["velocity"] = None
-            raise ValueError(f"build_cache: velocity field skipped – {e}")
+        except Exception as e:  # noqa: BLE001
+            # Hạt chỉ là phần phụ: lỗi vận tốc không được làm hỏng cả cache viewer
+            meta["velocity"], meta["velocity_error"] = None, str(e)
+            print(f"build_cache: velocity field skipped – {e}")
         with open(os.path.join(p["cache"], "meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False)
         return meta
@@ -494,8 +501,8 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
         if st is not None:
             st.close()
 
-def load_meta(model_dir):
-    with open(os.path.join(model_paths(model_dir)["cache"], "meta.json"), encoding="utf-8") as f:
+def load_meta(model_dir, view_dir=VIEW_DIR):
+    with open(os.path.join(model_paths(model_dir, view_dir)["cache"], "meta.json"), encoding="utf-8") as f:
         return json.load(f)
 
 def get_bin(request, data, headers=None):
@@ -505,14 +512,14 @@ def get_bin(request, data, headers=None):
         headers.update({"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
     return Response(data, media_type="application/octet-stream", headers=headers)
 
-def frame_bytes(model_dir, meta, var, i):
+def frame_bytes(model_dir, meta, var, i, view_dir=VIEW_DIR):
     info = meta["variables"][var]
-    path = os.path.join(model_paths(model_dir)["cache"], f"{info['kind']}_{var}.npy")
+    path = os.path.join(model_paths(model_dir, view_dir)["cache"], f"{info['kind']}_{var}.npy")
     return NpyRows(path).row_bytes_at(i)
 
-def point_series(model_dir, meta, lat, lon, variables=None, river_radius_cells=3):
+def point_series(model_dir, meta, lat, lon, variables=None, river_radius_cells=3, view_dir=VIEW_DIR):
     g = meta["grid"]
-    cache = model_paths(model_dir)["cache"]
+    cache = model_paths(model_dir, view_dir)["cache"]
     ix = int(math.floor((lon - g["lon0"]) / g["dlon"] + 0.5))
     iy = int(math.floor((lat - g["lat0"]) / g["dlat"] + 0.5))
     if not (0 <= ix < g["nx"] and 0 <= iy < g["ny"]): return None
@@ -542,9 +549,9 @@ def point_series(model_dir, meta, lat, lon, variables=None, river_radius_cells=3
         out["series"][v] = [None if not np.isfinite(x) else round(float(x), 6) for x in s]
     return out
 
-def stat_array(model_dir, meta, var, stat, threshold=None):
+def stat_array(model_dir, meta, var, stat, threshold=None, view_dir=VIEW_DIR):
     info = meta["variables"][var]
-    cache = model_paths(model_dir)["cache"]
+    cache = model_paths(model_dir, view_dir)["cache"]
     if stat == "above":
         if threshold is None:
             raise ValueError("threshold is required for stat=above")
