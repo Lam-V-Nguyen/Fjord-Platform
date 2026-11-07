@@ -1,22 +1,120 @@
-# Fjord-Platform
-Platform for AI and Hydrodynamic Integration
+# HydroAI Fjord Platform (FjordFlow AI)
 
-# Giao diện Dashboard – FjordFlow AI
+**AI-integrated hydrodynamic and water-quality modelling of fjord and lake systems.**
 
-Trang **Overview** hiển thị **kết quả mô phỏng thủy động lực (HYD, D-Flow FM) và chất lượng nước (WAQ, D-Water Quality)** của dự án đang mở. Các chức năng khác như tải dữ liệu, chuẩn bị dữ liệu, tạo/tối ưu lưới, tạo/chạy kịch bản HYD/WAQ, Flow Estimation, hiệu chỉnh và trực quan hoá chi tiết **không chiếm chỗ trên Overview**. Chúng mở ra khi bấm mục tương ứng ở sidebar, dưới dạng widget trong view **Workspace** (Gridstack, như giao diện cũ).
+HydroAI Fjord Platform is a web application for building, running, calibrating and analysing coupled
+**hydrodynamic (HYD, Delft3D FM / D-Flow FM)**, **water-quality (WAQ, D-Water Quality)** and
+**catchment-hydrology (Wflow)** models. It has a FastAPI backend and a vanilla-JavaScript frontend.
+
+The application opens on a dark **operational dashboard (Overview)** built around the HYD/WAQ
+simulation results. All modelling tools open on demand in a **Workspace** of resizable widgets:
+- data download
+- grid generation
+- HYD/WAQ scenario set-up and runs
+- Wflow flow estimation
+- calibration
+- detailed visualization
+
+---
+
+## Table of contents
+
+1. [Features](#features)
+2. [Architecture](#architecture)
+3. [Requirements](#requirements)
+4. [Installation](#installation)
+5. [Configuration](#configuration)
+6. [Running the platform](#running-the-platform)
+7. [Using the dashboard](#using-the-dashboard)
+8. [Map layers: Flow movement and Wflow results](#map-layers-flow-movement-and-wflow-results)
+9. [Data model and file layout](#data-model-and-file-layout)
+10. [Dashboard API reference](#dashboard-api-reference)
+11. [Thresholds and alerts](#thresholds-and-alerts)
+12. [Synthetic demo data](#synthetic-demo-data)
+13. [Extending the platform](#extending-the-platform)
+14. [Troubleshooting](#troubleshooting)
+15. [Changelog](#changelog)
+16. [Contributing](#contributing)
+
+---
+
+## Features
+
+### Overview dashboard (HYD/WAQ results first)
+
+- **KPI row**: surface temperature, stratification ΔT, water level, maximum current speed,
+  Water Quality Index (WQI) and overall risk level. Every value is computed for the selected analysis
+  window (`1D / 7D / 30D / All`) and end date.
+- **Interactive map** (Leaflet), on the computational mesh:
+  - HYD/WAQ fields with a field picker (variable, plus surface / bottom / depth-mean layer);
+  - time slider and playback;
+  - observation stations (HYD and WAQ stations merged when they are less than 150 m apart);
+  - alert zones and context layers (lake boundary, catchment, river network, bathymetry points, project GIS files);
+  - a legend with colour scales.
+- **Vertical profile** at any station. If the WAQ history file has no layer dimension, the profile
+  falls back to the HYD/WAQ map file at the nearest mesh cell.
+- **Environmental monitoring**: a WQI gauge plus the worst substances (e.g. *E. coli*, dissolved oxygen).
+- **Water-quality status / sources**: the worst value in the window compared with thresholds, and
+  source/sink contributions.
+- **Station time series**, **risk distribution** and **recent alerts**. Clicking an alert flies the
+  map to the station and switches the displayed variable.
+- **Empty state**: when a project has no results yet, the Overview shows the modelling pipeline
+  (Input data → Grid → HYD run → WAQ run → Calibration). Each step opens the corresponding tool.
+
+### Workspace (modelling tools)
+
+Each tool runs in an isolated iframe widget (Gridstack) and is opened from the sidebar:
+
+| Group | Tools |
+|---|---|
+| Data Download | Data Download |
+| Hydrodynamics (HYD) | HYD Data Preparation, Grid Generation, Create HYD Scenario, Run HYD Scenario |
+| Water Quality (WAQ) | Create WAQ Scenario, Run WAQ Scenario |
+| Flow Estimation | Wflow Data Preparation, Run Flow Model, Flow Estimation |
+| Visualization | Visualization (time series, thermocline, simulation summary, station plots, particle movement) |
+| Model Calibration | Model Calibration |
+
+### Dashboard map layers: particles and Wflow
+
+- **Flow movement (HYD)**: animated particles driven by the D-Flow FM velocity field. Optional speed
+  or depth background raster, cursor read-out, and a settings panel.
+- **Wflow results**:
+  - river discharge on the river network and gridded variables (e.g. runoff) as a raster, shown at
+    the same time;
+  - statistic modes (max / mean / sum / time of peak / hours above a threshold);
+  - **surface-flow particles**;
+  - a settings panel.
+- The settings panels are **floating, draggable and resizable**. Their position and size are
+  remembered per layer, and closing a panel also unticks and hides its layer.
+
+---
+
+## Architecture
 
 ```
-┌ Sidebar ───────────┐┌ Topbar: dự án · cửa sổ phân tích (1D/7D/30D/All) · ngày · Share · Filters ┐
-│ Overview           ││ KPI: Nhiệt độ mặt · ΔT phân tầng · Mực nước · Vận tốc max · WQI · Rủi ro │
-│ Map View           │├──────────────────────────────────────────────┬───────────────────────────┤
-│ Workspace (n)      ││ Bản đồ trường HYD/WAQ trên lưới tính toán     │ Profile thẳng đứng tại trạm│
-│ ── Modelling tools ││  · chọn biến + lớp (mặt/đáy/trung bình)       │ Giám sát: WQI + chất xấu   │
-│ Data Download      ││  · thanh thời gian + phát animation           │ nhất (vd. E. coli, DO)     │
-│ HYD ▸ … WAQ ▸ …    ││  · trạm, vùng cảnh báo, chú giải + thang màu  │                           │
-│ Flow ▸ … Calib …   │├──────────────┬────────────┬──────────┬────────┴───────────────────────────┤
-│ ── Map layers      ││ Trạng thái CL│ Chuỗi thời │ Phân bố  │ Cảnh báo gần đây                   │
-│ ── System          ││ nước / Nguồn │ gian trạm  │ rủi ro   │ (bấm -> bay tới trạm, đổi biến)    │
-└────────────────────┘└──────────────┴────────────┴──────────┴────────────────────────────────────┘
+┌──────────────────────────── Browser ──────────────────────────────┐
+│ index.html                                                        │
+│  ├─ Sidebar (toolRegistry.js) ─ Overview · Map · Workspace        │
+│  ├─ Overview  (dashboardManager.js, dashboardMap.js, Plotly)      │
+│  │    └─ extra layers: dashboardMovement.js, dashboardWflow.js    │
+│  │         └─ shared engines: dashboardParticles.js,              │
+│  │                            dashboardLayerSettings.js           │
+│  └─ Workspace (mainManager.js + Gridstack)                        │
+│        └─ <iframe> per tool  ⇄  postMessage bus                  │
+└───────────────▲───────────────────────────────────▲───────────────┘
+                │ REST (Basic Auth, JSON / binary)    │
+┌───────────────┴──────────── FastAPI (backend/app) ┴───────────────┐
+│ main.py → routers                                                 │
+│  dashboard_router  → dashboard_results / dashboard_functions /    │
+│                      dashboard_extras                             │
+│  hyd / waq / grid / data / flow / calibration / movement / sim …  │
+│ Cache: Redis (optional) or in-memory · heavy work in threads      │
+└───────────────▲───────────────────────────────────────────────────┘
+                │ files
+┌───────────────┴──────── backend/projects/<user>/<project> ────────┐
+│ output/HYD/*.zarr · output/WAQ/*.zarr · output/config/*.json      │
+│ output/movement/ (particle cache) · flows/<flow>/wflow_model/     │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -369,17 +467,105 @@ tool programmatically from the main page, dispatch a click on any element that c
 
 ### 2. Surface results on the Overview
 
-- **Bước pipeline mới**: thêm phần tử vào `pipeline` trong `project_inventory()` với `{"key", "label", "done", "tool": "<id công cụ>"}`. Bước này hiện ở chân sidebar và trong màn hình trống, bấm vào sẽ mở công cụ.
-- **KPI mới**: thêm phần tử vào danh sách `kpis` trong `summarize()` với các khoá `key, label, value, unit, decimals, icon, status | delta`. Frontend tự render; màu thẻ đặt ở `KPI_TONES`.
-- **Chỉ tiêu cảnh báo mới**: chỉ cần thêm khoá vào `dashboard_thresholds.json`. Chất WAQ nào trùng tên sẽ tự được đánh giá, vẽ thanh trạng thái, vạch ngưỡng và đưa vào cảnh báo.
-- **Biến bản đồ HYD mới**: thêm vào `HYD_MAP_VARS` / `HYD_HIS_VARS` trong `dashboard_results.py`. Biến WAQ thì tự nhận dạng.
-- **Lớp bản đồ ngữ cảnh mới**: trả thêm khoá trong `build_layers()` và khai báo trong `LAYER_DEFS` (`dashboardMap.js`). Riêng file `<project>/GIS/*.geojson` thì tự hiển thị.
-- **Panel/trang tổng quan riêng cho một module** (vd. "Flow Overview"): tạo endpoint `/<module>/summary` trả JSON cùng dạng `{kpis, ...}`, thêm một view mới trong `index.html` và một mục `data-view` ở sidebar. Có thể dùng lại `renderKpis`, `renderStationSeries`, `renderProfile`, `DashboardMap`.
+| Goal | Where |
+|---|---|
+| New pipeline step | `project_inventory()` in `dashboard_functions.py`: `{"key", "label", "done", "tool": "<tool id>"}` |
+| New KPI | `summarize()`: `{key, label, value, unit, decimals, icon, status \| delta}`; card colour in `KPI_TONES` |
+| New alert indicator | Add a key to `dashboard_thresholds.json` |
+| New HYD map/station variable | `HYD_MAP_VARS` / `HYD_HIS_VARS` in `dashboard_results.py` (WAQ variables are detected automatically) |
+| New context layer | `build_layers()` plus `LAYER_DEFS` in `dashboardMap.js` (`<project>/GIS/*.geojson` is automatic) |
 
-### 4.3. Quy ước nên giữ
+### 3. Add an animated map layer with a settings panel
 
-- Backend: `<module>_router.py` chỉ nhận request, kiểm quyền (`basic_auth`), gọi `<module>_functions.py`. Tính toán nặng chạy bằng `asyncio.to_thread`. Lỗi trả về dạng `{"status": "error", "message"}`.
-- Kết quả của module ghi vào `<project>/output/<MODULE>/`, đặt tên rõ ràng, để Overview và các module khác đọc được.
-- Frontend: mỗi công cụ là một iframe độc lập, chỉ giao tiếp với khung qua `postMessage`. Không sửa trực tiếp DOM của trang chính. Thêm loại message mới vào `updateComponent()` trong `mainManager.js`.
-- Giao diện: dùng biến trong `theme.css` (`--panel`, `--accent`, `--sev-*`…) thay vì mã màu cứng, để mọi module đồng bộ theme.
+1. Write a class with `init()`, `setTime(iso)`, `legend()` (an object or an array of legend entries),
+   `show()`, `hide()`, `destroy()` and, optionally, `renderSettings(el, ctx)`, `status()` and `setPlaying(on)`.
+2. For particles, reuse `ParticleField` (`dashboardParticles.js`): call
+   `setGrid({nx, ny, lon0, lat0, dlon, dlat}, cells, speedMax)`, then `setFrame({u, v})`.
+3. Build the settings UI with `ui.*`, `bindSettings()`, `loadSettings()` and `saveSettings()` from
+   `dashboardLayerSettings.js`. `ctx` provides `refreshLegend()`, `busy(on)`, `toast(msg)` and `openTool(id)`.
+4. Declare the layer in `LAYER_DEFS` with `extra: true`, and register it in `dashboardManager.init()`
+   with `this.map.registerExtra(key, onToggle, onSettings)`.
 
+### Conventions
+
+- **Backend**: routers only parse requests, authenticate (`basic_auth`) and call `*_functions.py`.
+  Heavy work runs in `asyncio.to_thread`. Module outputs go to `<project>/output/<MODULE>/`.
+- **Frontend**: each tool is an independent iframe that talks to the shell only through `postMessage`.
+  New message types go in `updateComponent()` in `mainManager.js`.
+- **Styling**: use the tokens in `theme.css` (`--panel`, `--accent`, `--sev-*`, …), never hard-coded
+  colours.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `ImportError: cannot import name 'constants' from 'services'` | The dashboard imports `services.constants` optionally. Update `dashboard_results.py`. |
+| Profile returns *empty* | The station is not in the selected source, or WAQ his has no layers. The map file at the nearest cell is used when available. |
+| Extra layer greyed out | Hover it to see the reason: no HYD map with `ucx/ucy`, a non-WGS84 grid, or no Wflow run output. |
+| No particles visible | Open the ⚙ panel and read the status line: *waiting for frame*, *paused (motion = when playing)*, *no velocity field*, … For Wflow, run **Force rebuild** once so `velocity.npy` is created. |
+| `ValueError: Unknown format code 'g' for object of type 'str'` (Wflow rebuild) | In `flow_connection.build_cache`, write the version tag as `f"{int(time.time())}-{res}"`. |
+| `ValueError: n_land and S_land must not be None` | These are intentionally `None` when the Wflow output contains `overland_depth`. Check them only in the branch that uses them. A velocity failure should only skip particles, not abort `build_cache`. |
+| `ValueError: The truth value of an array … is ambiguous` (movement) | Do not use `coords.get("time") or …` on xarray objects; test `is None` explicitly. |
+| Settings panel cannot be resized, or the grip sits mid-edge | Force-reload (Ctrl+F5). The panel frame must not scroll (`overflow: hidden`); only `.ls-scroll` scrolls. |
+| Changes not visible | Hard-reload the browser (Ctrl+F5); restart `python main.py` after backend changes. |
+
+---
+
+## Changelog
+
+### Dashboard UI v2: layer settings and particles (2026-11)
+
+**Added**
+- Floating **settings panels** for *Flow movement (HYD)* and *Wflow results* (⚙ next to the layer):
+  draggable header, resize grips (right edge, bottom edge, corner), position and size remembered per
+  layer, double-click the header to reset, a live status line.
+- Closing a panel (**×**) unticks and hides its layer.
+- Movement: resolution and layer rebuild, depth-labelled layers from `layers_hyd.json`, speed/depth
+  background raster, particle controls, cursor read-out.
+- Wflow:
+  - scenario selector, and resolution placed directly below the scenario;
+  - simultaneous river and grid variables;
+  - statistic modes via `/dashboard/wflow/stat`, threshold, colour scale, opacity;
+  - **surface-flow particles** from `velocity.npy`;
+  - a note and button linking to *Flow Estimation* for point time series.
+- Shared modules `dashboardParticles.js` (particle engine) and `dashboardLayerSettings.js` (settings UI).
+- Endpoints `/dashboard/movement/{mask,frame}`, `/dashboard/wflow/velocity/{i}` and `/dashboard/wflow/stat/{var}/{stat}`.
+- `make_demo_results.py` writes `stats_*.npz` and a synthetic `velocity.npy`.
+
+**Changed**
+- The dashboard reuses existing movement/Wflow caches and rebuilds only on an explicit change. It uses
+  the same locks as the Visualization and Flow Estimation tools.
+- The particle engine now uses bilinear sampling, sub-stepping and wet-cell respawning, matching the
+  Flow Estimation viewer, so particles travel along channels instead of stopping after a few pixels.
+- HYD layer convention unified (`normalize_layer`): `-1` = depth mean, `k` counted from the surface.
+- Wflow data URLs carry the cache version (no stale browser cache after a rebuild).
+- Movement particle opacity removed; the background raster keeps its own opacity.
+
+**Fixed**
+- Visualization movement layer index was inverted (*Average* produced the surface, *surface* produced the bottom).
+- Wflow rebuild with automatic resolution failed in `build_cache` (`res=None` / `"auto"` formatting).
+- A Wflow velocity failure no longer aborts the whole viewer cache.
+- Movement frames are read directly from `frames.npy`, with no dependency on the movement router's
+  in-memory cache and no file locks on Windows.
+- Particles now appear when a layer is enabled before the map has a size.
+
+### Dashboard UI v1 (2026-11)
+
+- New dark operational dashboard focused on HYD/WAQ results (KPIs, map, profile, monitoring, quality
+  status, station series, risk distribution, alerts).
+- Sidebar driven by `toolRegistry.js`; tools open as Workspace widgets; *HYD Data Preparation* and
+  *Wflow Data Preparation* labelled separately.
+- Project dialog centred on screen; WAQ station coordinates taken from `wq_obs`; profile fallback to map files.
+- Movement and Wflow map layers, greyed out when no data exists.
+- `/dashboard/*` API, threshold file, synthetic demo generator.
+
+---
+
+## Contributing
+
+1. Branch from `dev` (`git checkout -b feature/<name>`).
+2. Follow the module conventions in [Extending the platform](#extending-the-platform).
+3. Test with a real project and with the synthetic demo project.
+4. Open a pull request against `dev` with a short description and screenshots of UI changes.

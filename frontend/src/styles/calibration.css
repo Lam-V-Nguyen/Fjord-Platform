@@ -6,7 +6,7 @@
 
 .parameter-header, .parameter-row {
   display: grid; align-items: center;
-  grid-template-columns: 20% 40% 20% 20%;
+  grid-template-columns: 10% 34% 19% 19% 18%;
   min-width: 300px;
 }
 .parameter-header, .parameter-header-optimal {
@@ -87,3 +87,17 @@
 .field-inline-4cols input {
   flex: 1; min-width: 0; box-sizing: border-box;
 }
+
+/* Initial conditions check */
+.parameter-row select { 
+  width: 100%; padding: 5px 4px; border-radius: 12px; 
+  border: 1px solid #485b88; background: #0f1b30; color: #e6eefc; 
+}
+.init-hint { font-size: 11px; opacity: .75; margin: 6px 0; }
+.init-result { max-height: 260px; overflow: auto; font-size: 13px; }
+.init-result ul { margin: 4px 0 8px 18px; padding: 0; }
+.init-result li.warn { color: #ffcf70; }
+.init-result table { border-collapse: collapse; width: 100%; margin: 4px 0 8px; }
+.init-result th, .init-result td { border-bottom: 1px solid #2c3b5c; padding: 3px 6px; text-align: center; }
+.init-result .pos { color: #ff8a80; } .init-result .neg { color: #80d8ff; }
+#overrides-table td input { width: 100%; box-sizing: border-box; }
