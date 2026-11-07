@@ -169,9 +169,7 @@ def var_meta(source: str, name: str) -> dict:
         full = full[:full.rfind("(")].strip()
     return {"label": full, "unit": unit, "key": key, "palette": "quality"}
 
-# ======================================================================
 # Project results
-# ======================================================================
 class ProjectResults:
     def __init__(self, project_name: str):
         self.project = project_name
@@ -182,7 +180,7 @@ class ProjectResults:
         self.paths: dict[str, str | None] = {"hyd_his": None, "hyd_map": None, "waq_his": None, "waq_map": None}
         self._locate(out)
 
-    # ------------------------------------------------------------ locate files
+    # locate files
     def _locate(self, out):
         if os.path.isdir(self.hyd_dir):
             files = sorted(os.listdir(self.hyd_dir))

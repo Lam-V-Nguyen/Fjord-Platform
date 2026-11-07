@@ -664,7 +664,7 @@ def wflow_point(lat: float, lon: float, project_name: str = Query(alias="project
         return JSONResponse({"status": "error", "message": "Invalid coordinates."})
     wanted = [v for v in vars.split(",") if v] if vars else None
     out = flow_connection.point_series(wflow_dir, meta, lat, lon, wanted)
-    if out is None: return JSONResponse({"status": "error", "message": "Point is outside the model area."})
+    if out is None: return JSONResponse({"status": "error", "message": ""})
     return JSONResponse({"content": out})
 
 @router.get("/wflow_velocity/{i}")

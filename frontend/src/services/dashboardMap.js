@@ -41,6 +41,8 @@ export const PALETTES = {
     quality: ['#10b981', '#a3e635', '#facc15', '#f97316', '#dc2626', '#7f1d1d'],
     quality_rev: ['#7f1d1d', '#dc2626', '#f97316', '#facc15', '#a3e635', '#10b981'],
     bathymetry: ['#22d3ee', '#3b82f6', '#8b5cf6', '#ec4899', '#f97316', '#fde047'],
+    flow: ['#1e3a8a', '#2563eb', '#06b6d4', '#67e8f9', '#fde047', '#f97316'],
+    speed_light: ['#bae6fd', '#a5f3fc', '#a7f3d0', '#fef08a', '#fdba74', '#fca5a5'],
 };
 
 export const LAYER_DEFS = [
@@ -51,6 +53,9 @@ export const LAYER_DEFS = [
     { key: 'catchment', label: 'Catchment', kind: 'polygon-dashed', color: '#a3e635', on: false },
     { key: 'rivers', label: 'River network', kind: 'line', color: '#60a5fa', on: false },
     { key: 'bathymetry', label: 'Bathymetry points', kind: 'gradient', palette: 'bathymetry', on: false },
+    // Lớp bổ sung: chỉ bật được khi dự án có dữ liệu (xem setAvailability / registerExtra)
+    { key: 'movement', label: 'Flow movement (HYD)', kind: 'gradient', palette: 'speed_light', on: false, extra: true },
+    { key: 'wflow', label: 'Wflow results', kind: 'gradient', palette: 'flow', on: false, extra: true },
 ];
 
 // ------------------------------------------------------------------ colour helpers
@@ -75,6 +80,7 @@ function esc(s) {
 
 export function fmtVal(v, unit = '') {
     if (v === null || v === undefined || Number.isNaN(v)) return '—';
+    if (v === 0) return unit ? `0 ${unit}` : '0';
     const a = Math.abs(v);
     const s = a >= 1000 ? v.toFixed(0) : a >= 100 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : a >= 0.01 ? v.toFixed(3) : v.toExponential(2);
     return unit ? `${s} ${unit}` : s;
@@ -99,6 +105,11 @@ export class DashboardMap {
         this.selectedStation = null;
         this.alertMarkers = {};
         this.scaleMode = localStorage.getItem('dash-scale-mode') || 'fixed';
+        this.extraHandlers = {};          // key -> async (on) => {...}  (lớp bổ sung)
+        this.availability = {};           // key -> {available, ready, reason}
+        this.extraLegends = {};           // key -> {title, palette, min, max, note} | [ ... ]
+        this.settingsHandlers = {};       // key -> (btn) => mở bảng cài đặt
+        this.loadingKeys = new Set();
         this.rawField = null;
     }
 
@@ -320,6 +331,7 @@ export class DashboardMap {
         });
         this.renderLegend();
     }
+
     focusAlert(alert) {
         const layer = this.alertMarkers[alert.id];
         const loc = layer ? layer.getLatLng() : ((this.stationLookup[`${alert.source}:${alert.location}`] || this.stationLookup[alert.location])
@@ -334,20 +346,75 @@ export class DashboardMap {
     renderLayerList() {
         if (!this.layerListEl) return;
         this.layerListEl.innerHTML = this.defs.map(d => {
-            const on = this.state[d.key] ?? d.on;
+            const av = this.availability[d.key];
+            const disabled = d.extra && !(av && av.available);
+            const on = !disabled && (this.state[d.key] ?? d.on);
+            const loading = this.loadingKeys.has(d.key);
             const sw = d.kind === 'gradient' ? paletteCss(d.palette || this.field?.palette || 'thermal') : d.color;
-            return `<label class="layer-item" title="${esc(d.label)}">
-                <input type="checkbox" data-layer="${esc(d.key)}" ${on ? 'checked' : ''}>
+            const tip = disabled ? (av?.reason || 'Checking data…') : (d.extra && av?.reason ? `${d.label} – ${av.reason}` : d.label);
+            return `<label class="layer-item${disabled ? ' disabled' : ''}${loading ? ' loading' : ''}" title="${esc(tip)}">
+                <input type="checkbox" data-layer="${esc(d.key)}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
                 <span class="layer-check"></span><span class="layer-name">${esc(d.label)}</span>
+                ${d.extra && on && this.settingsHandlers[d.key] ? `<button type="button" class="layer-gear" data-settings="${esc(d.key)}" title="${esc(d.label)} settings">⚙</button>` : ''}
                 <span class="swatch" style="background:${sw}"></span></label>`;
         }).join('');
+        this.layerListEl.onclick = (e) => {             // nút ⚙ trong <label>: không bật/tắt checkbox
+            const g = e.target.closest('[data-settings]');
+            if (!g) return;
+            e.preventDefault(); e.stopPropagation();
+            this.settingsHandlers[g.dataset.settings]?.(g);
+        };
         this.layerListEl.onchange = (e) => {
             const input = e.target.closest('[data-layer]');
-            if (input) this.toggle(input.dataset.layer, input.checked);
+            if (input && !input.disabled) this.toggle(input.dataset.layer, input.checked);
         };
     }
 
+    // ------------------------------------------------------------ lớp bổ sung (movement, wflow)
+    registerExtra(key, handler, onSettings = null) {
+        this.extraHandlers[key] = handler;
+        if (onSettings) this.settingsHandlers[key] = onSettings;
+    }
+
+    setAvailability(key, status) {
+        this.availability[key] = status || { available: false, reason: 'No data' };
+        this.renderLayerList();
+    }
+
+    setLoading(key, on) {
+        on ? this.loadingKeys.add(key) : this.loadingKeys.delete(key);
+        const item = this.layerListEl?.querySelector(`[data-layer="${CSS.escape(key)}"]`)?.closest('.layer-item');
+        if (item) item.classList.toggle('loading', on);
+    }
+
+    setExtraLegend(key, info) {
+        if (info) this.extraLegends[key] = info; else delete this.extraLegends[key];
+        this.renderLegend();
+    }
+
+    // Đặt trạng thái checkbox mà KHÔNG gọi handler (vd. khi bật thất bại)
+    setChecked(key, on) {
+        this.state[key] = on; saveState(this.state);
+        const cb = this.layerListEl?.querySelector(`[data-layer="${CSS.escape(key)}"]`);
+        if (cb) cb.checked = on;
+        this.renderLegend();
+    }
+
+    isOn(key) {
+        const d = this.defs.find(x => x.key === key);
+        return !!(this.state[key] ?? d?.on);
+    }
+
     toggle(key, on) {
+        const def = this.defs.find(d => d.key === key);
+        if (def?.extra) {
+            if (!this.availability[key]?.available) return;
+            this.setChecked(key, on);
+            this.renderLayerList();                      // hiện/ẩn nút ⚙
+            const h = this.extraHandlers[key];
+            if (h) h(on);
+            return;
+        }
         this.state[key] = on; saveState(this.state);
         const g = this.groups[key];
         if (g) { on ? g.addTo(this.map) : this.map.removeLayer(g); }
@@ -357,8 +424,10 @@ export class DashboardMap {
     }
 
     toggleAll() {
-        const anyOff = this.defs.some(d => !(this.state[d.key] ?? d.on));
-        this.defs.forEach(d => this.toggle(d.key, anyOff));
+        // Lớp bổ sung (nặng) không bật/tắt hàng loạt
+        const base = this.defs.filter(d => !d.extra);
+        const anyOff = base.some(d => !(this.state[d.key] ?? d.on));
+        base.forEach(d => this.toggle(d.key, anyOff));
     }
 
     renderLegend() {
@@ -383,6 +452,15 @@ export class DashboardMap {
                 <div class="lf-scale"><span>${fmtVal(this.field.min)}</span><span>${fmtVal(mid)}</span><span>${fmtVal(this.field.max)}</span></div>
             </div>`;
         }
+        Object.entries(this.extraLegends).forEach(([key, xs]) => {
+            if (!this.isOn(key)) return;
+            [].concat(xs).forEach(x => { html += `<div class="legend-field legend-extra">
+                <div class="lf-title">${esc(x.title)}</div>
+                <div class="lf-bar" style="background:${paletteCss(x.palette)}"></div>
+                <div class="lf-scale"><span>${fmtVal(x.min)}</span><span>${fmtVal((x.min + x.max) / 2)}</span><span>${fmtVal(x.max)}</span></div>
+                ${x.note ? `<div class="lf-note">${esc(x.note)}</div>` : ''}
+            </div>`; });
+        });
         html += active.map(d => `<div class="legend-row"><span class="legend-sym">${sym(d)}</span>${esc(d.label)}</div>`).join('');
         this.legendEl.style.display = html ? '' : 'none';
         this.legendEl.innerHTML = html ? `<h5>Legend</h5>${html}` : '';

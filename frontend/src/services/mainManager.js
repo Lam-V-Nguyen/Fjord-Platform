@@ -37,7 +37,7 @@ updateComponent();
 dashboard = new Dashboard({ getProject: () => getLastProject() });
 setView(initialView(), { replace: true });
 dashboard.init({ onExpandMap: () => setView(currentView === 'map' ? 'overview' : 'map') });
-showGitHubLastUpdate('Lam-V-Nguyen', 'HydroAI-Fjord-Platform', 'dev');
+showGitHubLastUpdate('Lam-V-Nguyen', 'Fjord-Platform', 'main');
 
 
 // =====================================================================
