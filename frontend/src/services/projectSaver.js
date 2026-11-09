@@ -37,7 +37,7 @@ export function timeStepCalculator(daysString, timeString){
 
 export async function saveProject(elements, timeZone) {
     signalSender('showOverlay', 'Saving project. Please wait...');
-    const { name, latitude, nLayers, gridPathText, startDate, stopDate,
+    const { name, latitude, longitude, nLayers, gridPathText, startDate, stopDate,
         userTimeSec, nodalTimeSec, obsPointTable, crossSectionName, crossSectionTable, salinity, 
         temperature, initWaterLevel, initSalinity, initTemperature , outputHis, hisInterval, hisStart, 
         hisStop, outputMap, mapInterval, mapStart, mapStop, outputWQ, wqInterval, wqStart, wqStop, 
@@ -49,10 +49,10 @@ export async function saveProject(elements, timeZone) {
     // Get time
     const formatted = new Date().toISOString().slice(0,19).replace('T',' ');
     data.set('gen_date', formatted);
-    // Check latitude
-    const lat = latitude.value;
-    if (!lat || lat === '') { alert('Please check latitude.'); return; }
-    data.set('ang_lat', lat);
+    // Check location
+    const lat = latitude.value, lon = longitude.value;
+    if (!lat || lat === '' || !lon || lon === '') { alert('Please check average location.'); return; }
+    data.set('ang_lat', lat); data.set('ang_lon', lon);
     // Check number of layers
     if (!nLayers || nLayers === '') { alert('Please check number of layers.'); return; }
     data.set('n_layers', nLayers.value);

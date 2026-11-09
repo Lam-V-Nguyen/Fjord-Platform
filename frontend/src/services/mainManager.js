@@ -21,19 +21,16 @@ const app = document.getElementById('app');
 const githubCache = {}, pendingRequests = new Map();
 const VIEW_KEY = 'ui-view', SIDEBAR_KEY = 'ui-sidebar-collapsed';
 const VIEW_TITLES = {
-    overview: 'Fjord Water Intelligence Dashboard',
+    overview: 'HydroAI Water Intelligence Dashboard',
     map: 'Map View', workspace: 'Modelling Workspace',
+    subtitle: 'Catchment, lake and fjord modelling – hydrodynamics, water quality and calibration'
 };
 let userName = null, prevSource = null, currentTimeZone = null, selectedTimeZone = null;
 let dashboard = null, currentView = 'overview';
 
-// ------------------------------------------------------------------ boot
-hydrateIcons(document);
-renderToolNav();
-bindShell();
-await login();
-initWorkspace();
-updateComponent();
+// boot
+hydrateIcons(document); renderToolNav(); bindShell(); await login();
+initWorkspace(); updateComponent();
 dashboard = new Dashboard({ getProject: () => getLastProject() });
 setView(initialView(), { replace: true });
 dashboard.init({ onExpandMap: () => setView(currentView === 'map' ? 'overview' : 'map') });
@@ -86,8 +83,7 @@ function initialView() {
 
 function setView(view, { replace = false } = {}) {
     if (!VIEW_TITLES[view]) view = 'overview';
-    const prevView = currentView;
-    currentView = view;
+    const prevView = currentView; currentView = view;
     const isDash = view === 'overview' || view === 'map';
     document.getElementById('view-overview').classList.toggle('active', isDash);
     document.getElementById('view-workspace').classList.toggle('active', view === 'workspace');
@@ -96,7 +92,7 @@ function setView(view, { replace = false } = {}) {
     document.querySelectorAll('#nav-main [data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
     document.getElementById('page-title').textContent = VIEW_TITLES[view];
     if (view === 'workspace') {
-        document.getElementById('page-subtitle').textContent = 'Data preparation, grid generation, HYD/WAQ scenarios, flow estimation and calibration';
+        document.getElementById('page-subtitle').textContent = VIEW_TITLES.subtitle;
     }
     try { localStorage.setItem(VIEW_KEY, view); } catch (e) { /* ignore */ }
     const url = new URL(location.href); url.hash = view;

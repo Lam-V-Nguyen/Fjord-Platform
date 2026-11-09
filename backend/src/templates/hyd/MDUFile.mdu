@@ -56,7 +56,7 @@ Blminabove                        = -999.                                       
 Groundlayerthickness              = -999.                                       # Only in pipes: groundlayer thickness (m)
 PartitionFile                     =                                             # Domain partition polygon file *_part.pol for parallel run
 AngLat                            = {ang_lat}                                   # Angle of latitude S-N (deg), 0: no Coriolis
-AngLon                            = 0.                                          # Angle of longitude E-W (deg), 0: Greenwich, used in solar heat flux computation.
+AngLon                            = {ang_lon}                                   # Angle of longitude E-W (deg), 0: Greenwich, used in solar heat flux computation.
 Conveyance2D                      = -1                                          # -1: R=HU,0: R=H, 1: R=A/P, 2: K=analytic-1D conv, 3: K=analytic-2D conv
 Slotw2D                           = 0.                                          # -
 Sillheightmin                     = 0.                                          # Weir treatment only if both sills larger than this value (m)

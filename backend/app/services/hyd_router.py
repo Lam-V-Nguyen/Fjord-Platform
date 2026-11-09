@@ -3,7 +3,7 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from services import functions
 from config import PROJECT_ROOT, SOURCE_BACKEND
-import numpy as np, pandas as pd
+import numpy as np
 from datetime import datetime, timezone, timedelta
 
 router = APIRouter()
@@ -19,7 +19,7 @@ async def get_scenario(request: Request, user=Depends(functions.basic_auth)):
         in_dir = os.path.normpath(os.path.join(project_dir, "input"))
         mdu_path = os.path.normpath(os.path.join(in_dir, "FlowFM.mdu"))
         default_data = {
-            "avgLat": "", "gridPath": "", "nLayers": "10", "startDate": "", "stopDate": "",
+            "avgLat": "", "avgLon": "", "gridPath": "", "nLayers": "10", "startDate": "", "stopDate": "",
             "obsPointTable": [], "crossSectionTable": [], "boundaryTable": [], "weatherPath": [],
             "userTimestepDate": "0", "userTimestepTime": "12:00:00", "nodalTimestepDate": "0", 
             "nodalTimestepTime": "12:00:00", "wqIntervalDate": "1", "wqIntervalTime": "00:00:00", 
@@ -40,6 +40,9 @@ async def get_scenario(request: Request, user=Depends(functions.basic_auth)):
                     if line.startswith('AngLat'):
                         parts = [p.strip() for p in line.split("=") if p.strip()]
                         if len(parts) == 2: data["avgLat"] = parts[1].strip()
+                    if line.startswith('AngLon'):
+                        parts = [p.strip() for p in line.split("=") if p.strip()]
+                        if len(parts) == 2: data["avgLon"] = parts[1].strip()
                     elif line.startswith('NetFile'):
                         parts = [p.strip() for p in line.split("=") if p.strip()]
                         if len(parts) == 2: data['gridPath'] = parts[1].strip()
@@ -418,6 +421,7 @@ async def get_boundary_params(request: Request, user=Depends(functions.basic_aut
                     parts = [p.strip() for p in line.split("=") if p.strip()]
                     if len(parts) == 2:
                         ref_date = datetime.strptime(parts[1].strip(), "%Y%m%d").replace(tzinfo=timezone.utc)
+        if not isinstance(ref_date, datetime): raise ValueError(f"Invalid ref_date: {ref_date}")
         with open(type_path, 'r', encoding=functions.encoding_detect(type_path)) as f:
             lines = f.readlines()
         current_data, check, content = [], False, []
@@ -429,8 +433,7 @@ async def get_boundary_params(request: Request, user=Depends(functions.basic_aut
             if line[0].isdigit() and check: current_data.append(line.replace("\n", ""))
             if line.startswith("[forcing]"): check = False
         for line in current_data:
-            temp = line.strip().split
-            if not isinstance(ref_date, datetime): raise ValueError(f"Invalid ref_date: {ref_date!r}")
+            temp = line.strip().split()
             val = ref_date + timedelta(seconds=float(temp[0].strip()))
             content.append([functions.utc_to_local(val, time_zone), temp[1]])
         if not content: return JSONResponse({"status": 'new'})

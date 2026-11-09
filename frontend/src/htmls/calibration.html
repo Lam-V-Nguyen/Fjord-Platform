@@ -13,6 +13,7 @@
         <section class="main-tab" id="control-tab">
             <div class="tab-header" id="main-tabs">
                 <div class="tabs-list">
+                    <button class="tab-btn" data-tab="settings-tab">Settings</button>
                     <button class="tab-btn" data-tab="preparation-tab">Data Preparation</button>
                     <button class="tab-btn" data-tab="analysis-tab">Result Analysis</button>
                     <button class="tab-btn" data-tab="optimization-tab">Optimization</button>
@@ -20,10 +21,10 @@
                 </div>
             </div>
             <div class="tabs-content">
-                <!-- Tab 1: Data Preparation -->
-                <div class="tabpanel main-panel" data-panel="preparation-tab">
+                <!-- Tab 1: Settings -->
+                <div class="tabpanel main-panel" data-panel="settings-tab">
                     <div class="grid">
-                        <div class="tile" style="grid-column: span 3;"><h3>1. HYD Scenario</h3>
+                        <div class="tile" style="grid-column: span 4;"><h3>HYD Scenario</h3>
                             <div class="row">
                                 <div class="field-inline">
                                     <label for="project-name">HYD Scenario:</label>
@@ -45,84 +46,10 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="tile" style="grid-column: span 5;"><h3>2. Initial Conditions Check</h3>
+                        <div class="tile" style="grid-column: span 4;"><h3>Observed Measurements</h3>
                             <div class="row">
                                 <div class="field-inline">
-                                    <button id="init-obs-btn">Open Observation (*.csv)</button>
-                                    <button id="init-check-btn">2.1. Check Initial Conditions</button>
-                                    <select id="init-station-select">
-                                        <option value="">-- Station --</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="init-result" id="init-result">
-                                <p class="init-hint">Load the observations, then check the model start, initial temperature
-                                    and key settings against the first observed profile before creating the calibration scenarios.</p>
-                            </div>
-                            <h4 style="margin: 5px 0 5px 0; font-size: 12px;">Base overrides (applied to the baseline, every scenario and the final scenario)</h4>
-                            <div class="table-container">
-                                <table class="attributes-table" id="overrides-table">
-                                    <thead><tr><th>MDU Key</th><th>Value</th><th>Note</th></tr></thead>
-                                    <tbody style="max-height: 160px;"></tbody>
-                                </table>
-                            </div>
-                            <div class="row">
-                                <button id="add-override-btn">Add Row</button>
-                                <button id="save-override-btn">2.2. Save Overrides</button>
-                                <button id="baseline-btn">2.3. Run Baseline</button>
-                                <button id="baseline-eval-btn">2.4. Evaluate Baseline</button>
-                            </div>
-                        </div>
-                        <div class="tile" style="grid-column: span 6;"><h3>3. Calibration Parameters</h3>
-                            <div class="parameter-container"></div>
-                            <p class="init-hint">Multi-value keys (e.g. Cdbreakpoints = 6.3d-4 7.23d-3): use <b>Key_factor</b> to scale all
-                                values, or <b>Key[i]</b> to change only value i (0-based).</p>
-                            <div class="row">
-                                <input type="text" id="custom-param-key" placeholder="MDU key, Key_factor or Key[i]">
-                                <button id="custom-param-btn">Add Parameter</button>
-                            </div>
-                        </div>
-                        <div class="tile" style="grid-column: span 2;"><h3>4. Iteration & Run Simulations</h3>
-                            <div class="row">
-                                <div class="field-inline">
-                                    <label for="iteration-number">Number of Iterations:</label>
-                                    <input type="number" id="iteration-number" min="1" value="50">
-                                </div>
-                                <div class="field-inline-4cols">
-                                    <label style="text-align: center;">From:</label>
-                                    <input type="text" id="iteration-start" value="1">
-                                    <label style="text-align: center;">To:</label>
-                                    <input type="text" id="iteration-end" value="50">
-                                </div>
-                                <div class="field-inline">
-                                    <button id="iteration-btn">4.1. Run Iterations</button>
-                                    <button id="run-simulation-btn">4.2. Run Simulations</button>
-                                </div>
-                            </div>
-                            <div class="progress-container" id="progressbar-container">
-                                <progress id="progressbar" value="0" max="100"></progress>
-                                <label id="progress-text"></label>
-                            </div>
-                        </div>
-                        <div class="tile model-container" style="grid-column: span 8;">
-                            <div class="field-inline"><h3 style="margin-top: 5px;">5. View Logs</h3>
-                                <div class="row" style="margin-top: -15px;">
-                                    <button type="button" style="font-size: 11px; height: 30px;"
-                                        id="calibration-load-log-btn">Load the last Calibration Log
-                                    </button>
-                                </div>
-                            </div>
-                            <textarea wrap="off" id="calibration-text" placeholder="Logs..." readonly></textarea>
-                        </div>
-                    </div>
-                </div>
-                <!-- Tab 2: Result Analysis -->
-                <div class="tabpanel main-panel" data-panel="analysis-tab">
-                    <div class="grid">
-                        <div class="tile"><h3>Observed Measurements</h3>
-                            <div class="row">
-                                <div class="field-inline">
-                                    <button id="observation-btn">Open an Observation (*.csv)</button>
+                                    <button id="observation-btn">Open Observation (*.csv)</button>
                                     <input type="file" id="observation-file" accept=".csv" hidden>
                                     <input type="text" id="observation-name">
                                 </div>
@@ -148,6 +75,112 @@
                                 </table>
                             </div>
                         </div>
+                    </div>
+                </div>
+                <!-- Tab 2: Data Preparation -->
+                <div class="tabpanel main-panel" data-panel="preparation-tab">
+                    <div class="grid">
+                        <div class="tile calibration-ui" style="grid-column: span 4;"><h3>1. Initial Conditions Check</h3>
+                            <div class="row">
+                                <div class="field-inline" style="margin-bottom: 10px;">
+                                    <button id="init-check-btn">1.1. Check Initial Conditions</button>
+                                    <select id="init-station-select">
+                                        <option value="">-- Station --</option>
+                                    </select>
+                                </div>
+                                <div class="init-result" id="init-result">
+                                    <p class="init-hint">Load the observations, then check the model start, initial temperature
+                                        and key settings against the first observed profile before creating the calibration scenarios.</p>
+                                </div>
+                                <h4 style="margin: -15px 0 -20px 0; font-size: 12px;">Base overrides (applied to the baseline, every scenario and the final scenario)</h4>
+                                <div class="table-container">
+                                    <table class="attributes-table" id="overrides-table">
+                                        <thead><tr><th>MDU Key</th><th>Value</th><th>Note</th></tr></thead>
+                                        <tbody style="max-height: 160px;"></tbody>
+                                    </table>
+                                </div>
+                                <div class="field-inline">
+                                    <button id="save-override-btn">1.2. Save Overrides</button>
+                                    <button id="baseline-btn">1.3. Run Baseline</button>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="depth-selection">Depth Selection:</label>
+                                    <input type="text" id="depth-selection" placeholder="5, 10, 30, 40, 50"
+                                        value="5, 10, 30, 40, 50">
+                                    <button id="baseline-eval-btn">1.4. Evaluate Baseline</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tile model-container" style="grid-column: span 4;">
+                            <div class="field-inline"><h3 style="margin-top: 5px;">2. Calibration Parameters</h3>
+                                <div class="row" style="margin-top: -15px;">
+                                    <button type="button" style="font-size: 11px; height: 30px;"
+                                        id="mdu-keys-btn">Get All *.mdu Keys
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="table-container">
+                                <table class="attributes-table" id="mdu-keys-table" style="margin: -5px 0 20px 0;">
+                                    <thead><tr><th>MDU Key</th><th>Value</th><th>Note</th></tr></thead>
+                                    <tbody style="max-height: 160px;"></tbody>
+                                </table>
+                            </div>
+                            <div class="parameter-container"></div>
+                            <p class="init-hint" style="margin-top: 10px;">Multi-value keys (e.g. Cdbreakpoints = 6.3d-4 7.23d-3): use <b>Key_factor</b> to scale all
+                                values, or <b>Key[i]</b> to change only value i (0-based).</p>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <input type="text" id="custom-param-key" placeholder="MDU key, Key_factor or Key[i]">
+                                    <button id="custom-param-btn">Add Parameter</button>
+                                </div>
+                                <div class="field-inline">
+                                    <label for="iteration-number">Number of Iterations:</label>
+                                    <input type="number" id="iteration-number" min="1" value="50">
+                                </div>
+                                <div class="field-inline-4cols">
+                                    <label style="text-align: center;">From:</label>
+                                    <input type="text" id="iteration-start" value="1">
+                                    <label style="text-align: center;">To:</label>
+                                    <input type="text" id="iteration-end" value="50">
+                                </div>
+                                <div class="field-inline">
+                                    <button id="iteration-btn">2.1. Run Iterations</button>
+                                    <button id="run-simulation-btn">2.2. Run Simulations</button>
+                                </div>
+                            </div>
+                        </div>
+
+
+
+
+
+
+
+
+                        
+                        <div class="tile model-container" style="grid-column: span 8;">
+                            <div class="field-inline"><h3 style="margin-top: 5px;">3. View Logs</h3>
+                                <div class="row" style="margin-top: -15px;">
+                                    <button type="button" style="font-size: 11px; height: 30px;"
+                                        id="calibration-load-log-btn">Load the last Iteration Log
+                                    </button>
+                                    <div class="progress-container" id="progressbar-container">
+                                        <progress id="progressbar" value="0" max="100"></progress>
+                                        <label id="progress-text"></label>
+                                    </div>
+                                </div>
+                            </div>
+                            <textarea wrap="off" id="calibration-text" placeholder="Logs..." readonly></textarea>
+                        </div>
+                    </div>
+                </div>
+                <!-- Tab 2: Result Analysis -->
+                <div class="tabpanel main-panel" data-panel="analysis-tab">
+                    <div class="grid">
+                        
+
+
+
                         <div class="tile"><h3>Simulation Station</h3>
                             <div class="row">
                                 <div class="field-inline">
@@ -156,11 +189,7 @@
                                         <option value="">-- Select a station --</option>
                                     </select>
                                 </div>
-                                <div class="field-inline">
-                                    <label for="depth-selection">Depth Selection:</label>
-                                    <input type="text" id="depth-selection" placeholder="5, 10, 30, 40, 50"
-                                        value="5, 10, 30, 40, 50">
-                                </div>
+                                
                                 <div class="field-inline">
                                     <label for="criteria-select">Optimization Target:</label>
                                     <select id="criteria-select">

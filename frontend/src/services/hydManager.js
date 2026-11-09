@@ -16,7 +16,7 @@ const obj = {
     projectRemover: $('remove-btn'), projectSaver: $('save-btn'),
     plotContainer: $('plot-container'), plotHeader: $('plot-header'),
     closePlotBtn: $('close-plot-btn'), plotTitle: $('plot-title'),
-    latitude: $('latitude'), getLocation: $('location'),
+    latitude: $('latitude'), longitude: $('longitude'), getLocation: $('location'),
     nLayers: $('n-layer'), gridPathText: $('grid-text'), 
     gridPathFile: $('grid-file'), startDate: $('start-date'), 
     stopDate: $('stop-date'), userTimestepDate: $('user-date'), 
@@ -155,7 +155,7 @@ async function hydManager(){
     // Close plot
     closeWindow(obj.closePlotBtn, obj.plotContainer);
     // Update location
-    iframeConnector(obj.getLocation, obj.latitude, 'pickLocation');
+    iframeConnector(obj.getLocation, [obj.latitude, obj.longitude], 'pickLocation');
     iframeConnector(obj.obsPointPicker, 
         [obj.obsPointName, obj.obsPointLatitude, obj.obsPointLongitude], 'pickPoint', 
         () => getDataFromTable(obj.obsPointTable, true), ''
@@ -466,7 +466,7 @@ async function hydManager(){
         const rtsInterval = timeStepCalculator(obj.rstIntervalDate.value, obj.rstIntervalTime.value);
         const sttInterval = timeStepCalculator(obj.statisticDate.value, obj.statisticTime.value);
         const timingInterval = timeStepCalculator(obj.timingDate.value, obj.timingTime.value);
-        const elements = { name: name, latitude: obj.latitude, nLayers: obj.nLayers, 
+        const elements = { name: name, latitude: obj.latitude, longitude: obj.longitude, nLayers: obj.nLayers, 
             gridPathText: obj.gridPathText, startDate: obj.startDate, stopDate: obj.stopDate,
             userTimeSec: userTimeSec, nodalTimeSec: nodalTimeSec, obsPointTable: obj.obsPointTable, 
             crossSectionName: obj.crossSectionName, crossSectionTable: obj.crossSectionTable, 
@@ -487,7 +487,8 @@ async function loadScenario(scenarioName){
     const content = { projectName: scenarioName, timeZone: getLastTimeZone() };
     const data = await jsonLoader('get_scenario', content);
     if (data.status === 'error') { alert(data.message); return; }
-    obj.latitude.value = data.content.avgLat;
+    obj.latitude.value = data.content.avgLat; 
+    obj.longitude.value = data.content.avgLon;
     obj.nLayers.value = data.content.nLayers;
     const gridName = data.content.gridPath;
     if (gridName != '') {

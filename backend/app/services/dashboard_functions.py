@@ -352,7 +352,7 @@ def summarize(project_name: str, end: str | None, period: str | None) -> dict:
          "delta_unit": "°C", "delta_label": f"over {span}", "hint": "Mean of HYD stations, top layer"},
         {"key": "stratification", "label": "Stratification ΔT", "value": stats.get("stratification"), "unit": "°C",
          "decimals": 1, "icon": "thermo", "status": _strat_label(stats.get("stratification")),
-         "hint": f"Surface {stats.get('surface_temperature', '—')} °C − bottom {stats.get('bottom_temperature', '—')} °C"},
+         "hint": f"Surface {stats.get('surface_temperature', '—')}°C − bottom {stats.get('bottom_temperature', '—')}°C"},
         {"key": "water_level", "label": "Water Level", "value": stats.get("water_level"), "unit": "m", "decimals": 2,
          "icon": "level", "status": f"Range {stats.get('water_level_range', '—')} m", "hint": "Mean of HYD stations"},
         {"key": "max_velocity", "label": "Max Current Speed", "value": stats.get("max_velocity"), "unit": "m/s",
