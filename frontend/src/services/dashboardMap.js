@@ -58,7 +58,7 @@ export const LAYER_DEFS = [
     { key: 'wflow', label: 'Wflow results', kind: 'gradient', palette: 'flow', on: false, extra: true },
 ];
 
-// ------------------------------------------------------------------ colour helpers
+// Colour helpers
 function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 
 export function paletteColor(t, palette) {
@@ -80,7 +80,7 @@ function esc(s) {
 
 export function fmtVal(v, unit = '') {
     if (v === null || v === undefined || Number.isNaN(v)) return '—';
-    if (v === 0) return unit ? `0 ${unit}` : '0';
+    if (v === 0) return unit ? `0${unit}` : '0';
     const a = Math.abs(v);
     const s = a >= 1000 ? v.toFixed(0) : a >= 100 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : a >= 0.01 ? v.toFixed(3) : v.toExponential(2);
     return unit ? `${s} ${unit}` : s;
@@ -92,9 +92,9 @@ function saveState(s) { try { localStorage.setItem(LAYER_STATE_KEY, JSON.stringi
 // ======================================================================
 export class DashboardMap {
     constructor({ mapId, legendEl, layerListEl, switchEl, coordsEl, toggleAllBtn, onExpand, onStationSelect }) {
-        Object.assign(this, { mapId, legendEl, layerListEl, switchEl, coordsEl, toggleAllBtn, onExpand, onStationSelect });
-        this.map = null; this.base = null;
-        this.groups = {};
+        this.mapId = mapId; this.legendEl = legendEl; this.layerListEl = layerListEl; this.switchEl = switchEl;
+        this.coordsEl = coordsEl; this.toggleAllBtn = toggleAllBtn; this.onExpand = onExpand; this.onStationSelect = onStationSelect;
+        this.map = null; this.base = null; this.groups = {};
         this.defs = LAYER_DEFS.map(d => ({ ...d }));
         this.state = { ...Object.fromEntries(this.defs.map(d => [d.key, d.on])), ...loadState() };
         this.meshBounds = null; this.contextBounds = null;
@@ -119,7 +119,7 @@ export class DashboardMap {
         if (this.rawField) this.setField(this.rawField);
     }
 
-    // ------------------------------------------------------------ init
+    // init
     init() {
         this.map = L.map(this.mapId, {
             zoomControl: false, attributionControl: true, minZoom: 3, zoomSnap: 0.25, zoomDelta: 0.5,
@@ -173,7 +173,7 @@ export class DashboardMap {
         if (this.state[key] ?? true) group.addTo(this.map);
     }
 
-    // ------------------------------------------------------------ mesh + field
+    // Mesh + field
     setMesh(mesh) {
         this.meshLayers = [];
         if (!mesh || !mesh.features?.length) { this._addGroup('field', L.layerGroup()); return; }
@@ -225,7 +225,7 @@ export class DashboardMap {
         this.renderLegend();
     }
 
-    // ------------------------------------------------------------ stations
+    // stations
     setStations(stations) {
         // stations: [{name, lat, lon, sources:['hyd','waq'], coords:{hyd:[lat,lon], waq:[lat,lon]}}]
         // Có thể có 2 điểm cùng tên (HYD và WAQ ở hai vị trí khác nhau).
@@ -261,7 +261,7 @@ export class DashboardMap {
         Object.entries(this.stationMarkers).forEach(([n, ms]) => ms.forEach(m => m.setIcon(this._stationIcon(def.color, n === name))));
     }
 
-    // ------------------------------------------------------------ context layers
+    // context layers
     setContext(layers) {
         const parts = [];
         if (layers.lake) {

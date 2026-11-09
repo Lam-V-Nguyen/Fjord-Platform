@@ -693,7 +693,8 @@ export function iframeConnector(objBtn, objtarget, requestId, content = null, li
             }
             window.parent.postMessage(contents, origin);
         });
-        if (requestId === 'pickLocation') { objtarget.value = result; 
+        if (requestId === 'pickLocation') { 
+            objtarget[0].value = result[0]; objtarget[1].value = result[1];
         } else if (requestId === 'pickPoint' || requestId === 'pickSource') {
             const lat = Number(result.lat).toFixed(12);
             const lon = Number(result.lng).toFixed(12);

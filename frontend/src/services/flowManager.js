@@ -425,7 +425,6 @@ function soilManager() {
             if (request.status === 'error') { alert(request.message); return; }
             updateLog(currentProject, obj.soilLog, 2, key, async () => {
                 alert('Downloading soil data completed.'); obj.soilCheckbox.checked = true;
-                // obj.soilCheckerBtn.click();
             }, logFile);
         } catch (error) { alert(`Downloading soil data failed: ${error.message}`); }
     });

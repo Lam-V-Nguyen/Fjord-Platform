@@ -143,3 +143,9 @@ ul li { margin-top: 15px; }
   border-bottom-right-radius: 10px;
 }
 
+.field-inline {
+  display: flex; align-items: center; gap: 10px; width: 100%; 
+  flex-wrap: wrap; overflow-x: auto;
+}
+.field-inline label, .field-inline button { flex-shrink: 0; }
+.field-inline input { flex: 1 1 0; min-width: 0; }

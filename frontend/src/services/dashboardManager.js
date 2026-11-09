@@ -700,7 +700,7 @@ export class Dashboard {
             cells.push(`<div class="monitor-cell">
                 <span class="m-label">Stratification ΔT</span>
                 <span class="m-icon" style="background:var(--accent-2-soft); color:var(--accent-2)">${icon('thermo', 18)}</span>
-                <span class="m-value">${fmtNumber(strat.value, 1)}<small> °C</small></span>
+                <span class="m-value">${fmtNumber(strat.value, 1)}<small>°C</small></span>
                 <span class="m-sub" style="color:${strat.value >= 3 ? 'var(--sev-medium)' : 'var(--sev-low)'}">${esc(strat.label || '—')}</span>
             </div>`);
         }
@@ -716,7 +716,7 @@ export class Dashboard {
         if (g.wqi?.value !== null && g.wqi?.value !== undefined) renderGauge('gauge-wqi', g.wqi.value, { min: 0, max: 100 });
         else showEmpty('gauge-wqi', 'No WAQ');
         $('monitor-sub').textContent = strat.surface !== undefined && strat.surface !== null
-            ? `Surface ${fmtNumber(strat.surface, 1)} °C · bottom ${fmtNumber(strat.bottom, 1)} °C · ΔT ${fmtNumber(strat.value, 1)} °C`
+            ? `Surface ${fmtNumber(strat.surface, 1)}°C · bottom ${fmtNumber(strat.bottom, 1)}°C · ΔT ${fmtNumber(strat.value, 1)}°C`
             : 'Simulated lake condition';
     }
 

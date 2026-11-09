@@ -187,7 +187,7 @@ export function initMap(mapId = 'map') {
         if (req.requestId === 'waqUpdate' || req.requestId === 'loadsUpdate') return;
         mapContainer.style.cursor = 'crosshair';
         if (req.requestId === 'pickLocation') {
-            html = 'Pick average latitude';
+            html = 'Pick average location of the study area';
         } else if (req.requestId === 'pickPoint') {
             html = 'Select an HYD point';
         } else if (req.requestId === 'pickPath') {
@@ -214,7 +214,7 @@ export function initMap(mapId = 'map') {
         let result = null;
         const req = getPendingRequest(); if (!req) return;
         if (req.requestId === 'pickLocation') {
-            result = Number(e.latlng.lat).toFixed(2);
+            result = [Number(e.latlng.lat).toFixed(2), Number(e.latlng.lng).toFixed(2)];
         } else if (req.requestId === 'pickPoint' || req.requestId === 'pickSource'
             || req.requestId === 'waqPoint' || req.requestId === 'loadsPoint') {
             result = e.latlng;
