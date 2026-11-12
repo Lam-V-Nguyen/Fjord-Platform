@@ -56,10 +56,7 @@ async def upload_data(file: UploadFile = File(...), projectName: str = Form(...)
             functions.safe_remove(file_path); shutil.rmtree(temp_dir)
             if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
         return JSONResponse({"status": "ok", "message": f"File '{file.filename}' uploaded successfully."})
-    except Exception as e:
-        print('/upload_data:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": str(e)})
+    except Exception as e: functions.error('/upload_data', e)
     finally: 
         if file_path.endswith('.zip') and os.path.exists(file_path): functions.safe_remove(file_path)
         temp_dir = os.path.normpath(os.path.join(save_dir, 'temp'))
@@ -141,10 +138,7 @@ async def process_data(request: Request, user=Depends(functions.basic_auth)):
             )
             if data is None: return JSONResponse({'status': 'error', 'message': message})
             return JSONResponse({'content': data, 'status': 'ok', 'message': message})
-    except Exception as e:
-        print('/process_data:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/process_data', e)
 
 @router.post("/initiate_options")
 async def initiate_options(request: Request, user=Depends(functions.basic_auth)):
@@ -173,10 +167,7 @@ async def initiate_options(request: Request, user=Depends(functions.basic_auth))
                         temp_data.append((i, i))
                     data = temp_data
             return JSONResponse({"status": 'ok', "content": data})
-    except Exception as e:
-        print('/initiate_options:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/initiate_options', e)
 
 # Load general dynamic data
 @router.post("/load_general_dynamic")
@@ -250,10 +241,7 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
             new_arr = arr_np[int(temp[2]), :] if arr_np.ndim == 2 else arr_np
             data = {'values': functions.encode_array(fmt(new_arr))}
         return JSONResponse({'status': 'ok', 'content': data})
-    except Exception as e:
-        print('/load_general_dynamic:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/load_general_dynamic', e)
 
 # Load vector dynamic data
 @router.post("/load_vector_dynamic")
@@ -295,10 +283,7 @@ async def load_vector_dynamic(request: Request, user=Depends(functions.basic_aut
             data['min_max'] = [vmin, vmax]
         else: data = functions.vectorComputer(data_ds, value_type, row_idx, time_zone, int(query))
         return JSONResponse({'content': data, 'status': 'ok'})
-    except Exception as e:
-        print('/load_vector_dynamic:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/load_vector_dynamic', e)
 
 # Select meshes based on ids
 @router.post("/select_meshes")
@@ -362,10 +347,7 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
                 vmin, vmax = fnm(np.nanmin(frame)).tolist(), fnm(np.nanmax(frame)).tolist()
                 data = {"values": fnm(frame).tolist(), "local_minmax": [vmin, vmax]}
         return JSONResponse({'content': data, 'status': 'ok'})
-    except Exception as e:
-        print('/select_meshes:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/select_meshes', e)
 
 @router.post("/get_gis_layer")
 async def get_gis_layer(request: Request, user=Depends(functions.basic_auth)):
@@ -390,10 +372,7 @@ async def get_gis_layer(request: Request, user=Depends(functions.basic_auth)):
             for col in gdf.columns:
                 if pd.api.types.is_datetime64_any_dtype(gdf[col]): gdf[col] = gdf[col].astype(str)
         return JSONResponse({"status": 'ok', "content": json.loads(gdf.to_json())})
-    except Exception as e:
-        print('/get_gis_layer:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/get_gis_layer', e)
 
 @router.post("/delete_gis")
 async def delete_gis(request: Request, user=Depends(functions.basic_auth)):
@@ -409,10 +388,7 @@ async def delete_gis(request: Request, user=Depends(functions.basic_auth)):
                 return JSONResponse({"status": 'error', "message": f"Path '{file_name}' does not exist."})
             functions.safe_remove(file_name)
         return JSONResponse({"status": 'ok'})
-    except Exception as e:
-        print('/delete_gis:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/delete_gis', e)
 
 # Working with thermocline plots
 @router.post("/select_thermocline")
@@ -470,10 +446,7 @@ async def select_thermocline(request: Request, user=Depends(functions.basic_auth
                 data_selected = np.array(json.loads(raw_cache))
                 data = [None if np.isnan(x) else functions.numberFormatter(x).tolist() for x in data_selected[int(idx),:]]
             return JSONResponse({"status": 'ok', "content": data})
-    except Exception as e:
-        print('/select_thermocline:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {e}"})
+    except Exception as e: functions.error('/select_thermocline', e)
 
 @router.post("/unstructure_grid_plot")
 async def unstructure_grid_plot(request: Request, user=Depends(functions.basic_auth)):
@@ -490,7 +463,4 @@ async def unstructure_grid_plot(request: Request, user=Depends(functions.basic_a
                 grid = functions.unstructuredGridCreator(ds)
                 if len(grid) == 0: return JSONResponse({"status": 'error', "message": "No Grid loaded. Please check the grid."})
             return JSONResponse({"status": 'ok', "content": json.loads(grid.to_json())})
-    except Exception as e:
-        print('/unstructure_grid_plot:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {e}"})
+    except Exception as e: functions.error('/unstructure_grid_plot', e)

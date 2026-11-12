@@ -26,10 +26,7 @@ async def polygon_generator(request: Request):
         gdf['area'] = round(temp_gdf['geometry'].iloc[0].area, 2)
         result = {"polygon": json.loads(gdf.to_json()), "point": json.loads(point.to_json())}
         return JSONResponse({'status': 'ok', 'content': result})
-    except Exception as e:
-        print('/polygon_generator:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/polygon_generator', e)
 
 @router.post("/init_lakes")
 async def init_lakes(request: Request, user=Depends(functions.basic_auth)):
@@ -44,10 +41,7 @@ async def init_lakes(request: Request, user=Depends(functions.basic_auth)):
         with open(lake_json, 'r') as f:
             result = json.load(f)
         return JSONResponse({'content': result, 'status': 'ok'})
-    except Exception as e:
-        print('/init_lakes:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/init_lakes', e)
     
 @router.post("/load_lakes")
 async def load_lakes(request: Request, user=Depends(functions.basic_auth)):
@@ -78,10 +72,7 @@ async def load_lakes(request: Request, user=Depends(functions.basic_auth)):
         contents = {'lake': json.loads(lake_data.to_json()), 
             'depth': json.loads(depth_data.to_json()) if depth_data is not None else None}
         return JSONResponse({'content': contents})
-    except Exception as e:
-        print('/load_lakes:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/load_lakes', e)
 
 @router.post("/search_lake")
 async def search_lake(request: Request, user=Depends(functions.basic_auth)):
@@ -110,10 +101,7 @@ async def export_depth(request: Request):
         depth['Latitude'], depth['Longitude'], depth['Depth'] = depth.geometry.y, depth.geometry.x, depth['value']
         depth = depth[['Latitude', 'Longitude', 'Depth', 'geometry']]
         return JSONResponse({'status': 'ok', 'content': json.loads(depth.to_json())})
-    except Exception as e:
-        print('/export_depth:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/export_depth', e)
 
 @router.post("/vertex_generator")
 async def vertex_generator(request: Request):
@@ -128,10 +116,7 @@ async def vertex_generator(request: Request):
         vertices = [{"id": i, "coord": Point((coord[0], coord[1]))} for i, coord in enumerate(coords)]
         point = gpd.GeoDataFrame(vertices, geometry="coord", crs="EPSG:4326")
         return JSONResponse({'status': 'ok', 'content': json.loads(point.to_json())})
-    except Exception as e:
-        print('/vertex_generator:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/vertex_generator', e)
 
 @router.post("/vertex_refiner")
 async def vertex_refiner(request: Request):
@@ -176,10 +161,7 @@ async def vertex_refiner(request: Request):
         return JSONResponse({'content': {
             "polygon": json.loads(lake_db.to_json()), "point": json.loads(point.to_json())
         }})
-    except Exception as e:
-        print('/vertex_refiner:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/vertex_refiner', e)
 
 @router.post("/vertex_mover")
 async def vertex_mover(request: Request):
@@ -192,10 +174,7 @@ async def vertex_mover(request: Request):
         gdf = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
         contents = {"polygon": json.loads(gdf.to_json()), "point": json.loads(point.to_json())}
         return JSONResponse({'status': 'ok', 'content': contents})
-    except Exception as e:
-        print('/vertex_mover:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/vertex_mover', e)
 
 @router.post("/vertex_remover")
 async def vertex_remover(request: Request):
@@ -219,10 +198,7 @@ async def vertex_remover(request: Request):
         gdf = gpd.GeoDataFrame(geometry=[poly_new], crs="EPSG:4326")
         contents = {"polygon": json.loads(gdf.to_json()), "point": json.loads(point.to_json())}
         return JSONResponse({'status': 'ok', 'content': contents})
-    except Exception as e:
-        print('/vertex_remover:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/vertex_remover', e)
 
 @router.post("/grid_creator")
 async def grid_creator(request: Request, user=Depends(functions.basic_auth)):
@@ -246,10 +222,7 @@ async def grid_creator(request: Request, user=Depends(functions.basic_auth)):
         points['Lat'], points['Lon'] = points.geometry.y, points.geometry.x
         content = {'point': json.loads(points.to_json()), 'polygon': json.loads(grid.to_json())}
         return JSONResponse({'content': content})
-    except Exception as e:
-        print('/grid_creator:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/grid_creator', e)
 
 @router.post("/grid_ortho")
 async def grid_ortho(request: Request, user=Depends(functions.basic_auth)):
@@ -273,10 +246,7 @@ async def grid_ortho(request: Request, user=Depends(functions.basic_auth)):
             return JSONResponse({"status": "error", "message": "No valid orthogonality values found."})
         min, max = np.min(values), np.max(values)
         return JSONResponse({'status': 'ok', 'content': {"min": min, "max": max, "data": json.loads(gdf.to_json())}})
-    except Exception as e:
-        print('/grid_ortho:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/grid_ortho', e)
 
 @router.post("/check_grid_optimization")
 async def check_grid_optimization(request: Request, user=Depends(functions.basic_auth)):
@@ -344,10 +314,7 @@ async def start_grid_optimization(request: Request, background_tasks: Background
                 polygon, params, project_cache, utm_crs_str
             )
         return JSONResponse({"status": "ok", "message": f"Grid optimization started."})
-    except Exception as e:
-        print('/start_grid_optimization:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/start_grid_optimization', e)
 
 @router.post("/stop_grid_optimization")
 async def stop_grid_optimization(request: Request, user=Depends(functions.basic_auth)):
@@ -362,10 +329,7 @@ async def stop_grid_optimization(request: Request, user=Depends(functions.basic_
             info["stop"], message = True, "Optimization stopped by user. The grid will be created with the current best parameters."
             return JSONResponse({"status": "error", "message": message})
         return JSONResponse({"status": "ok"})
-    except Exception as e:
-        print('/stop_grid_optimization:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/stop_grid_optimization', e)
 
 @router.post("/grid_checker")
 async def grid_checker(request: Request, user=Depends(functions.basic_auth)):
@@ -388,10 +352,7 @@ async def grid_interpolation_upload(file: UploadFile = File(...)):
                 'message': f"Missing required columns: {', '.join(missing_columns)}"}, status_code=400)
         content = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(x=df['Lon'], y=df['Lat']), crs="EPSG:4326")
         return JSONResponse({'status': 'ok', 'content': json.loads(content.to_json())})
-    except Exception as e:
-        print('/grid_interpolation_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/grid_interpolation_upload', e)
     finally: await file.close()
 
 @router.post("/grid_interpolation")
@@ -410,10 +371,7 @@ async def grid_interpolation(request: Request):
         nodes = functions.nodes_from_grid(grid)
         nodes['Depth'] = functions.interpolation_Z(nodes, x_array, y_array, z_array, geo_type='point')
         return JSONResponse({'status': 'ok', 'content': json.loads(nodes.to_json())})
-    except Exception as e:
-        print('/grid_interpolation:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/grid_interpolation', e)
 
 @router.post("/grid_saver")
 async def grid_saver(request: Request, user=Depends(functions.basic_auth)):
@@ -451,11 +409,9 @@ async def grid_saver(request: Request, user=Depends(functions.basic_auth)):
                 if os.path.exists(temp_path): os.remove(temp_path)
         return StreamingResponse(file_iterator(), media_type="application/x-netcdf")
     except Exception as e:
-        print('/grid_saver:\n==============')
-        traceback.print_exc()
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+        functions.error('/grid_saver', e)
 
 @router.post("/grid_rechecker")
 async def grid_rechecker(file: UploadFile = File(...)):
@@ -473,8 +429,5 @@ async def grid_rechecker(file: UploadFile = File(...)):
             if 'NetNode_z' in grid_uds: nodes['Depth'] = grid_uds['NetNode_z'].values
         content = {'grid': json.loads(grid.to_json()), 'nodes': json.loads(nodes.to_json())}
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/grid_rechecker:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/grid_rechecker', e)
     finally: await file.close()

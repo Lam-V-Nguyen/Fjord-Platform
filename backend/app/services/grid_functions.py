@@ -133,9 +133,7 @@ def meshkernel_to_Ugrid(mk: MeshKernel, crs: str):
     if crs_obj.is_geographic: grid_mapping_name = 'latitude_longitude'
     else: grid_mapping_name = 'transverse_mercator'
     ds["crs"] = xr.DataArray(0,
-        attrs={
-            "grid_mapping_name": grid_mapping_name, "crs_wkt": crs_obj.to_wkt(),
-        }
+        attrs={ "grid_mapping_name": grid_mapping_name, "crs_wkt": crs_obj.to_wkt() }
     )
     ds["mesh2d_edge_x"] = (("mesh2d_nEdges",), da.from_array(edge_x))
     ds["mesh2d_edge_y"] = (("mesh2d_nEdges",), da.from_array(edge_y))

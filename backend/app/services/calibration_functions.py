@@ -17,7 +17,18 @@ from optuna.importance import MeanDecreaseImpurityImportanceEvaluator
 from sklearn.ensemble import RandomForestRegressor
 warnings.filterwarnings('ignore', category=UserWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+
+HIS_VARS_TO_KEEP = {"wrihis_temperature", "wrihis_waterlevel_s1", "wrihis_zcor"}
+SCENARIO_MDU, TARGET_METHODS = "FlowFM.mdu", ("RMSE", "R2")
+SURROGATE_MODELS, COMPLETED_FLAG = ("gaussian-process",), ".completed"
+FAILED_CASES_FILE, SCENARIO_OUTPUT_DIR = "failed_cases.json", "output"
+STALE_RESULTS = (
+    "scenarios", "summary", "model", "calibration_summary.csv",
+    FAILED_CASES_FILE, "optuna.csv", "optuna_importance.csv",
+)
 OVERRIDES_FILE, FEATURES_FILE, FACTOR_SUFFIX = "base_overrides.json", "features.json", "_factor"
 _ERROR_RE = re.compile(r"\*\*\s*error|forrtl:|^\s*error\s*:", re.IGNORECASE)
 _INDEXED = re.compile(r"^(?P<key>[A-Za-z0-9_]+)\[(?P<i>\d+)\]$")
@@ -25,6 +36,62 @@ INTERVAL_KEYS = ("HisInterval", "MapInterval", "WaqInterval", "ClassMapInterval"
 
 
 # MDU helpers
+def find_mdu(input_dir: str) -> str:
+    files = sorted(f for f in os.listdir(input_dir) if f.lower().endswith(".mdu"))
+    if not files: raise FileNotFoundError(f"MDU file not found in {input_dir}")
+    return os.path.join(input_dir, files[0])
+
+def load_overrides(calibration_dir: str) -> dict:
+    path = os.path.join(calibration_dir, OVERRIDES_FILE)
+    if not os.path.exists(path): return {}
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+    return data.get("mdu", {}) if isinstance(data, dict) else {}
+
+def modify_mdu_key(mdu_lines: list, key: str, value: str = '', max_length=None) -> list:
+    mdu, k = mdu_lines.copy(), key.lower()
+    for i, line in enumerate(mdu):
+        p = _split_line(line)
+        if not p or p[0].strip().lower() != k: continue
+        key_part, value_part, has_comment, comment = p
+        nl = '\n' if line.endswith('\n') else ''
+        width = max((max_length - 2) if max_length else len(value_part) - 2, len(value))
+        new = f"{key_part}= {value.ljust(width)}"
+        if has_comment: new += f" #{comment.rstrip(chr(10)).rstrip(chr(13))}"
+        mdu[i] = new.rstrip() + nl
+        return mdu
+
+def _get_mdu_tokens(mdu_content: list, key: str) -> list:
+    return _get_values_from_mdu(mdu_content, key).split()
+
+def apply_overrides(mdu_lines: list, overrides: dict) -> list:
+    lines = mdu_lines
+    for key, value in overrides.items():
+        lines = modify_mdu_key(lines, key, str(value))
+    if any(k.lower() in ("tstart", "tstop") for k in overrides):
+        for k in INTERVAL_KEYS:
+            toks = _get_mdu_tokens(lines, k)
+            if len(toks) > 1: lines = modify_mdu_key(lines, k, toks[0])
+    return lines
+
+def _mdu_number(token) -> float:
+    return float(str(token).strip().lower().replace("d", "e"))
+
+def _get_values_from_mdu(mdu_content: list, key: str):
+    k = key.lower()
+    for line in mdu_content:
+        p = _split_line(line)
+        if p and p[0].strip().lower() == k: return p[1].strip()
+    return ''
+
+def mdu_time_info(mdu_lines: list) -> dict:
+    ref = datetime.strptime(_get_values_from_mdu(mdu_lines, 'RefDate')[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
+    unit = (_get_values_from_mdu(mdu_lines, 'Tunit') or 'S').upper()[:1]
+    sec = {'S': 1, 'M': 60, 'H': 3600, 'D': 86400}.get(unit, 1)
+    start = ref + timedelta(seconds=_mdu_number(_get_values_from_mdu(mdu_lines, 'TStart')) * sec)
+    stop = ref + timedelta(seconds=_mdu_number(_get_values_from_mdu(mdu_lines, 'TStop')) * sec)
+    return {"ref": ref, "unit": unit, "unit_seconds": sec, "start": start, "stop": stop}
+
 def get_all_mdu_keys(mdu_lines: list, include_section: bool = False) -> list:
     """
     Return every key of an MDU file as [key, value, comment] (or [section, key, value, comment]).
@@ -57,110 +124,50 @@ def get_all_mdu_keys(mdu_lines: list, include_section: bool = False) -> list:
         rows.append(row); last = row
     return rows
 
-def mdu_number(token) -> float:
-    return float(str(token).strip().lower().replace("d", "e"))
-
-def fmt_mdu(value) -> str:
-    if isinstance(value, (int, np.integer)) and not isinstance(value, bool): return str(int(value))
-    try: v = float(value)
-    except (TypeError, ValueError): return str(value)
-    return f"{v:.5e}"
-
-def find_mdu(input_dir: str) -> str:
-    files = sorted(f for f in os.listdir(input_dir) if f.lower().endswith(".mdu"))
-    if not files: raise FileNotFoundError(f"MDU file not found in {input_dir}")
-    return os.path.join(input_dir, files[0])
-
-def read_mdu(path: str) -> list:
-    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-        return f.readlines()
-
-def _split_line(line: str):
-    if '=' not in line or line.lstrip().startswith(('#', '[')): return None
-    key_part, rest = line.split('=', 1)
-    value_part, sep, comment = rest.partition('#')
-    return key_part, value_part, bool(sep), comment
-
-def has_mdu_key(mdu_lines: list, key: str) -> bool:
-    k = key.lower()
-    for line in mdu_lines:
-        p = _split_line(line)
-        if p and p[0].strip().lower() == k: return True
-    return False
-
-def get_values_from_mdu(mdu_content: list, key: str):
-    k = key.lower()
-    for line in mdu_content:
-        p = _split_line(line)
-        if p and p[0].strip().lower() == k: return p[1].strip()
-    return ''
-
-def get_mdu_tokens(mdu_content: list, key: str) -> list:
-    return get_values_from_mdu(mdu_content, key).split()
-
-def modify_mdu_key(mdu_lines: list, key: str, value: str = '', max_length=None) -> list:
-    mdu, k = mdu_lines.copy(), key.lower()
-    for i, line in enumerate(mdu):
-        p = _split_line(line)
-        if not p or p[0].strip().lower() != k: continue
-        key_part, value_part, has_comment, comment = p
-        nl = '\n' if line.endswith('\n') else ''
-        width = max((max_length - 2) if max_length else len(value_part) - 2, len(value))
-        new = f"{key_part}= {value.ljust(width)}"
-        if has_comment: new += f" #{comment.rstrip(chr(10)).rstrip(chr(13))}"
-        mdu[i] = new.rstrip() + nl
-        return mdu
-    raise KeyError(f"Key '{key}' not found in the MDU file")
-
-def mdu_time_info(mdu_lines: list) -> dict:
-    ref = datetime.strptime(get_values_from_mdu(mdu_lines, 'RefDate')[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
-    unit = (get_values_from_mdu(mdu_lines, 'Tunit') or 'S').upper()[:1]
-    sec = {'S': 1, 'M': 60, 'H': 3600, 'D': 86400}.get(unit, 1)
-    start = ref + timedelta(seconds=mdu_number(get_values_from_mdu(mdu_lines, 'TStart')) * sec)
-    stop = ref + timedelta(seconds=mdu_number(get_values_from_mdu(mdu_lines, 'TStop')) * sec)
-    return {"ref": ref, "unit": unit, "unit_seconds": sec, "start": start, "stop": stop}
-
-def to_mdu_time(value, mdu_lines: list, time_zone: str) -> str:
-    s = str(value).strip()
-    try: mdu_number(s); return s
-    except ValueError: pass
-    info = mdu_time_info(mdu_lines)
-    t = functions.local_to_utc(s, time_zone)
-    if t.tzinfo is None: t = t.replace(tzinfo=timezone.utc)
-    return f"{(t - info['ref']).total_seconds() / info['unit_seconds']:.0f}."
-
-def hyd_his(project_name: str):
-    d = os.path.join(PROJECT_ROOT, project_name, "output", "HYD")
-    hits = sorted(glob.glob(os.path.join(d, "*_his.zarr"))) + sorted(glob.glob(os.path.join(d, "*_his.nc")))
-    return hits[0] if hits else None
+def clip_data(df: pd.DataFrame, time_column:str, start:str=None, end:str=None) -> dict:
+    if df.empty: return {}
+    content = {}
+    if not start is None and not end is None:
+        df = df[(df[time_column] >= start) & (df[time_column] <= end)]
+    if df.empty: return {}
+    start_time, end_time = df[time_column].iloc[0], df[time_column].iloc[-1]
+    content['start'], content['end'] = start_time, end_time
+    df = df.replace([np.inf, -np.inf], np.nan)
+    content['data'] = df.astype(object).where(df.notna(), None).to_numpy().tolist()
+    return content
 
 def measured_utc(obs_data, time_zone: str, time_col: str = "Time") -> pd.DataFrame:
     df = pd.DataFrame(data=obs_data, columns=[time_col, "temperature", "depth"])
     df[time_col] = functions.local_to_utc(df[time_col], time_zone)
     return df.dropna(subset=[time_col])
 
-def _first_profile(measured_utc: pd.DataFrame, after, window_hours: float = 12.0, time_col: str = "Time"):
-    df = measured_utc.copy()
-    df["temperature"] = pd.to_numeric(df["temperature"], errors="coerce")
-    df["depth"] = pd.to_numeric(df["depth"], errors="coerce")
-    df = df.dropna(subset=[time_col, "temperature", "depth"]).sort_values(time_col)
-    if after is not None: df = df[df[time_col] >= after]
-    if df.empty: return None, pd.DataFrame()
-    t0 = df[time_col].iloc[0]
-    w = df[df[time_col] <= t0 + pd.Timedelta(hours=window_hours)].copy()
-    w["d"] = (w["depth"] * 2).round() / 2
-    prof = w.groupby("d", as_index=False)["temperature"].mean().rename(columns={"d": "depth"}).sort_values("depth")
-    return t0, prof
+def read_mdu(path: str) -> list:
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        return f.readlines()
 
-def get_station_from_his_file(his_path: str) -> list:
-    if not his_path or not os.path.exists(his_path): return []
-    ds = xr.open_zarr(his_path) if his_path.endswith(".zarr") else xr.open_dataset(his_path)
-    with ds:
-        names = [
-            n.decode('utf-8').strip() if isinstance(n, bytes) else str(n).strip()
-            for n in ds['station_name'].values
-        ]
-    return names
+def _profile_mean(prof: pd.DataFrame) -> float:
+    if len(prof) == 1: return float(prof["temperature"].iloc[0])
+    d, t = prof["depth"].to_numpy(float), prof["temperature"].to_numpy(float)
+    if d[-1] <= d[0]: return float(t.mean())
+    return float(np.sum((t[1:] + t[:-1]) / 2 * np.diff(d)) / (d[-1] - d[0]))
+
+def _load_overrides_display(calibration_dir: str) -> list:
+    path = os.path.join(calibration_dir, OVERRIDES_FILE)
+    if not os.path.exists(path): return []
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+    return data.get("display", []) if isinstance(data, dict) else []
+
+def _read_obs_stations(input_dir: str, mdu_lines: list) -> list:
+    out = []
+    for name in _get_values_from_mdu(mdu_lines, 'ObsFile').split():
+        path = os.path.join(input_dir, name)
+        if not os.path.exists(path): continue
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                parts = line.strip().split(None, 2)
+                if len(parts) == 3: out.append(parts[2].strip().strip("'\""))
+    return out
 
 def read_and_interpolate_his(his_path: str, station_name: str, depths: list, time_col="Time") -> pd.DataFrame:
     try:
@@ -192,32 +199,14 @@ def read_and_interpolate_his(his_path: str, station_name: str, depths: list, tim
         logging.warning(f"Read_and_interpolate_his({his_path}, {station_name}): {e}")
         return pd.DataFrame()
 
-def load_overrides_display(calibration_dir: str) -> list:
-    path = os.path.join(calibration_dir, OVERRIDES_FILE)
-    if not os.path.exists(path): return []
-    with open(path, encoding='utf-8') as f:
-        data = json.load(f)
-    return data.get("display", []) if isinstance(data, dict) else []
-
-def read_obs_stations(input_dir: str, mdu_lines: list) -> list:
-    out = []
-    for name in get_values_from_mdu(mdu_lines, 'ObsFile').split():
-        path = os.path.join(input_dir, name)
-        if not os.path.exists(path): continue
-        with open(path, encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                parts = line.strip().split(None, 2)
-                if len(parts) == 3: out.append(parts[2].strip().strip("'\""))
-    return out
-
 def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFrame, station: str, time_zone: str) -> dict:
     input_dir = os.path.join(project_dir, "input")
     calibration_dir = os.path.join(project_dir, "calibration")
     lines = read_mdu(find_mdu(input_dir))
     info = mdu_time_info(lines)
-    g = lambda k: get_values_from_mdu(lines, k)
+    g = lambda k: _get_values_from_mdu(lines, k)
     def num(k, d=None):
-        try: return mdu_number(g(k).split()[0]) if g(k) else d
+        try: return _mdu_number(g(k).split()[0]) if g(k) else d
         except ValueError: return d
     init_t, kmx, dtuser = num('InitialTemperature'), int(num('Kmx', 0) or 0), num('DtUser')
     model = {
@@ -233,7 +222,7 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
     t0, prof = _first_profile(measured_utc, start_utc)
     warns, suggestions, obs = [], [], None
     if t0 is not None and not prof.empty:
-        mean_t = profile_mean(prof)
+        mean_t = _profile_mean(prof)
         gap_days = (t0 - start_utc).total_seconds() / 86400
         obs = {"time": functions.utc_to_local(pd.Series([t0]), time_zone)[0], "gap_days": round(gap_days, 2), 
             "mean": round(mean_t, 3), "min": float(prof["temperature"].min()), 
@@ -274,7 +263,7 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
         depth_hint = f" (observations go down to {obs['max_depth']:.0f} m)" if obs else ""
         warns.append(f"Kmx = {kmx} vertical layers{depth_hint}: too coarse for a stratified lake – "
             "numerical mixing carries surface heat downwards.")
-        suggestions.append({"key": "Kmx", "value": "30", "note": "More vertical layers (longer run time)"})
+        suggestions.append({"key": "Kmx", "value": "25", "note": "More vertical layers (longer run time)"})
     if model["restartfile"]:
         warns.append(f"RestartFile = {model['restartfile']} is removed in calibration runs – "
             "initial conditions then come from InitialTemperature only.")
@@ -297,8 +286,24 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
             existing = {"his": os.path.basename(his[0]),
                 "time": functions.utc_to_local(pd.Series([sim.index[i]]), time_zone)[0], "rows": rows}
     return {"model": model, "obs": obs, "existing_run": existing, "warnings": warns,
-        "suggestions": suggestions, "overrides": load_overrides_display(calibration_dir),
-        "stations": read_obs_stations(input_dir, lines)}
+        "suggestions": suggestions, "overrides": _load_overrides_display(calibration_dir),
+        "stations": _read_obs_stations(input_dir, lines)}
+
+def has_mdu_key(mdu_lines: list, key: str) -> bool:
+    k = key.lower()
+    for line in mdu_lines:
+        p = _split_line(line)
+        if p and p[0].strip().lower() == k: return True
+    return False
+
+def _to_mdu_time(value, mdu_lines: list, time_zone: str) -> str:
+    s = str(value).strip()
+    try: _mdu_number(s); return s
+    except ValueError: pass
+    info = mdu_time_info(mdu_lines)
+    t = functions.local_to_utc(s, time_zone)
+    if t.tzinfo is None: t = t.replace(tzinfo=timezone.utc)
+    return f"{(t - info['ref']).total_seconds() / info['unit_seconds']:.0f}."
 
 def save_overrides(project_dir: str, rows: list, time_zone: str) -> dict:
     input_dir = os.path.join(project_dir, "input")
@@ -314,10 +319,10 @@ def save_overrides(project_dir: str, rows: list, time_zone: str) -> dict:
         if not has_mdu_key(lines, key): errors.append(f"'{key}' is not in the MDU file"); continue
         if value == "": errors.append(f"'{key}' has no value"); continue
         try:
-            if key.lower() in ("tstart", "tstop"): mdu_value = to_mdu_time(value, lines, time_zone)
+            if key.lower() in ("tstart", "tstop"): mdu_value = _to_mdu_time(value, lines, time_zone)
             else:
                 if key.lower() not in ("restartfile", "inifieldfile"): 
-                    [mdu_number(t) for t in value.split()]
+                    [_mdu_number(t) for t in value.split()]
                 mdu_value = value
         except Exception as e: errors.append(f"'{key}' = '{value}': {e}"); continue
         mdu[key] = mdu_value; display.append([key, value, note])
@@ -326,6 +331,36 @@ def save_overrides(project_dir: str, rows: list, time_zone: str) -> dict:
         json.dump({"mdu": mdu, "display": display}, f, indent=2, ensure_ascii=False)
     return {"status": "ok", "message": f"Saved {len(mdu)} override(s). They are applied to the baseline run, "
         "every calibration scenario and the final calibrated scenario."}
+
+def scenario_run_status(scenario_dir: str) -> dict:
+    """Which calibration scenarios finished (COMPLETED_FLAG) and which still have to be run."""
+    ids = sorted(int(x) for x in os.listdir(scenario_dir)
+        if x.isdigit() and os.path.isdir(os.path.join(scenario_dir, x))) if os.path.isdir(scenario_dir) else []
+    done = [i for i in ids if os.path.exists(os.path.join(scenario_dir, str(i), COMPLETED_FLAG))]
+    done_set = set(done)
+    pending = [i for i in ids if i not in done_set]
+    return {"total": len(ids), "first": ids[0] if ids else None, "last": ids[-1] if ids else None,
+        "done": done, "pending": pending, "next": pending[0] if pending else None}
+
+def find_his(case_dir: str):
+    for pat in ("output/*_his.nc", "DFM_OUTPUT*/*_his.nc", "*/*_his.nc"):
+        hits = sorted(glob.glob(os.path.join(case_dir, pat)))
+        if hits: return hits[0]
+    return None
+
+def calibration_data_status(project_dir: str) -> dict:
+    calibration_dir = os.path.join(project_dir, "calibration")
+    mtime = lambda p: datetime.fromtimestamp(os.path.getmtime(p)).strftime("%Y-%m-%d %H:%M")
+    ov_path = os.path.join(calibration_dir, OVERRIDES_FILE)
+    overrides = load_overrides(calibration_dir) if os.path.exists(ov_path) else {}
+    case_dir = os.path.join(calibration_dir, "baseline", "scenarios", "0")
+    his = find_his(case_dir) if os.path.isdir(case_dir) else None
+    return {
+        "overrides": {"exists": bool(overrides), "count": len(overrides), "keys": list(overrides),
+            "modified": mtime(ov_path) if overrides else None},
+        "baseline": {"exists": his is not None, "case_exists": os.path.isdir(case_dir),
+            "his": os.path.basename(his) if his else None, "modified": mtime(his) if his else None},
+    }
 
 def copy_model_inputs(src_dir: str, dst_dir: str) -> None:
     os.makedirs(dst_dir, exist_ok=True)
@@ -336,17 +371,7 @@ def copy_model_inputs(src_dir: str, dst_dir: str) -> None:
         elif os.path.isdir(s) and not f.lower().startswith(('output', 'dfm_output', 'dfm_delwaq')):
             shutil.copytree(s, os.path.join(dst_dir, f), dirs_exist_ok=True)
 
-def apply_overrides(mdu_lines: list, overrides: dict) -> list:
-    lines = mdu_lines
-    for key, value in overrides.items():
-        lines = modify_mdu_key(lines, key, str(value))
-    if any(k.lower() in ("tstart", "tstop") for k in overrides):
-        for k in INTERVAL_KEYS:
-            toks = get_mdu_tokens(lines, k)
-            if len(toks) > 1: lines = modify_mdu_key(lines, k, toks[0])
-    return lines
-
-def calibration_output_settings(mdu_lines: list, his_interval: str, write_map: bool) -> list:
+def _calibration_output_settings(mdu_lines: list, his_interval: str, write_map: bool) -> list:
     lines = mdu_lines
     for key, val in (
         ('WaqInterval', '0'), ('RstInterval', '0'), ('RestartFile', ''),
@@ -363,62 +388,45 @@ def calibration_output_settings(mdu_lines: list, his_interval: str, write_map: b
     return lines
 
 # Validation parameters
-def param_target(name: str):
+def _param_target(name: str):
     if name.endswith(FACTOR_SUFFIX): return name[:-len(FACTOR_SUFFIX)], "factor", None
     m = _INDEXED.match(name)
     if m: return m.group("key"), "index", int(m.group("i"))
     return name, "value", None
 
+def _fmt_mdu(value) -> str:
+    if isinstance(value, (int, np.integer)) and not isinstance(value, bool): return str(int(value))
+    try: v = float(value)
+    except (TypeError, ValueError): return str(value)
+    return f"{v:.5e}"
+
 def apply_param(mdu_lines: list, base_lines: list, name: str, value) -> list:
-    key, mode, idx = param_target(name)
-    base = get_mdu_tokens(base_lines, key)
+    key, mode, idx = _param_target(name)
+    base = _get_mdu_tokens(base_lines, key)
     if mode == "factor":
         if not base: raise KeyError(f"Key '{key}' has no value to scale")
-        new = " ".join(fmt_mdu(mdu_number(b) * float(value)) for b in base)
+        new = " ".join(_fmt_mdu(_mdu_number(b) * float(value)) for b in base)
     elif mode == "index":
         if idx >= len(base): raise KeyError(f"Key '{key}' has only {len(base)} value(s); index {idx} is invalid")
-        toks = list(base); toks[idx] = fmt_mdu(value); new = " ".join(toks)
-    else: new = " ".join([fmt_mdu(value)] + base[1:]) if len(base) > 1 else fmt_mdu(value)
+        toks = list(base); toks[idx] = _fmt_mdu(value); new = " ".join(toks)
+    else: new = " ".join([_fmt_mdu(value)] + base[1:]) if len(base) > 1 else _fmt_mdu(value)
     return modify_mdu_key(mdu_lines, key, new)
 
 def _prepare_case_mdu(base_lines: list, overrides: dict, params: dict, his_interval: str, write_map: bool) -> list:
-    lines = apply_overrides(base_lines, overrides)
-    lines = calibration_output_settings(lines, his_interval, write_map)
+    ov_lines = apply_overrides(base_lines, overrides)            # Key_factor / Key[i] act on the overridden values
+    lines = _calibration_output_settings(ov_lines, his_interval, write_map)
     for p_name, p_val in params.items():
-        lines = apply_param(lines, base_lines, p_name, p_val)
+        lines = apply_param(lines, ov_lines, p_name, p_val)
     return lines
-
-def load_overrides(calibration_dir: str) -> dict:
-    path = os.path.join(calibration_dir, OVERRIDES_FILE)
-    if not os.path.exists(path): return {}
-    with open(path, encoding='utf-8') as f:
-        data = json.load(f)
-    return data.get("mdu", {}) if isinstance(data, dict) else {}
-
-def calibration_data_status(project_dir: str) -> dict:
-    """What already exists for this project: saved overrides and baseline results."""
-    calibration_dir = os.path.join(project_dir, "calibration")
-    mtime = lambda p: datetime.fromtimestamp(os.path.getmtime(p)).strftime("%Y-%m-%d %H:%M")
-    ov_path = os.path.join(calibration_dir, OVERRIDES_FILE)
-    overrides = load_overrides(calibration_dir) if os.path.exists(ov_path) else {}
-    case_dir = os.path.join(calibration_dir, "baseline", "scenarios", "0")
-    his = find_his(case_dir) if os.path.isdir(case_dir) else None
-    return {
-        "overrides": {"exists": bool(overrides), "count": len(overrides), "keys": list(overrides),
-            "modified": mtime(ov_path) if overrides else None},
-        "baseline": {"exists": his is not None, "case_exists": os.path.isdir(case_dir),
-            "his": os.path.basename(his) if his else None, "modified": mtime(his) if his else None},
-    }
 
 def create_baseline(directory: str) -> str:
     calibration_dir = os.path.join(directory, "calibration")
     input_dir = os.path.join(directory, "input")
-    mdu_path = find_mdu(input_dir)
-    base_lines = read_mdu(mdu_path)
+    mdu_path = find_mdu(input_dir); base_lines = read_mdu(mdu_path)
     case_dir = os.path.join(calibration_dir, "baseline", "scenarios", "0")
     if os.path.exists(case_dir): shutil.rmtree(case_dir)
     copy_model_inputs(input_dir, case_dir)
-    his_interval = (get_mdu_tokens(base_lines, 'HisInterval') or ['21600'])[0]
+    his_interval = (_get_mdu_tokens(base_lines, 'HisInterval') or ['21600'])[0]
     lines = _prepare_case_mdu(base_lines, load_overrides(calibration_dir), {}, his_interval, write_map=False)
     with open(os.path.join(case_dir, os.path.basename(mdu_path)), 'w', encoding='utf-8') as f:
         f.writelines(lines)
@@ -429,8 +437,7 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
         fc = functions.append_log
         bat_path = os.path.normpath(os.path.join(DELFT_PATH, "x64/dflowfm/scripts/run_dflowfm.bat"))
         if not os.path.exists(bat_path):
-            processes[key]["status"] = "error"
-            processes[key]["message"] = "Executable file not found"
+            processes[key]["status"], processes[key]["message"] = "error", "Executable file not found"
             fc(log_path, f"[ERROR] Executable file not found: {bat_path}")
             return
         percent_re = re.compile(r'(?P<percent>\d{1,3}(?:\.\d+)?)\s*%')
@@ -453,6 +460,8 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
                 processes[key]["message"] = error_message
                 fc(log_path, f"[ERROR] {error_message}")
                 error_cases.append(mdu_path); continue
+            flag = os.path.join(c_dir, COMPLETED_FLAG)
+            if os.path.exists(flag): os.remove(flag)
             command = ["cmd.exe", "/c", bat_path, "--autostartstop", mdu_path]
             process, error_detected = None, False
             try:
@@ -473,8 +482,7 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
                         fc(log_path, res["message"])
                         break
                     match_pct = percent_re.search(line)
-                    if match_pct:
-                        processes[key]["progress"] = float(match_pct.group("percent"))
+                    if match_pct: processes[key]["progress"] = float(match_pct.group("percent"))
                 return_code = process.wait()
             except Exception as e:
                 error_detected, return_code = True, -1
@@ -487,6 +495,8 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
             fc(log_path, "=" * 80)
             if return_code == 0 and not error_detected:
                 correct_cases.append(mdu_path)
+                with open(flag, 'w', encoding='utf-8') as f:
+                    f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                 fc(log_path, f"[COMPLETED] {mdu_path}")
             else:
                 error_cases.append(mdu_path)
@@ -507,9 +517,145 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
         processes[key]["message"] = f"Simulations completed: {len(correct_cases)} ok, {len(error_cases)} failed."
     except Exception as e:
         if processes.get(key):
-            processes[key]["status"] = "failed"
-            processes[key]["message"] = f"Internal error: {e}"
+            processes[key]["status"], processes[key]["message"] = "failed", f"Internal error: {e}"
         fc(log_path, f"[INTERNAL ERROR] {e}")
+
+def _set_state(processes: dict, key: str, message: str = None, 
+    progress: float = None, status: str = None, history: bool = True) -> None:
+    info = processes.get(key)
+    if info is None: return
+    if status is not None: info["status"] = status
+    if progress is not None: info["progress"] = round(float(progress), 1)
+    if message is not None:
+        info["message"] = message
+        if history: info["history"] = info.get("history", "") + message + "\n"
+
+def _normalize_params(values) -> dict:
+    out = {}
+    for v in values:
+        name, lo, hi = v[0], float(v[1]), float(v[2])
+        scale = (v[3] if len(v) > 3 and v[3] else "linear").lower()
+        if not (np.isfinite(lo) and np.isfinite(hi)) or lo == hi:
+            raise ValueError(f"Invalid bounds for '{name}': lower must be smaller than upper.")
+        if lo > hi: lo, hi = hi, lo
+        if scale == "log" and lo <= 0:
+            raise ValueError(f"Parameter '{name}': log scale needs a lower bound > 0 (got {lo})")
+        out[name] = {"bounds": [lo, hi], "scale": scale}
+    if not out: raise ValueError("No parameter selected for calibration.")
+    return out
+
+def _find_mdu_file(input_dir: str):
+    if not os.path.isdir(input_dir): return None
+    mdu_files = sorted(
+        f for f in os.listdir(input_dir)
+        if f.lower().endswith('.mdu') and os.path.isfile(os.path.join(input_dir, f))
+    )
+    return os.path.join(input_dir, mdu_files[0]) if mdu_files else None
+
+def _validate_params(base_lines: list, names) -> list:
+    errors = []
+    for n in names:
+        key, mode, idx = _param_target(n)
+        if not has_mdu_key(base_lines, key):
+            errors.append(f"'{key}' is not in the MDU file"); continue
+        toks = _get_mdu_tokens(base_lines, key)
+        if mode == "index" and idx >= len(toks):
+            errors.append(f"'{key}' has {len(toks)} value(s): index [{idx}] is invalid")
+        if mode == "factor" and not toks: errors.append(f"'{key}' has no value to scale")
+    return errors
+
+def _clean_previous_results(calibration_dir: str) -> list:
+    removed = []
+    for name in STALE_RESULTS:
+        path = os.path.join(calibration_dir, name)
+        if os.path.isdir(path): shutil.rmtree(path); removed.append(name)
+        elif os.path.isfile(path): os.remove(path); removed.append(name)
+    return removed
+
+def _param_spec(spec):
+    if isinstance(spec, dict):
+        lo, hi = spec["bounds"]; return float(lo), float(hi), spec.get("scale") == "log"
+    return float(spec[0]), float(spec[1]), False
+
+def _generate_lhs_samples(parameters_range, n_samples, seed=42) -> pd.DataFrame:
+    param_names = list(parameters_range.keys())
+    specs = [_param_spec(parameters_range[p]) for p in param_names]
+    sampler = qmc.LatinHypercube(d=len(param_names), seed=seed, optimization='random-cd')
+    u = sampler.random(n=n_samples); cols = {}
+    for j, (p, (lo, hi, log)) in enumerate(zip(param_names, specs)):
+        cols[p] = 10 ** (np.log10(lo) + u[:, j] * (np.log10(hi) - np.log10(lo))) if log else lo + u[:, j] * (hi - lo)
+    return pd.DataFrame(cols, columns=param_names, index=np.arange(1, n_samples + 1))
+
+def _copy_input_tree(src_dir: str, dst_dir: str, exclude_mdu: bool = True) -> None:
+    """Copy the model input (including sub-folders), skipping output folders and optionally MDU files."""
+    src_norm = os.path.normcase(os.path.normpath(src_dir))
+    def ignore(path, names):
+        if os.path.normcase(os.path.normpath(path)) != src_norm: return set()
+        skipped = set()
+        for n in names:
+            upper = n.upper()
+            if upper.startswith(('DFM_OUTPUT', 'DFM_DELWAQ')) or n.lower() == SCENARIO_OUTPUT_DIR: skipped.add(n)
+            elif exclude_mdu and n.lower().endswith('.mdu'): skipped.add(n)
+        return skipped
+    shutil.copytree(src_dir, dst_dir, ignore=ignore, dirs_exist_ok=True)
+
+def run_iteration(directory: str, processes: dict, key_process:str, n_samples:int, params:list) -> None:
+    try:
+        _set_state(processes, key_process, "Preparing data for calibration ...", 0.0, "running")
+        calibration_dir = os.path.join(directory, "calibration")
+        scenario_dir = os.path.join(calibration_dir, "scenarios")
+        os.makedirs(calibration_dir, exist_ok=True)
+        params = _normalize_params(params)
+        # Read MDU file
+        input_dir = os.path.join(directory, "input")
+        mdu_path = _find_mdu_file(input_dir)
+        if mdu_path is None:
+            _set_state(processes, key_process, f"MDU file not found in project.", status="failed")
+            return
+        base_lines = read_mdu(mdu_path)
+        # Overrides of the initial check (same as the baseline run)
+        overrides = load_overrides(calibration_dir)
+        ov_lines = apply_overrides(base_lines, overrides)
+        errors = _validate_params(ov_lines, params)
+        if errors:
+            _set_state(processes, key_process, "Invalid parameter(s): " + "; ".join(errors) +
+                ". Please add the key(s) to the MDU file first.", status="failed")
+            return
+        clash = [n for n in params if _param_target(n)[0].lower() in {k.lower() for k in overrides}]
+        if clash:
+            _set_state(processes, key_process, "[WARNING] Parameter(s) also set in the overrides: " + ", ".join(clash) +
+                " - the sampled value replaces the override (Key_factor scales the overridden value).")
+        if overrides: _set_state(processes, key_process, f"Applying base overrides: {overrides}")
+        # Remove results of a previous resampling (they do not match the new samples)
+        removed = _clean_previous_results(calibration_dir)
+        if removed: _set_state(processes, key_process, "Removed previous results: " + ", ".join(removed))
+        os.makedirs(scenario_dir, exist_ok=True)
+        # Store parameters
+        with open(os.path.join(calibration_dir, 'parameters.json'), 'w', encoding='utf-8') as f:
+            json.dump(params, f, indent=4)
+        # Latin Hypercube Sampling
+        _set_state(processes, key_process, "Creating parameter samples using Latin Hypercube Sampling "
+            "(log10 for log-scale parameters) ...", 0.0)
+        df_params = _generate_lhs_samples(parameters_range=params, n_samples=n_samples)
+        df_params.to_csv(os.path.join(calibration_dir, 'parameter_samples.csv'))
+        _set_state(processes, key_process, "Parameter samples created.", 100.0)
+        # Create scenarios: overrides + calibration output settings + sampled parameters
+        his_interval = (_get_mdu_tokens(base_lines, 'HisInterval') or ['21600'])[0]
+        mdu_name = os.path.basename(mdu_path)
+        _set_state(processes, key_process, f"Creating {n_samples} scenarios ...\n", 0.0)
+        for idx, (case_id, row) in enumerate(df_params.iterrows(), start=1):
+            case_dir = os.path.join(scenario_dir, str(case_id))
+            _copy_input_tree(input_dir, case_dir, exclude_mdu=True)
+            mdu_case = _prepare_case_mdu(base_lines, overrides, row.to_dict(), his_interval, write_map=(case_id == 1))
+            with open(os.path.join(case_dir, mdu_name), 'w', encoding='utf-8') as f:
+                f.writelines(mdu_case)
+            keys = dict.fromkeys(_param_target(k)[0] for k in params)
+            _set_state(processes, key_process, f"Scenario {case_id} MDU: " +
+                ", ".join(f"{k} = {_get_values_from_mdu(mdu_case, k)}" for k in keys), progress=idx / n_samples * 100)
+        _set_state(processes, key_process, f"\nSuccessfully created {n_samples} resamples.", 100.0, "finished")
+    except Exception as e:
+        logger.exception("run_iteration failed")
+        _set_state(processes, key_process, f"Error: {e}", status="failed")
 
 def _interpolate_profile_to_depths(group: pd.DataFrame, depths: list, time_col="Time") -> pd.DataFrame:
     g = group.sort_values("depth").drop_duplicates("depth").reset_index(drop=True)
@@ -534,9 +680,6 @@ def split_temp_from_depth(df:pd.DataFrame, depths:list, time_col:str, upper:floa
         df["temperature"] = pd.to_numeric(df["temperature"], errors='coerce')
         df["depth"] = pd.to_numeric(df["depth"], errors='coerce')
         df = df[[time_col, "temperature", "depth"]].dropna().sort_values(time_col, kind="stable").copy()
-        # New cast when the sensor jumps back towards the surface (> upper - lower m) or after a 1-hour gap.
-        # (The old rule required the next cast to start shallower than `lower`, so casts starting at 2 m
-        # were merged into one single "profile".)
         jump_up = df["depth"].diff() < -(upper - lower)
         gap = pd.to_datetime(df[time_col]).diff() > pd.Timedelta(hours=1)
         df['new_profile'] = jump_up | gap
@@ -549,6 +692,11 @@ def split_temp_from_depth(df:pd.DataFrame, depths:list, time_col:str, upper:floa
         return obs_df.replace({np.nan: None})
     except Exception: return pd.DataFrame()
 
+def hyd_his(project_name: str):
+    d = os.path.join(PROJECT_ROOT, project_name, "output", "HYD")
+    hits = sorted(glob.glob(os.path.join(d, "*_his.zarr"))) + sorted(glob.glob(os.path.join(d, "*_his.nc")))
+    return hits[0] if hits else None
+
 def _remove_rolling_outliers(df: pd.DataFrame, column: str, window: int=20, n_std: float=3.0) -> pd.DataFrame:
     df_clean = df.copy()
     if df_clean[column].notna().sum() < 5: return df_clean        # too few points to judge outliers
@@ -558,12 +706,6 @@ def _remove_rolling_outliers(df: pd.DataFrame, column: str, window: int=20, n_st
     upper = rolling_mean + n_std * rolling_std
     mask = ((df_clean[column] >= lower) & (df_clean[column] <= upper)) | df_clean[column].isna() | rolling_std.isna()
     return df_clean[mask].copy()
-
-def find_his(case_dir: str):
-    for pat in ("output/*_his.nc", "DFM_OUTPUT*/*_his.nc", "*/*_his.nc"):
-        hits = sorted(glob.glob(os.path.join(case_dir, pat)))
-        if hits: return hits[0]
-    return None
 
 def score_depths(df_sim: pd.DataFrame, obs_df: pd.DataFrame, depths: list, time_col: str = "Time") -> list:
     out, sim = [], df_sim.copy()
@@ -590,6 +732,19 @@ def score_depths(df_sim: pd.DataFrame, obs_df: pd.DataFrame, depths: list, time_
         out.append(row)
     return out
 
+def compute_weighted_rmse(depths: list, target: list, method: str = 'equal', kind: str = 'RMSE') -> float:
+    depth_arr, val_arr = np.array([float(d) for d in depths]), np.array(target, dtype=float)
+    valid = np.isfinite(depth_arr) & np.isfinite(val_arr)
+    if kind != 'R2': valid &= val_arr >= 0
+    if not valid.any(): return np.nan
+    v_depths, v_vals = depth_arr[valid], val_arr[valid]
+    if method == 'surface': weights = 1.0 / np.maximum(v_depths, 0.5)
+    elif method == 'deep': weights = v_depths
+    else: weights = np.ones(len(v_depths))
+    weights = weights / weights.sum()
+    if kind == 'R2': return float(np.sum(weights * v_vals))
+    return float(np.sqrt(np.sum(weights * v_vals ** 2)))
+
 def match_diagnostics(df_sim: pd.DataFrame, obs_df: pd.DataFrame, depths: list, time_col: str = "Time") -> str:
     """Explain why observations and simulation could not be matched (empty evaluation)."""
     if df_sim.empty: return "No simulated values at this station."
@@ -604,135 +759,53 @@ def match_diagnostics(df_sim: pd.DataFrame, obs_df: pd.DataFrame, depths: list, 
         parts.append(f"{d} m: {n_obs} obs / {n_sim} sim values")
     return "; ".join(parts)
 
-def compute_weighted_rmse(depths: list, target: list, method: str = 'equal', kind: str = 'RMSE') -> float:
-    depth_arr, val_arr = np.array([float(d) for d in depths]), np.array(target, dtype=float)
-    valid = np.isfinite(depth_arr) & np.isfinite(val_arr)
-    if kind != 'R2': valid &= val_arr >= 0
-    if not valid.any(): return np.nan
-    v_depths, v_vals = depth_arr[valid], val_arr[valid]
-    if method == 'surface': weights = 1.0 / np.maximum(v_depths, 0.5)
-    elif method == 'deep': weights = v_depths
-    else: weights = np.ones(len(v_depths))
-    weights = weights / weights.sum()
-    if kind == 'R2': return float(np.sum(weights * v_vals))
-    return float(np.sqrt(np.sum(weights * v_vals ** 2)))
-
-def clip_data(df: pd.DataFrame, time_column:str, start:str=None, end:str=None) -> dict:
-    if df.empty: return {}
-    content = {}
-    if not start is None and not end is None:
-        df = df[(df[time_column] >= start) & (df[time_column] <= end)]
-    if df.empty: return {}
-    start_time, end_time = df[time_column].iloc[0], df[time_column].iloc[-1]
-    content['start'], content['end'] = start_time, end_time
-    df = df.replace([np.inf, -np.inf], np.nan)
-    content['data'] = df.astype(object).where(df.notna(), None).to_numpy().tolist()
-    return content
-
-def profile_mean(prof: pd.DataFrame) -> float:
-    if len(prof) == 1: return float(prof["temperature"].iloc[0])
-    d, t = prof["depth"].to_numpy(float), prof["temperature"].to_numpy(float)
-    if d[-1] <= d[0]: return float(t.mean())
-    return float(np.sum((t[1:] + t[:-1]) / 2 * np.diff(d)) / (d[-1] - d[0]))
 
 
-def validate_params(base_lines: list, names) -> list:
-    errors = []
-    for n in names:
-        key, mode, idx = param_target(n)
-        if not has_mdu_key(base_lines, key):
-            errors.append(f"'{key}' is not in the MDU file"); continue
-        toks = get_mdu_tokens(base_lines, key)
-        if mode == "index" and idx >= len(toks):
-            errors.append(f"'{key}' has {len(toks)} value(s): index [{idx}] is invalid")
-        if mode == "factor" and not toks:
-            errors.append(f"'{key}' has no value to scale")
-    return errors
-
-def normalize_params(values) -> dict:
-    out = {}
-    for v in values:
-        name, lo, hi = v[0], float(v[1]), float(v[2])
-        scale = (v[3] if len(v) > 3 and v[3] else "linear").lower()
-        if lo > hi: lo, hi = hi, lo
-        if scale == "log" and lo <= 0:
-            raise ValueError(f"Parameter '{name}': log scale needs a lower bound > 0 (got {lo})")
-        out[name] = {"bounds": [lo, hi], "scale": scale}
-    return out
-
-def param_spec(spec):
-    if isinstance(spec, dict):
-        lo, hi = spec["bounds"]; return float(lo), float(hi), spec.get("scale") == "log"
-    return float(spec[0]), float(spec[1]), False
 
 
-# Setup functions
-def generate_lhs_samples(parameters_range, n_samples, seed=42) -> pd.DataFrame:
-    param_names = list(parameters_range.keys())
-    specs = [param_spec(parameters_range[p]) for p in param_names]
-    sampler = qmc.LatinHypercube(d=len(param_names), seed=seed, optimization='random-cd')
-    u = sampler.random(n=n_samples)
-    cols = {}
-    for j, (p, (lo, hi, log)) in enumerate(zip(param_names, specs)):
-        cols[p] = 10 ** (np.log10(lo) + u[:, j] * (np.log10(hi) - np.log10(lo))) if log else lo + u[:, j] * (hi - lo)
-    return pd.DataFrame(cols, columns=param_names, index=np.arange(1, n_samples + 1))
 
 
-def run_iteration(directory: str, processes: dict, body: dict, key: str) -> None:
-    def log(msg, progress=None):
-        processes[key]["message"] = msg
-        processes[key]["history"] += msg + '\n'
-        if progress is not None: processes[key]["progress"] = progress
-    try:
-        processes[key]["status"], processes[key]["progress"] = "running", 0.0
-        log("Iteration data for calibration ...")
-        sample_dir = os.path.join(directory, "calibration")
-        os.makedirs(sample_dir, exist_ok=True)
-        scenario_dir = os.path.join(sample_dir, "scenarios")
-        n_samples = int(body.get("iterationNumber"))
-        params = normalize_params(body.get("params"))
-        # MDU gốc + kiểm tra tên tham số TRƯỚC khi tạo kịch bản
-        input_dir = os.path.join(directory, "input")
-        mdu_path = find_mdu(input_dir)
-        base_lines = read_mdu(mdu_path)
-        errors = validate_params(base_lines, params)
-        if errors:
-            processes[key]["status"] = "failed"; log("Invalid parameters: " + "; ".join(errors)); return
-        overrides = load_overrides(sample_dir)
-        if overrides: log(f"Applying base overrides from the initial check: {overrides}")
-        with open(os.path.join(sample_dir, 'parameters.json'), 'w', encoding='utf-8') as f:
-            json.dump(params, f, indent=4)
-        log('Creating parameter samples using Latin Hypercube Sampling (log10 for log-scale parameters)...', 0.0)
-        df_params = generate_lhs_samples(parameters_range=params, n_samples=n_samples)
-        df_params.to_csv(os.path.join(sample_dir, 'parameter_samples.csv'))
-        log('Parameter samples created.', 100.0)
-        his_interval = (get_mdu_tokens(base_lines, 'HisInterval') or ['21600'])[0]
-        if os.path.exists(scenario_dir): shutil.rmtree(scenario_dir)      # bỏ kịch bản của lần trước
-        os.makedirs(scenario_dir, exist_ok=True)
-        log('Creating different scenarios ...', 0.0)
-        mdu_name = os.path.basename(mdu_path)
-        for n, (case_id, row) in enumerate(df_params.iterrows(), start=1):
-            processes[key]["progress"] = n / len(df_params) * 100
-            case_dir = os.path.join(scenario_dir, str(case_id))
-            copy_model_inputs(input_dir, case_dir)
-            mdu_case = _prepare_case_mdu(base_lines, overrides, row.to_dict(), his_interval, write_map=(case_id == 1))
-            with open(os.path.join(case_dir, mdu_name), 'w', encoding='utf-8') as f:
-                f.writelines(mdu_case)
-        log(f"Successfully created {n_samples} resamples.")
-        processes[key]["status"], processes[key]["progress"] = "finished", 100.0
-    except Exception as e:
-        info = processes.get(key)
-        if info:
-            info["status"], info["message"] = "failed", f"Error: {str(e)}"
-            info["history"] += f"Error: {str(e)}"
-            info["progress"] = info.get("progress", 0.0)
+
+
+
+
+
+
+def _split_line(line: str):
+    if '=' not in line or line.lstrip().startswith(('#', '[')): return None
+    key_part, rest = line.split('=', 1)
+    value_part, sep, comment = rest.partition('#')
+    return key_part, value_part, bool(sep), comment
+
+
+def _first_profile(measured_utc: pd.DataFrame, after, window_hours: float = 12.0, time_col: str = "Time"):
+    df = measured_utc.copy()
+    df["temperature"] = pd.to_numeric(df["temperature"], errors="coerce")
+    df["depth"] = pd.to_numeric(df["depth"], errors="coerce")
+    df = df.dropna(subset=[time_col, "temperature", "depth"]).sort_values(time_col)
+    if after is not None: df = df[df[time_col] >= after]
+    if df.empty: return None, pd.DataFrame()
+    t0 = df[time_col].iloc[0]
+    w = df[df[time_col] <= t0 + pd.Timedelta(hours=window_hours)].copy()
+    w["d"] = (w["depth"] * 2).round() / 2
+    prof = w.groupby("d", as_index=False)["temperature"].mean().rename(columns={"d": "depth"}).sort_values("depth")
+    return t0, prof
+
+def get_station_from_his_file(his_path: str) -> list:
+    if not his_path or not os.path.exists(his_path): return []
+    ds = xr.open_zarr(his_path) if his_path.endswith(".zarr") else xr.open_dataset(his_path)
+    with ds:
+        names = [
+            n.decode('utf-8').strip() if isinstance(n, bytes) else str(n).strip()
+            for n in ds['station_name'].values
+        ]
+    return names
 
 
 def target_score(target_method: str, obs: pd.Series, sim: pd.Series) -> float:
     if target_method == "R2": return r2_score(obs, sim)
     if target_method == "MAE": return float(np.mean(np.abs(np.asarray(sim) - np.asarray(obs))))
     return np.sqrt(mean_squared_error(obs, sim))
-
 
 # Surrogate & optimisation
 def _feature_transform(X: pd.DataFrame, log_cols: list) -> pd.DataFrame:
@@ -755,7 +828,7 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
         if os.path.exists(params_path):
             with open(params_path, encoding="utf-8") as f:
                 params = json.load(f)
-            log_cols = [c for c in X.columns if c in params and param_spec(params[c])[2]]
+            log_cols = [c for c in X.columns if c in params and _param_spec(params[c])[2]]
         if log_cols: fc(log_path, f"Log10-transformed inputs: {log_cols}")
         Xt = _feature_transform(X, log_cols)
         if model == "gaussian-process":
@@ -826,7 +899,7 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
 def optuna_objective(trial, scaler_x, model, p_ranges, log_cols=()):
     trial_params = {}
     for p, spec in p_ranges.items():
-        lo, hi, log = param_spec(spec)
+        lo, hi, log = _param_spec(spec)
         trial_params[p] = trial.suggest_float(p, lo, hi, log=log)
     df_in = _feature_transform(pd.DataFrame([trial_params], columns=list(p_ranges.keys())), list(log_cols))
     return float(model.predict(scaler_x.transform(df_in))[0])

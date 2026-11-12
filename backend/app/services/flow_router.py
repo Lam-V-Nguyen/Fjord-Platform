@@ -57,13 +57,10 @@ async def flow_project(request: Request, user=Depends(functions.basic_auth)):
             with open(forcing_path) as f:
                 forcing = json.load(f)
                 start, end, interval = forcing['start'], forcing['end'], forcing['interval']
-            content['forcing'] = {'start': start, 'end': end, 'interval': interval}
-        except: content['forcing'] = {'start': '', 'end': '', 'interval': '1h'}
+        except: start, end, interval = '', '', '1h'
+        content['forcing'] = {'start': start, 'end': end, 'interval': interval}
         return JSONResponse({'content': content})
-    except Exception as e:
-        print('/flow_project:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/flow_project', e)
 
 @router.post("/delete_project_flow")
 async def delete_project_flow(request: Request, user=Depends(functions.basic_auth)):
@@ -81,10 +78,7 @@ async def delete_project_flow(request: Request, user=Depends(functions.basic_aut
             shutil.rmtree(flow_dir, onerror=functions.remove_readonly)
             if hasattr(request.app.state, "project_cache"): request.app.state.project_cache.pop(project_name, None)
             return JSONResponse({"status": "ok", "message": f"Project '{flow_name}' was deleted successfully."})
-    except Exception as e:
-        print('/delete_project_flow:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/delete_project_flow', e)
     finally:
         if extend_task:
             extend_task.cancel()
@@ -112,10 +106,7 @@ async def water_upload(projectName: str = Form(...), file: UploadFile = File(...
             "water_area": json.loads(gpd.read_file(water_path).to_json())
         }
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/water_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/water_upload', e)
 
 @router.post("/water_delete")
 async def water_delete(request: Request, user=Depends(functions.basic_auth)):
@@ -128,10 +119,7 @@ async def water_delete(request: Request, user=Depends(functions.basic_auth)):
             return JSONResponse({'status': 'ok', 'message': "Water area has already been deleted."})
         shutil.rmtree(flow_dir)
         return JSONResponse({'status': 'ok', 'message': "Water area is deleted successfully."})
-    except Exception as e:
-        print('/water_delete:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/water_delete', e)
 
 @router.post("/upload_terrain_flow")
 async def upload_terrain_flow(file: UploadFile = File(...), flowName: str = Form(...),
@@ -145,10 +133,7 @@ async def upload_terrain_flow(file: UploadFile = File(...), flowName: str = Form
             shutil.copyfileobj(file.file, buffer)
         content = data_functions.prepare_terrain(project_name, terrain_path)
         return JSONResponse(content)
-    except Exception as e:
-        print('/upload_terrain_flow:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/upload_terrain_flow', e)
     finally: await file.close()
 
 @router.post("/catchment_definer")
@@ -162,10 +147,7 @@ async def catchment_definer(request: Request, user=Depends(functions.basic_auth)
         os.makedirs(directory, exist_ok=True)
         content = data_functions.catchment_detector(directory, dem_name, lat, lon)
         return JSONResponse(content)
-    except Exception as e:
-        print('/catchment_definer:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/catchment_definer', e)
 
 @router.post("/clip_dem")
 async def clip_dem(request: Request, user=Depends(functions.basic_auth)):
@@ -215,10 +197,7 @@ async def clip_dem(request: Request, user=Depends(functions.basic_auth)):
             }
             flow_functions.write_geotif(terrain_values, profile, raw_path, nodata)
         return JSONResponse({"status": "ok", "message": f"DEM is clipped successfully."})
-    except Exception as e:
-        print('/clip_dem:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/clip_dem', e)
 
 @router.post("/geojson_upload")
 async def geojson_upload(file: UploadFile = File(...)):
@@ -228,10 +207,7 @@ async def geojson_upload(file: UploadFile = File(...)):
             return JSONResponse({'status': 'error', 'message': 'Incorrect catchment file. Please upload another.'})
         if catchment.crs != "EPSG:4326": catchment = catchment.to_crs("EPSG:4326")
         return JSONResponse({'status': 'ok', 'content': json.loads(catchment.to_json())})
-    except Exception as e:
-        print('/geojson_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/geojson_upload', e)
     finally: await file.close()
 
 @router.post("/data_upload")
@@ -343,10 +319,7 @@ async def data_upload(request: Request, user=Depends(functions.basic_auth)):
             if gdf.crs != "EPSG:4326": gdf = gdf.to_crs("EPSG:4326")
             content = json.loads(gdf.to_json())
         return JSONResponse({'status': status, 'content': content})
-    except Exception as e:
-        print('/data_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/data_upload', e)
 
 @router.post("/check_soil")
 async def check_soil(request: Request, user=Depends(functions.basic_auth)):
@@ -370,10 +343,7 @@ async def check_soil(request: Request, user=Depends(functions.basic_auth)):
         if len(content) != 43: 
             return JSONResponse({'status': 'error', 'message': 'Not all soil data found. Please check your soil data.'})
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/check_soil:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/check_soil', e)
 
 @router.post("/soil_upload")
 async def soil_upload(request: Request, user=Depends(functions.basic_auth)):
@@ -395,10 +365,7 @@ async def soil_upload(request: Request, user=Depends(functions.basic_auth)):
         tile_url = f"/{project_name}/{file_name}/{{z}}/{{x}}/{{y}}.png"
         contents = {"tile_url": tile_url, "bounds": bounds, "min_max": [min, max]}
         return JSONResponse({'status': 'ok', 'content': contents})
-    except Exception as e:
-        print('/soil_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/soil_upload', e)
 
 @router.post("/river_upload")
 async def river_upload(file: UploadFile = File(...), key: str = Form(...), threshold: float = Form(...)):
@@ -458,10 +425,7 @@ async def river_upload(file: UploadFile = File(...), key: str = Form(...), thres
         if 'description' not in gdf.columns: gdf.insert(0, 'description', range(1, len(gdf) + 1))
         if gdf.crs != "EPSG:4326": gdf = gdf.to_crs("EPSG:4326")
         return JSONResponse({'status': 'ok', 'content': json.loads(gdf.to_json())})
-    except Exception as e:
-        print('/river_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/river_upload', e)
     finally:
         if river_path and os.path.isfile(river_path):
             try: functions.safe_remove(river_path)
@@ -486,10 +450,7 @@ async def polygon_clip(request: Request):
         clipped_layer = clipped_layer.reset_index(drop=True)
         clipped_layer['description'] = clipped_layer.index + 1
         return JSONResponse({'status': 'ok', 'content': json.loads(clipped_layer.to_json())})
-    except Exception as e:
-        print('/polygon_clip:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/polygon_clip', e)
 
 @router.post("/river_saver")
 async def river_saver(request: Request, user=Depends(functions.basic_auth)):
@@ -517,10 +478,7 @@ async def river_saver(request: Request, user=Depends(functions.basic_auth)):
         df = pd.read_csv(os.path.normpath(os.path.join(SOURCE_BACKEND, 'flow_samples', 'river_manning_mapping.csv')))
         df.to_csv(os.path.normpath(os.path.join(river_dir, 'river_manning.csv')), index=False)
         return JSONResponse({'status': 'ok', 'message': 'River data saved successfully.'})
-    except Exception as e:
-        print('/river_saver:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/river_saver', e)
 
 @router.post("/save_forcing_weather")
 async def save_forcing_weather(request: Request, user=Depends(functions.basic_auth)):
@@ -546,10 +504,7 @@ async def save_forcing_weather(request: Request, user=Depends(functions.basic_au
                 renew_task.cancel()
                 with suppress(asyncio.CancelledError): await renew_task
             return JSONResponse(content)
-    except Exception as e:
-        print('/save_forcing_weather:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/save_forcing_weather', e)
 
 @router.post("/flow_init")
 async def flow_init(request: Request, user=Depends(functions.basic_auth)):
@@ -576,10 +531,7 @@ async def flow_init(request: Request, user=Depends(functions.basic_auth)):
                 finally: lock.release()
         meta = _META[wflow_dir] = flow_connection.load_meta(wflow_dir)
         return JSONResponse({"content": {"meta": meta, "rebuilt": bool(reason), "reason": reason}})
-    except Exception as e:
-        print('/flow_init:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/flow_init', e)
 
 @router.get("/wflow_mask")
 def wflow_mask(request: Request, project_name: str = Query(alias="projectName"), flow_name: str = Query(alias="flowName"),
@@ -609,8 +561,7 @@ def wflow_basins(project_name: str = Query(alias="projectName"), flow_name: str 
         gdf = gpd.read_file(path)
         if gdf.crs is not None and gdf.crs.to_epsg() != 4326: gdf = gdf.to_crs(4326)
         return JSONResponse(json.loads(gdf.to_json()), headers=NO_STORE)
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+    except Exception as e: functions.error('/wflow_basins', e)
 
 @router.get("/wflow_water")
 def wflow_water(project_name: str = Query(alias="projectName"), flow_name: str = Query(alias="flowName"),
@@ -627,8 +578,7 @@ def wflow_water(project_name: str = Query(alias="projectName"), flow_name: str =
         (south, west), (north, east) = meta["grid"]["bounds"]
         gdf = gpd.clip(gdf[["geometry"]], box(west, south, east, north))
         return JSONResponse(json.loads(gdf.to_json()), headers=NO_STORE)
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+    except Exception as e: functions.error('/wflow_water', e)
 
 @router.get("/wflow_frame/{var}/{i}")
 def wflow_frame(var: str, i: int, request: Request, project_name: str = Query(alias="projectName"),

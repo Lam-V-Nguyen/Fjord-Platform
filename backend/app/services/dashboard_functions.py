@@ -17,24 +17,20 @@ công cụ tương ứng (Workspace) và có thể thêm thành module dashboard
 from __future__ import annotations
 import glob, json, math, os, traceback
 from datetime import datetime
+from pyproj import Transformer
 from functools import lru_cache
 import numpy as np, pandas as pd
 from config import PROJECT_ROOT, SOURCE_BACKEND
 from services.dashboard_results import ProjectResults, select_layer, time_dim, station_dim, _decode
 
-# ------------------------------------------------------------------ paths
 SAMPLE_DIR = os.path.normpath(os.path.join(SOURCE_BACKEND, "samples"))
 FLOW_SAMPLE_DIR = os.path.normpath(os.path.join(SOURCE_BACKEND, "flow_samples"))
 THRESHOLD_PATH = os.path.normpath(os.path.join(SOURCE_BACKEND, "dashboard_thresholds.json"))
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
 PERIODS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90, "all": None}
 
-
-# ======================================================================
 # Helpers
-# ======================================================================
 def _layer_values(da, source, layer):
-    """Trả về np.ndarray (t, st) hoặc None nếu không có layer."""
     if da is None: return None
     try: sel = select_layer(da, source, layer)
     except Exception: return None
@@ -92,29 +88,24 @@ def find_rule(name: str) -> dict | None:
     return None
 
 def limit_ratio(value, rule) -> float | None:
-    """Giá trị so với ngưỡng 'high' (100% = chạm ngưỡng cao)."""
     if value is None or rule is None: return None
     if rule.get("direction") == "below":
         return _round(100 * rule["high"] / value, 1) if value else None
     return _round(100 * value / rule["high"], 1) if rule["high"] else None
 
 def resolve_window(times: pd.DatetimeIndex, end: str | None, period: str | None):
-    """Cửa sổ phân tích nằm TRONG thời gian mô phỏng."""
     if not len(times): return None, None, 0
     t0, t1 = times[0], times[-1]
     try: end_ts = pd.Timestamp(end) if end else t1
     except Exception: end_ts = t1
-    if len(str(end or "")) == 10:          # chỉ có ngày -> cuối ngày
-        end_ts = end_ts + pd.Timedelta(hours=23, minutes=59)
+    if len(str(end or "")) == 10: end_ts = end_ts + pd.Timedelta(hours=23, minutes=59)
     end_ts = min(max(end_ts, t0), t1)
     days = PERIODS.get(period or "7d", 7)
     start_ts = t0 - pd.Timedelta(seconds=1) if days is None else max(t0 - pd.Timedelta(seconds=1), end_ts - pd.Timedelta(days=days))
     span = (end_ts - start_ts).total_seconds() / 86400
     return start_ts, end_ts, round(span, 1)
 
-# ======================================================================
 # Project inventory
-# ======================================================================
 def project_dir(project_name: str) -> str:
     return os.path.normpath(os.path.join(PROJECT_ROOT, project_name))
 
@@ -124,7 +115,7 @@ def list_projects(user_dir_name: str) -> list[str]:
     return sorted(p.name for p in os.scandir(root) if p.is_dir())
 
 def project_inventory(project_name: str) -> dict:
-    """Thống kê nhanh những gì dự án đang có (không mở file lớn)."""
+    """Quickly summarise from the project (don't open big files)."""
     pdir = project_dir(project_name)
     out = os.path.join(pdir, "output")
     hyd_dir, waq_dir = os.path.join(out, "HYD"), os.path.join(out, "WAQ")
@@ -143,7 +134,6 @@ def project_inventory(project_name: str) -> dict:
     grid_files = glob.glob(os.path.join(pdir, "**", "*_net.nc"), recursive=True)
     stamps = [t for t in (_mtime(os.path.join(hyd_dir, f)) for f in hyd_his + hyd_map) if t]
     stamps += [t for t in (_mtime(os.path.join(waq_dir, f)) for f in waq_his) if t]
-    # Mỗi bước gắn với công cụ (id trong frontend/toolRegistry.js) để mở nhanh
     pipeline = [
         {"key": "data", "label": "Input data", "done": n_inputs > 0, "tool": "preparation-hyd"},
         {"key": "grid", "label": "Grid", "done": len(grid_files) > 0 or len(hyd_map) > 0, "tool": "grid-generation"},
@@ -161,22 +151,18 @@ def project_inventory(project_name: str) -> dict:
         "last_result": max(stamps) if stamps else None,
     }
 
-# ======================================================================
-# Simulation summary  (nội dung chính của Overview)
-# ======================================================================
+# Simulation summary
 def _his_window(pr: ProjectResults, source: str, name: str, start, end):
-    """DataArray (time, stations, [layer]) của biến his trong cửa sổ."""
+    """DataArray (time, stations, [layer]) of *.his variables."""
     ds = pr.ds(f"{source}_his")
     if ds is None or name not in ds.data_vars:
         return None, None
-    da = ds[name]
-    td = time_dim(da)
+    da = ds[name]; td = time_dim(da)
     if td is None: return None, None
     t = pr.times(source)
     if t is None or len(t) == 0: return None, None
     idx = np.where((t > start) & (t <= end))[0]
-    if not len(idx):
-        idx = np.array([len(t) - 1])
+    if not len(idx): idx = np.array([len(t) - 1])
     return da.isel({td: idx}), t[idx]
 
 def hyd_stats(pr: ProjectResults, start, end) -> dict:
@@ -226,7 +212,7 @@ def hyd_stats(pr: ProjectResults, start, end) -> dict:
     return out
 
 def waq_checks(pr: ProjectResults, start, end) -> list[dict]:
-    """Mỗi chất WAQ có ngưỡng: giá trị xấu nhất trong cửa sổ, trạm, thời điểm, % thời gian vượt."""
+    """Each substance has threshold: the worst value in the slide window, station, time, % above threshold"""
     ds = pr.ds("waq_his")
     if ds is None: return []
     names: list[str] = []
@@ -290,7 +276,7 @@ def physics_checks(stats: dict) -> list[dict]:
     return out
 
 def water_quality_index(checks: list[dict]) -> dict:
-    """WQI đơn giản 0–100: trừ điểm theo trọng số * mức độ (mỗi chỉ tiêu tính mức xấu nhất)."""
+    """Simple WQI index 0–100: substract by weight * penalty."""
     factor = {"high": 1.0, "medium": 0.45, "low": 0.0, "info": 0.0}
     worst: dict[str, dict] = {}
     for c in checks:
@@ -319,8 +305,7 @@ def _strat_label(dt):
 
 def summarize(project_name: str, end: str | None, period: str | None) -> dict:
     inventory = project_inventory(project_name)
-    pr = ProjectResults(project_name)
-    info = pr.info()
+    pr = ProjectResults(project_name); info = pr.info()
     base = {"project": project_name, "inventory": inventory, "simulation": info,
         "generated": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     }
@@ -401,14 +386,10 @@ def alerts_from_checks(checks: list[dict], limit: int = 20) -> list[dict]:
     alerts.sort(key=lambda a: (SEVERITY_ORDER[a["severity"]], -(pd.Timestamp(a["time"]).value if a["time"] else 0)))
     return alerts[:limit]
 
-# ======================================================================
-# Context map layers (ranh giới, lưu vực, sông, độ sâu mẫu, GIS dự án)
-# ======================================================================
+# Context map layers (boundary, catchment, river, sample depth, project GIS)
 def _transformer_for(crs_name: str | None):
     if not crs_name or "CRS84" in crs_name or crs_name.endswith("4326"): return None
-    try:
-        from pyproj import Transformer
-        return Transformer.from_crs(f"EPSG:{crs_name.split(':')[-1]}", "EPSG:4326", always_xy=True)
+    try: return Transformer.from_crs(f"EPSG:{crs_name.split(':')[-1]}", "EPSG:4326", always_xy=True)
     except Exception:
         traceback.print_exc()
         return None

@@ -159,10 +159,7 @@ async def init_movement(request: Request, user=Depends(functions.basic_auth)):
                 "rebuilt": bool(reason), "reason": reason, "layer": layer
             }
             return JSONResponse({'content': content})
-    except Exception as e:
-        print('/init_movement:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/init_movement', e)
 
 @router.get("/mask_movement")
 async def mask_movement(request: Request, project_name: str = Query(alias="projectName"), user=Depends(functions.basic_auth)):
@@ -195,7 +192,8 @@ async def point_movement(project_name: str = Query(alias="projectName"),
         project_name, _ = functions.project_definer(project_name, user)
         async with _cache_lock_for(project_name):
             pdata = MOVEMENT_CACHE.get(project_name)
-            if pdata is None: return JSONResponse(status_code=404, content={"status": "error", "message": f"Movement data not initialized for project: {project_name}"})
+            if pdata is None: 
+                return JSONResponse(status_code=404, content={"status": "error", "message": f"Movement data not initialized for project: {project_name}"})
             meta, nodata = pdata["META"], pdata["NODATA"]
             nx, ny = pdata["NX"], pdata["NY"]
             if not math.isfinite(lat) or not math.isfinite(lon):
@@ -212,13 +210,9 @@ async def point_movement(project_name: str = Query(alias="projectName"),
             u, v = cell[:, 0] * scale["u"], cell[:, 1] * scale["v"]
             speed, depth = np.hypot(u, v), cell[:, 2] * scale["depth"]
             direction = (np.degrees(np.arctan2(u, v)) + 360) % 360
-            def to_list(a, nd):
-                return [None if d else round(float(x), nd) for x, d in zip(a, dry)]
+            def to_list(a, nd): return [None if d else round(float(x), nd) for x, d in zip(a, dry)]
             return {
                 "ix": ix, "iy": iy, "lat": meta["lat0"] + iy * meta["dlat"], "lon": meta["lon0"] + ix * meta["dlon"],
                 "speed": to_list(speed, 3), "depth": to_list(depth, 2), "direction": to_list(direction, 0)
             }
-    except Exception as exc:
-        print('/point_movement:\n==============')
-        traceback.print_exc()
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
+    except Exception as e: functions.error('/point_movement', e)

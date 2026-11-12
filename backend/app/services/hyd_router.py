@@ -266,10 +266,7 @@ async def get_scenario(request: Request, user=Depends(functions.basic_auth)):
                 data["weatherPath"] = weathers
             return JSONResponse({"status": 'ok', "content": data})
         else: return JSONResponse({"status": 'new', "content": default_data})
-    except Exception as e:
-        print('/get_scenario:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}\nConsider running the scenario again."})
+    except Exception as e: functions.error('/get_scenario', f"Error: {str(e)}\nConsider running the scenario again.")
 
 # Get list of source from .ext file
 @router.post("/init_source")
@@ -395,12 +392,8 @@ async def update_boundary(request: Request, user=Depends(functions.basic_auth)):
                 file.write(file_content + '\n')
                 file.flush()
                 os.fsync(file.fileno())
-        status, message = 'ok', f"Saved successfully: 'Sub-boundary: {subBoundaryName} - Type: {boundary_type}'."
-    except Exception as e:
-        print('/update_boundary:\n==============')
-        traceback.print_exc()
-        status, message = 'error', f"Error: {str(e)}"
-    return JSONResponse({"status": status, "message": message})
+        return JSONResponse({"status": 'ok', "message": f"Saved successfully: 'Sub-boundary: {subBoundaryName} - Type: {boundary_type}'."})
+    except Exception as e: functions.error('/update_boundary', e)
 
 # Get boundary properties
 @router.post("/get_boundary_params")
@@ -438,10 +431,7 @@ async def get_boundary_params(request: Request, user=Depends(functions.basic_aut
             content.append([functions.utc_to_local(val, time_zone), temp[1]])
         if not content: return JSONResponse({"status": 'new'})
         return JSONResponse({"status": 'ok', "content": content})   
-    except Exception as e:
-        print('/get_boundary_params:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f'Error: {str(e)}'})
+    except Exception as e: functions.error('/get_boundary_params', e)
 
 # Check boundary conditions
 @router.post("/check_condition")
@@ -466,14 +456,10 @@ async def view_boundary(request: Request, user=Depends(functions.basic_auth)):
         path = os.path.normpath(os.path.join(path, f"{boundary_type}.bc"))
         with open(path, 'r', encoding=functions.encoding_detect(path)) as f:
             data = ''.join(f.readlines())
-        status, message = 'ok', ""
+        return JSONResponse({"status": 'ok', "content": data})
     except FileNotFoundError:
-        status, message, data = 'error', '- No boundary condition found.\n- Boundary is not created yet.', None
-    except Exception as e:
-        print('/view_boundary:\n==============')
-        traceback.print_exc()
-        status, message, data = 'error', f"Error: {str(e)}", None
-    return JSONResponse({"status": status, "message": message, "content": data})
+        return JSONResponse({"status": 'error', "message": '- No boundary condition found.\n- Boundary is not created yet.'})
+    except Exception as e: functions.error('/view_boundary', e)
 
 # Delete boundary conditions
 @router.post("/delete_boundary")
@@ -502,10 +488,7 @@ async def delete_boundary(request: Request, user=Depends(functions.basic_auth)):
             os.remove(contaminant_path)
             message += "- Deleted successfully: Contaminant.bc."
         return JSONResponse({"status": 'ok', "message": message})
-    except Exception as e:
-        print('/delete_boundary:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f'Error: {str(e)}'})
+    except Exception as e: functions.error('/delete_boundary', e)
 
 # Save source to CSV file
 @router.post("/save_source")
@@ -557,8 +540,7 @@ async def save_source(request: Request, user=Depends(functions.basic_auth)):
                     else: values = [str(t)] + [str(r) for r in row[1:-1]]
                     f.write('  '.join(values) + '\n')
             return JSONResponse({"status": 'ok', "message": f"Source '{source_name}' saved successfully."})
-    except Exception as e:
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/save_source', e)
 
 # Save observations data to project
 @router.post("/save_obs")
@@ -585,33 +567,35 @@ async def save_obs(request: Request, user=Depends(functions.basic_auth)):
                         f.write(f"{line[2]}  {line[1]}  {line[0]}\n")
         async with lock:
             await asyncio.to_thread(write_file, path, file_name, data, key)
-            status, message = 'ok', 'Observations saved successfully.'
-    except Exception as e:
-        status, message = 'error', f"Error: {str(e)}"
-    return JSONResponse({"status": status, "message": message})
+            return JSONResponse({"status": 'ok', "message": 'Observations saved successfully.'})
+    except Exception as e: functions.error('/save_obs', e)
 
 # Save meteo data to project
 @router.post("/save_meteo")
 async def save_meteo(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
-    project_name, _ = functions.project_definer(body.get('projectName'), user)
-    content = 'QUANTITY=humidity_airtemperature_cloudiness\n' + \
-        'FILENAME=FlowFM_meteo.tim\n' + 'FILETYPE=1\n' + 'METHOD=1\n' + 'OPERAND=O'
-    # Time difference in minutes
-    time_zone, data = body.get('timeZone'), body.get('data')
-    status, message = functions.contentWriter(project_name, "FlowFM_meteo.tim", data, time_zone, content)
-    return JSONResponse({"status": status, "message": message})
+    try:
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        content = 'QUANTITY=humidity_airtemperature_cloudiness\n' + \
+            'FILENAME=FlowFM_meteo.tim\n' + 'FILETYPE=1\n' + 'METHOD=1\n' + 'OPERAND=O'
+        # Time difference in minutes
+        time_zone, data = body.get('timeZone'), body.get('data')
+        status, message = functions.contentWriter(project_name, "FlowFM_meteo.tim", data, time_zone, content)
+        return JSONResponse({"status": status, "message": message})
+    except Exception as e: functions.error('/save_meteo', e)
 
 # Save meteo data to project
 @router.post("/save_weather")
 async def save_weather(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
-    project_name, _ = functions.project_definer(body.get('projectName'), user)
-    content = 'QUANTITY=windxy\n' + 'FILENAME=windxy.tim\n' + 'FILETYPE=2\n' + 'METHOD=1\n' + 'OPERAND=+'
-    # Time difference in minutes
-    time_zone, data = body.get('timeZone'), body.get('data')
-    status, message = functions.contentWriter(project_name, "windxy.tim", data, time_zone, content)
-    return JSONResponse({"status": status, "message": message})
+    try:
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        content = 'QUANTITY=windxy\n' + 'FILENAME=windxy.tim\n' + 'FILETYPE=2\n' + 'METHOD=1\n' + 'OPERAND=+'
+        # Time difference in minutes
+        time_zone, data = body.get('timeZone'), body.get('data')
+        status, message = functions.contentWriter(project_name, "windxy.tim", data, time_zone, content)
+        return JSONResponse({"status": status, "message": message})
+    except Exception as e: functions.error('/save_weather', e)
 
 # Create MDU file
 @router.post("/generate_mdu")
@@ -620,7 +604,6 @@ async def generate_mdu(request: Request, user=Depends(functions.basic_auth)):
         body = await request.json()
         params = dict(body.get('params'))
         project_name, _ = functions.project_definer(params['project_name'], user)
-        status, message = 'ok', f"Scenario '{project_name}' is created/modified successfully!"
         # Create MDU file
         project_path = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, 'input'))
         mdu_path = os.path.normpath(os.path.join(SOURCE_BACKEND, 'templates', 'hyd', 'MDUFile.mdu'))
@@ -629,8 +612,5 @@ async def generate_mdu(request: Request, user=Depends(functions.basic_auth)):
         path = os.path.normpath(os.path.join(project_path, 'FlowFM.mdu'))
         with open(path, 'w', encoding=functions.encoding_detect(path)) as file:
             file.write(file_content)
-    except Exception as e:
-        print('/generate_mdu:\n==============')
-        traceback.print_exc()
-        status, message = 'error', f"Error: {str(e)}"
-    return JSONResponse({"status": status, "message": message})
+        return JSONResponse({"status": 'ok', "message": f"Scenario '{project_name}' is created/modified successfully!"})
+    except Exception as e: functions.error('/generate_mdu', e)

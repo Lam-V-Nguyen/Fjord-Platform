@@ -38,10 +38,21 @@ async def calibration_project(request: Request, user=Depends(functions.basic_aut
         end_date = functions.utc_to_local(info["stop"], time_zone)
         content = {'start': start_date, 'end': end_date}
         return JSONResponse({'content': content})
-    except Exception as e:
-        print('/calibration_project:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error("/calibration_project", e)
+
+@router.post("/load_log_calibration")
+async def load_log_calibration(request: Request, user=Depends(functions.basic_auth)):
+    body = await request.json()
+    try:
+        project_name, folder = body.get('projectName'), body.get('folder')
+        project_name, _ = functions.project_definer(project_name, user)
+        log_path = os.path.join(PROJECT_ROOT, project_name, folder, 'logs', body.get('logFile'))
+        if not os.path.exists(log_path):
+            return JSONResponse({'status': 'error', 'message': f"LOG file not found in project '{project_name}'."})
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        return JSONResponse({'status': 'ok', 'content': content})
+    except Exception as e: functions.error("/load_log_calibration", e)
 
 @router.post("/get_mdu_keys")
 async def get_mdu_keys(request: Request, user=Depends(functions.basic_auth)):
@@ -55,10 +66,7 @@ async def get_mdu_keys(request: Request, user=Depends(functions.basic_auth)):
         with open(mdu_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = calibration_functions.get_all_mdu_keys(f.readlines())
         return JSONResponse({'content': content})
-    except Exception as e:
-        print('/get_mdu_keys:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error("/get_mdu_keys", e)
 
 @router.post("/obs_calibration_upload")
 async def obs_calibration_upload(file: UploadFile = File(...), projectName: str = Form(...),
@@ -80,10 +88,7 @@ async def obs_calibration_upload(file: UploadFile = File(...), projectName: str 
                 'message': f"No data in the uploaded CSV file falls within the simulation dates ({simStart} to {simEnd})."
             })
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/obs_calibration_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error("/obs_calibration_upload", e)
 
 @router.post("/initial_check_calibration")
 async def initial_check_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -96,10 +101,7 @@ async def initial_check_calibration(request: Request, user=Depends(functions.bas
             project_dir, project_name, measured, body.get('station'), time_zone
         )
         return JSONResponse({"status": "ok", "content": content})
-    except Exception as e:
-        print('/initial_check_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/initial_check_calibration", e)
 
 @router.post("/save_overrides_calibration")
 async def save_overrides_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -109,17 +111,13 @@ async def save_overrides_calibration(request: Request, user=Depends(functions.ba
         project_dir, time_zone = os.path.join(PROJECT_ROOT, project_name), body.get('timeZone')
         res = calibration_functions.save_overrides(project_dir, body.get('rows') or [], time_zone)
         return JSONResponse(res)
-    except Exception as e:
-        print('/save_overrides_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/save_overrides_calibration", e)
 
 @router.post("/check_sim_status_calibration")
 async def check_sim_status_calibration(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
     project_name, _ = functions.project_definer(body.get('projectName'), user)
-    key = body.get('key')
-    process_key = f"{project_name}:{key}"
+    key = body.get('key'); process_key = f"{project_name}:{key}"
     info = processes.get(process_key)
     if not info:
         return JSONResponse({"status": "not_started", "progress": 0, "message": 'No simulation running'})
@@ -137,6 +135,18 @@ async def check_sim_status_calibration(request: Request, user=Depends(functions.
     else: complete = f'Simulation ({current}/{total}): {progress}% completed.'
     return JSONResponse({"status": status, "progress": progress, "message": complete})
 
+@router.post("/scenario_status_calibration")
+async def scenario_status_calibration(request: Request, user=Depends(functions.basic_auth)):
+    try:
+        body = await request.json()
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        scenario_dir = os.path.join(PROJECT_ROOT, project_name, "calibration", "scenarios")
+        content = calibration_functions.scenario_run_status(scenario_dir)
+        if content["total"] == 0:
+            return JSONResponse({"status": "error", "message": "No scenarios found. Please run 'Run Iterations' first."})
+        return JSONResponse({"status": "ok", "content": content})
+    except Exception as e: functions.error("/scenario_status_calibration", e)
+
 @router.post("/calibration_data_status")
 async def calibration_data_status(request: Request, user=Depends(functions.basic_auth)):
     try:
@@ -144,10 +154,7 @@ async def calibration_data_status(request: Request, user=Depends(functions.basic
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         content = calibration_functions.calibration_data_status(os.path.join(PROJECT_ROOT, project_name))
         return JSONResponse({"status": "ok", "content": content})
-    except Exception as e:
-        print('/calibration_data_status:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/calibration_data_status", e)
 
 @router.post("/create_baseline_calibration")
 async def create_baseline_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -162,17 +169,14 @@ async def create_baseline_calibration(request: Request, user=Depends(functions.b
         return JSONResponse({
             "status": "ok", "message": f"Baseline case created: .../{os.path.relpath(case_dir, PROJECT_ROOT)}"
         })
-    except Exception as e:
-        print('/create_baseline_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/create_baseline_calibration", e)
 
 @router.post("/start_sim_calibration")
 async def start_sim_calibration(request: Request, background_tasks: BackgroundTasks, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
-        key = body.get('key')
+        key, start_id, end_id = body.get('key'), body.get('iterationStart'), body.get('iterationEnd')
         redis, process_key = request.app.state.redis, f"{project_name}:{key}"
         running = _running_simulation(project_name)
         if running and running != key:   # baseline and calibration runs must not overlap
@@ -184,21 +188,36 @@ async def start_sim_calibration(request: Request, background_tasks: BackgroundTa
             return JSONResponse({"status": "error", "message": f"Sampling directory not found. Please run resampling first."})
         scenario_dir = os.path.join(sample_dir, "scenarios")
         list_sorted = sorted(
-            [int(x) for x in os.listdir(scenario_dir) if os.path.isdir(os.path.join(scenario_dir, x))]
+            int(x) for x in os.listdir(scenario_dir) if x.isdigit() and os.path.isdir(os.path.join(scenario_dir, x))
         )
         if not list_sorted:
             return JSONResponse({"status": "error", "message": "No simulation scenarios found."})
+        all_ids = list(list_sorted)
+        # Optional range From/To: only run scenarios start <= id <= end
+        if start_id not in (None, '') or end_id not in (None, ''):
+            start_id = int(start_id) if start_id not in (None, '') else list_sorted[0]
+            end_id = int(end_id) if end_id not in (None, '') else list_sorted[-1]
+            if start_id > end_id:
+                return JSONResponse({"status": "error", "message": "'From' must not be larger than 'To'."})
+            list_sorted = [c for c in list_sorted if start_id <= c <= end_id]
+            if not list_sorted:
+                return JSONResponse({"status": "error", "message":
+                    f"No scenario between {start_id} and {end_id} (available: {all_ids[0]} - {all_ids[-1]})."})
+        if body.get("skipCompleted"):              # resume: do not re-run scenarios that already finished
+            done = set(calibration_functions.scenario_run_status(scenario_dir)["done"])
+            list_sorted = [c for c in list_sorted if c not in done]
+            if not list_sorted:
+                return JSONResponse({"status": "error", "message": "All scenarios in this range are already completed."})
         # Remove old log
-        log_dir = os.path.join(calibration_dir, "logs")
-        os.makedirs(log_dir, exist_ok=True)
+        log_dir = os.path.join(calibration_dir, "logs"); os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, body.get("logFile"))
-        if os.path.exists(log_path): os.remove(log_path)
-        lock = redis.lock(process_key, timeout=1000, blocking_timeout=10)
+        if os.path.exists(log_path) and list_sorted[0] == all_ids[0]: os.remove(log_path)
+        lock = redis.lock(process_key, timeout=60, blocking_timeout=10)
         async with lock:
             info = processes.get(process_key)
             # Check if simulation already running
             if info and info["status"] == "running":
-                complete = f'Simulation ({info["current"]}/{info["total"]}): {info["progress"]}% completed.'
+                complete = f'Simulation {info["current"]} of {info["total"]}: {info["progress"]}% completed.'
                 return JSONResponse({"status": "running", "progress": info["progress"], "message": complete})
             processes[process_key] = {"progress": 0.0, "status": "running",
                 "message": "Preparing data for simulation...", "current": 0, "total": len(list_sorted),
@@ -207,12 +226,7 @@ async def start_sim_calibration(request: Request, background_tasks: BackgroundTa
                 calibration_functions.run_calibration, processes, process_key, scenario_dir, list_sorted, log_path
             )
         return JSONResponse({"status": "ok", "message": f"Simulation {project_name} started"})
-    except Exception as e:
-        print('/start_sim_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
-
-
+    except Exception as e: functions.error("/start_sim_calibration", e)
 
 @router.get("/calibration_log_tail/{project_name}")
 async def calibration_log_tail(project_name: str, offset: int = Query(0),
@@ -229,6 +243,61 @@ async def calibration_log_tail(project_name: str, offset: int = Query(0),
         new_offset = f.tell()
     text = data.decode("utf-8", errors="replace")
     return {"lines": text.splitlines(), "offset": new_offset}
+
+@router.get("/calibration_log_full/{project_name}")
+async def calibration_log_full(project_name: str, log_file: str = Query(""), user=Depends(functions.basic_auth)):
+    project_name, _ = functions.project_definer(project_name, user)
+    log_dir = os.path.join(PROJECT_ROOT, project_name, "calibration", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.normpath(os.path.join(log_dir, os.path.basename(log_file)))
+    if not os.path.exists(log_path): return {"content": ""}
+    with open(log_path, "r", encoding=functions.encoding_detect(log_path), errors="replace") as f:
+        content = f.read()
+    return {"content": content, "offset": os.path.getsize(log_path)}
+
+@router.post("/check_calibration")
+async def check_calibration(request: Request, user=Depends(functions.basic_auth)):
+    body = await request.json()
+    project_name, _ = functions.project_definer(body.get('projectName'), user)
+    key = f"{project_name}:{body.get('key')}"
+    info = processes.get(key)
+    if not info: 
+        return JSONResponse({"status": "not_started", "progress": 0, "message": 'No calibration running.', "his": []})
+    if info["status"] in ("finished", "stopped", "failed"):
+        response = {"status": info["status"], "progress": info["progress"], "message": info["message"], "his": info["history"]}
+        processes.pop(key, None)
+        return JSONResponse(response)
+    return JSONResponse({"status": info["status"], "progress": info["progress"], "message": info["message"], "his": info["history"]})
+
+@router.post("/start_calibration_iteration")
+async def start_calibration_iteration(request: Request, background_tasks: BackgroundTasks, user=Depends(functions.basic_auth)):
+    body = await request.json()
+    try:
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        directory = os.path.join(PROJECT_ROOT, project_name)
+        iterations, key_process = int(body.get("iterationNumber")), f"{project_name}:{body.get('key')}"
+        if iterations <= 0: 
+            return JSONResponse({'status': 'error', 'message': "Number of resamples must be a positive integer."})
+        redis, params = request.app.state.redis, body.get('params')
+        running = _running_simulation(project_name)
+        if running:
+            return JSONResponse({'status': 'error', 'message':
+                f"The {running} simulation of '{project_name}' is still running. Please wait until it finishes."})
+        lock = redis.lock(key_process, timeout=1000, blocking_timeout=10)
+        async with lock:
+            info = processes.get(key_process)
+            if info and info.get("status") == "running":
+                return JSONResponse({
+                    "status": info["status"], "progress": info["progress"], "message": info["message"], "his": info["history"]
+                })
+            processes[key_process] = {
+                "status": "running", "progress": 0.0, "history": '', "message": 'Preparing data for calibration ...'
+            }
+            background_tasks.add_task(
+                calibration_functions.run_iteration, directory, processes, key_process, iterations, params
+            )
+        return JSONResponse({"status": "started", "progress": 0.0, "message": "Iteration started.", "his": ''})
+    except Exception as e: functions.error("/start_calibration_iteration", e)
 
 @router.post("/evaluate_baseline_calibration")
 async def evaluate_baseline_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -261,10 +330,13 @@ async def evaluate_baseline_calibration(request: Request, user=Depends(functions
                 "status": "error", "message": "Baseline output not found – run the baseline first.", "content": content
             })
         return JSONResponse({"status": "ok", "content": content})
-    except Exception as e:
-        print('/evaluate_baseline_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/evaluate_baseline_calibration", e)
+
+
+
+
+
+
 
 @router.post("/get_stations_calibration")
 async def get_stations_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -279,16 +351,13 @@ async def get_stations_calibration(request: Request, user=Depends(functions.basi
         if not list_sorted:
             return JSONResponse({"status": "error", "message": "No simulation scenarios found. Please run simulation first."})
         his_path = next((h for h in (calibration_functions.find_his(os.path.join(scenario_dir, str(c)))
-                                     for c in list_sorted) if h), None)
+            for c in list_sorted) if h), None)
         if not his_path: 
             return JSONResponse({"status": "error", "message": "No simulation output found. Please run simulation first."})
         content = calibration_functions.get_station_from_his_file(his_path)
         if len(content) == 0: return JSONResponse({"status": "error", "message": "No station data found in the simulation."})
         return JSONResponse({"status": "ok", "content": content})
-    except Exception as e:
-        print('/get_stations_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/get_stations_calibration", e)
 
 @router.post("/summarize_calibration")
 async def summarize_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -327,6 +396,8 @@ async def summarize_calibration(request: Request, user=Depends(functions.basic_a
         # Detect measurement periods
         measured_df = measured_df[(measured_df[time_col] >= t_start) & (measured_df[time_col] <= t_end)]
         obs_df = calibration_functions.split_temp_from_depth(measured_df, depths_selected, time_col)
+        if obs_df.empty:
+            return JSONResponse({"status": "error", "message": "No observation profiles for the selected depths in the common period."})
         obs_path = os.path.join(calibration_dir, f'obs_{obs_station}.csv')
         # Convert to local timezone and save
         obs_df[time_col] = functions.utc_to_local(obs_df[time_col], time_zone)
@@ -376,69 +447,7 @@ async def correlation_calibration(request: Request, user=Depends(functions.basic
         summary_df = pd.read_csv(correlation_path)
         columns = summary_df.columns.tolist()
         return JSONResponse({'content': summary_df.to_dict(orient='records'), 'key': columns[-1]})
-    except Exception as e:
-        print('/correlation_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
-
-@router.post("/check_calibration")
-async def check_calibration(request: Request, user=Depends(functions.basic_auth)):
-    body = await request.json()
-    project_name, _ = functions.project_definer(body.get('projectName'), user)
-    key = f"{project_name}:{body.get('key')}"
-    info = processes.get(key)
-    if not info: 
-        return JSONResponse({"status": "not_started", "progress": 0, "message": 'No calibration running.', "his": []})
-    if info["status"] in ("finished", "stopped", "failed"):
-        response = {"status": info["status"], "progress": info["progress"], "message": info["message"], "his": info["history"]}
-        processes.pop(key, None)
-        return JSONResponse(response)
-    return JSONResponse({"status": info["status"], "progress": info["progress"], "message": info["message"], "his": info["history"]})
-
-@router.post("/start_calibration_iteration")
-async def start_calibration_iteration(request: Request, background_tasks: BackgroundTasks, user=Depends(functions.basic_auth)):
-    try:
-        body = await request.json()
-        project_name, _ = functions.project_definer(body.get("projectName"), user)
-        dir = os.path.join(PROJECT_ROOT, project_name)
-        redis, key = request.app.state.redis, f"{project_name}:{body.get('key')}"
-        lock = redis.lock(key, timeout=1000, blocking_timeout=10)
-        async with lock:
-            # Check if iteration already running
-            if key in processes and processes[key]["status"] == "running":
-                info = processes[key]
-                return JSONResponse({
-                    "status": info["status"], "progress": info["progress"], 
-                    "message": info["message"], "his": info["history"]
-                })
-            processes[key] = {
-                "status": "running", "progress": 0.0, "history": '',
-                "message": 'Iteration data for calibration ...'
-            }
-            background_tasks.add_task(
-                calibration_functions.run_iteration, dir, processes, body, key
-            )
-        return JSONResponse({"status": "started", "progress": 0.0, "message": f"Iteration started.", "his": []})
-    except Exception as e:
-        print('/start_calibration_iteration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'failed', 'message': f"Error: {e}"})
-
-
-
-@router.get("/calibration_log_full/{project_name}")
-async def calibration_log_full(project_name: str, log_file: str = Query(""), user=Depends(functions.basic_auth)):
-    project_name, _ = functions.project_definer(project_name, user)
-    log_dir = os.path.join(PROJECT_ROOT, project_name, "calibration", "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.normpath(os.path.join(log_dir, os.path.basename(log_file)))
-    if not os.path.exists(log_path): return {"content": ""}
-    with open(log_path, "r", encoding=functions.encoding_detect(log_path), errors="replace") as f:
-        content = f.read()
-    return {"content": content, "offset": os.path.getsize(log_path)}
-
-
-
+    except Exception as e: functions.error("/correlation_calibration", e)
 
 
 @router.post("/check_optimization_status_calibration")
@@ -496,10 +505,7 @@ async def start_optimization_calibration(request: Request, background_tasks: Bac
             summary_df, body.get("model"), calibration_dir, log_path
         )
         return JSONResponse({"status": "ok", "message": f"Simulation {project_name} started"})
-    except Exception as e:
-        print('/start_optimization_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/start_optimization_calibration", e)
 
 @router.post("/start_optimization_optuna")
 async def start_optimization_optuna(request: Request, background_tasks: BackgroundTasks, user=Depends(functions.basic_auth)):
@@ -541,10 +547,7 @@ async def start_optimization_optuna(request: Request, background_tasks: Backgrou
             params_path, optuna_path, importance_path, scaler_path, model_path, log_path
         )
         return JSONResponse({"status": "ok", "message": f"Optimization {project_name} started"})
-    except Exception as e:
-        print('/start_optimization_optuna:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/start_optimization_optuna", e)
 
 @router.post("/plot_optuna")
 async def plot_optuna(request: Request, user=Depends(functions.basic_auth)):
@@ -567,10 +570,7 @@ async def plot_optuna(request: Request, user=Depends(functions.basic_auth)):
             "status": "ok", "content": optuna_df.to_dict(orient='records'), 
             "importance": importance, "target": columns[-1]
         })
-    except Exception as e:
-        print('/plot_optuna:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/plot_optuna", e)
 
 @router.post("/save_scenario_calibration")
 async def save_scenario_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -590,18 +590,16 @@ async def save_scenario_calibration(request: Request, user=Depends(functions.bas
             base_lines = calibration_functions.read_mdu(old_mdu)
             overrides = calibration_functions.load_overrides(os.path.join(PROJECT_ROOT, project_old, "calibration"))
             mdu_base = calibration_functions.apply_overrides(base_lines, overrides)
+            ov_lines = list(mdu_base)          # Key_factor / Key[i] act on the overridden values (as in the scenarios)
             for name, val in params.items():
-                mdu_base = calibration_functions.apply_param(mdu_base, base_lines, name, float(val))
+                mdu_base = calibration_functions.apply_param(mdu_base, ov_lines, name, float(val))
             for name, val in {"OutputDir": "DFM_OUTPUT", "WAQOutputDir": "DFM_DELWAQ"}.items():
                 if calibration_functions.has_mdu_key(mdu_base, name):
                     mdu_base = calibration_functions.modify_mdu_key(mdu_base, name, val)
             with open(os.path.join(new_dir, os.path.basename(old_mdu)), 'w', encoding='utf-8') as f:
                 f.writelines(mdu_base)
             return JSONResponse({"status": "ok", "message": f"Created scenario '{project_new}' successfully."})
-    except Exception as e:
-        print('/save_scenario_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/save_scenario_calibration", e)
 
 @router.post("/obs_comparison_upload")
 async def obs_comparison_upload(file: UploadFile = File(...), simStart: str = Form(...), simEnd: str = Form(...)):
@@ -609,10 +607,7 @@ async def obs_comparison_upload(file: UploadFile = File(...), simStart: str = Fo
         df = pd.read_csv(file.file, low_memory=False)
         content = calibration_functions.clip_data(df, 'Time', simStart, simEnd)
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/obs_comparison_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error("/obs_comparison_upload", e)
 
 @router.post("/get_stations_comparison")
 async def get_stations_comparison(request: Request, user=Depends(functions.basic_auth)):
@@ -631,10 +626,7 @@ async def get_stations_comparison(request: Request, user=Depends(functions.basic
             content = calibration_functions.get_station_from_his_file(his_path)
             if len(content) == 0: return JSONResponse({"status": "error", "message": "No station data found in the simulation."})
             return JSONResponse({"status": "ok", "content": content})
-    except Exception as e:
-        print('/get_stations_comparison:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/get_stations_comparison", e)
 
 @router.post("/comparison_plot")
 async def comparison_plot(request: Request, user=Depends(functions.basic_auth)):
@@ -715,7 +707,4 @@ async def comparison_plot(request: Request, user=Depends(functions.basic_auth)):
                 "rmse": total_rmse, "merge": merge, "min_max": [global_min, global_max]
             }
             return JSONResponse({"status": "ok", "content": content})
-    except Exception as e:
-        print('/comparison_plot:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error("/comparison_plot", e)
