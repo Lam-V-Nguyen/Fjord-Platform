@@ -19,10 +19,7 @@ def home(request: Request):
 @router.get("/getWidgetMenu")
 def load_widgetMenu(request: Request):
     try: return htmls.TemplateResponse(request=request, name="mainMenu.html")
-    except Exception as e:
-        print('/getWidgetMenu:\n==============')
-        traceback.print_exc()
-        return HTMLResponse(f"Error: {e}", status_code=500)
+    except Exception as e: functions.error('/getWidgetMenu', e)
 
 # Load popup menu
 @router.get("/load_popupMenu", response_class=HTMLResponse)

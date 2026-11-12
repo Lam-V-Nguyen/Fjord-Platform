@@ -77,7 +77,7 @@ def check_cancel(processes, key):
         raise DownloadCancelled("Download cancelled by user.")
 
 def make_client(api_key):
-    url = os.getenv("CDS_URL")
+    url = os.getenv("CDS_URL") or "https://cds.climate.copernicus.eu/api"
     if DSClient is not None:
         return DSClient(url=url, key=api_key.strip(), progress=False, timeout=120,
             maximum_tries=10, sleep_max=60, retry_after=60)

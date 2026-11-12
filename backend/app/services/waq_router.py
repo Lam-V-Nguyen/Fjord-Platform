@@ -49,7 +49,7 @@ async def load_waq(request: Request, user=Depends(functions.basic_auth)):
         data['maxiter'], data['tolerance'] = files['maxiter'], files['tolerance']
         data['useforsFrom'], data['useforsTo'] = files['useforsFrom'], files['useforsTo']
         return JSONResponse({"status": 'ok', "content": data})
-    except: return JSONResponse({"status": 'error'})
+    except Exception as e: functions.error('/load_waq', e)
 
 @router.post("/clone_waq")
 async def clone_waq(request: Request, user=Depends(functions.basic_auth)):
@@ -72,10 +72,7 @@ async def clone_waq(request: Request, user=Depends(functions.basic_auth)):
             data['timeTable'] = data['timeTable'].replace(old_name, new_name)
             json.dump(data, open(new_path, 'w', encoding=functions.encoding_detect(new_path)))
             return JSONResponse({"message": f"WAQ scenario '{new_name}' was cloned successfully!"})
-    except Exception as e:
-        print('/clone_waq:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/clone_waq', e)
     finally:
         if extend_task:
             extend_task.cancel()
@@ -106,10 +103,7 @@ async def delete_waq(request: Request, user=Depends(functions.basic_auth)):
                         functions.safe_remove(temp_path) if f.endswith('.json') else shutil.rmtree(temp_path)
             functions.safe_remove(file_name)
             return JSONResponse({"message": f"Scenario '{file}' was deleted successfully!"})
-    except Exception as e:
-        print('/delete_waq:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/delete_waq', e)
     finally:
         if extend_task:
             extend_task.cancel()
@@ -126,7 +120,7 @@ async def select_waq(request: Request, user=Depends(functions.basic_auth)):
         files = [f.replace('.json', '') for f in os.listdir(path) if f.endswith('.json')]
         if len(files) == 0: return JSONResponse({"status": 'error'})
         return JSONResponse({"status": 'ok', "content": files})
-    except: return JSONResponse({"status": 'error'})
+    except Exception as e: functions.error('/select_waq', e)
 
 @router.post("/wq_time_from_waq")
 async def wq_time_from_waq(request: Request):
@@ -154,8 +148,7 @@ async def wq_time_from_waq(request: Request):
         elif key == 'Coliform': from_ = ['Salinity', 'EColi']
         else: return JSONResponse({"status": 'error', "message": f"Unknown key: {key!r}"}, status_code=400)
         return JSONResponse({"status": 'ok', "froms": from_})
-    except Exception as e:
-        return JSONResponse({"status": 'error', "message":  f"Error: {str(e)}"})
+    except Exception as e: functions.error('/wq_time_from_waq', e)
 
 @router.post("/wq_time_to_waq")
 async def wq_time(request: Request):
@@ -206,7 +199,7 @@ async def wq_time(request: Request):
             temp += lst
             result.append('\n'.join(temp))
         return JSONResponse({"status": 'ok',"content": '\n\n\n'.join(result), "tos": gr_substance})
-    except Exception as e: return JSONResponse({"status": 'error', "message":  f"Error: {str(e)}"})
+    except Exception as e: functions.error('/wq_time_to_waq', e)
 
 @router.post("/waq_config_writer")
 async def waq_config_writer(request: Request, user=Depends(functions.basic_auth)):
@@ -223,4 +216,4 @@ async def waq_config_writer(request: Request, user=Depends(functions.basic_auth)
             with open(config_file, 'w', encoding=functions.encoding_detect(config_file)) as f:
                 json.dump(body, f, indent=4)
             return JSONResponse({"status": 'ok', "message": f"Configurations of model '{file_name}' saved successfully."})
-    except Exception as e: return JSONResponse({"status": 'error', "message":  f"Error: {str(e)}"})
+    except Exception as e: functions.error('/waq_config_writer', e)

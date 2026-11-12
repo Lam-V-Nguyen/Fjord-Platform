@@ -241,22 +241,6 @@
                             </div>
                         </div>
                         <div class="tile" style="grid-column: span 2;"><h3>Data Source Description</h3>
-                            <!-- <div class="row">
-                                <h4 class="section-title">• ESA WorldCover</h4>
-                                <ul class="data-list">
-                                    <li>
-                                        <a class="data-link" href="https://esa-worldcover.org/en/data-access"
-                                            target="_blank">ESA WorldCover
-                                        </a>
-                                    </li>
-                                    <li>
-                                        <a class="data-link" href="#"
-                                            onclick="window.open('/src_frontend/pdfs/WorldCover_PUM_V2.0.pdf', '_blank'); return false;"
-                                            target="_blank">WorldCover_PUM_v2.0 - Product User Manual
-                                        </a>
-                                    </li>
-                                </ul>
-                            </div> -->
                             <div class="row">
                                 <h4 class="section-title">• Copernicus Land Monitoring Service (CLMS)</h4>
                                 <ul class="data-list">
@@ -379,9 +363,13 @@
                                         <label for="weather-source">Source:</label>
                                         <select id="weather-source" style="width: 100%;">
                                             <option value="" selected>--- Please select---</option>
-                                            <option value="era5">Climate Data Store - ERA5</option>
+                                            <option value="met-nordic">MET Norway - MET Nordic (1 km, Nordic countries)</option>
+                                            <option value="era5-timeseries">Climate Data Store - ERA5 time series (fast, point)</option>
+                                            <option value="open-meteo">Open-Meteo - Historical API (non-commercial)</option>
+                                            <option value="era5">Climate Data Store - ERA5 (queue)</option>
                                         </select>
                                     </div>
+                                    <p class="init-hint" id="weather-source-note"></p>
                                     <div class="field-row" id="era5-api-container" style="display: none;">
                                         <label for="era5-api-key">API Key:</label>
                                         <div class="input-with-icon">

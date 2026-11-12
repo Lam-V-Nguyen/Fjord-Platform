@@ -1,8 +1,9 @@
 import os, json, chardet, asyncio, stat, time, re, shapely
-import shutil, base64, signal, subprocess, gc
+import shutil, base64, signal, subprocess, gc, traceback
 from config import ALLOWED_USERS
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from redis.asyncio.lock import Lock
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt, gaussian_filter
@@ -16,7 +17,7 @@ from services import constants
 from zoneinfo import available_timezones, ZoneInfo
 from functools import lru_cache
 from datetime import datetime, timezone
-from typing import Sequence, overload, Union
+from typing import Sequence, overload
 
 
 _SKIP_PREFIXES = ("posix/", "right/", "SystemV/", "US/", "Etc/")
@@ -34,6 +35,10 @@ _ALL_TZ = sorted(_all_timezones())
 
 variablesNames, units = constants.variablesNames, constants.units
 
+def error(where: str, e: Exception, code: int = 500):
+    print(f"{where}:\n==============")
+    traceback.print_exc()
+    return JSONResponse({"status": "error", "message": f"Error: {e}"}, status_code=code)
 
 def encoding_detect(file_path: str) -> str:
     encoding = 'utf-8'

@@ -1,5 +1,5 @@
 import { calibrationParams, getCalibrationParam } from "./constant.js";
-import { jsonLoader } from "./commonFunctions.js";
+import { jsonLoader, stringToUTC, numberFormatter } from "./commonFunctions.js";
 
 
 let activeProject = null, logInterval = null, lastOffsetHYD = 0, running = false;
@@ -81,7 +81,7 @@ export async function initParameterContainer(container, addParamKey, addParamBtn
             <div>Use</div><div>Parameter</div>
             <div>Lower</div><div>Upper</div><div>Scale</div>
         </div>
-    ${calibrationParams.map(parameterRowHtml).join('')}
+        ${calibrationParams.map(parameterRowHtml).join('')}
     `;
     container.addEventListener('change', e => {
         const row = e.target.closest('.parameter-row');
@@ -94,11 +94,18 @@ export async function initParameterContainer(container, addParamKey, addParamBtn
         if (e.target.classList.contains('param-scale')) param.scale = e.target.value;
     });
     addParamBtn.addEventListener('click', () => {
-        const key = addParamKey.value.trim();
-        if (!/^[A-Za-z0-9_]+(\[\d+\])?$/.test(key)) { alert("Use an MDU key, 'Key_factor' or 'Key[i]'."); return; }
+        // 'Key', 'Key_factor' or 'Key[i]', optionally followed by ', lower, upper'
+        const [key = '', lo, hi] = addParamKey.value.split(',').map(s => s.trim());
+        if (!/^[A-Za-z0-9_]+(\[\d+\])?$/.test(key)) {
+            alert("Use 'Key', 'Key_factor' or 'Key[i]', optionally followed by ', lower, upper'\n(e.g. Secchidepth, 1, 8).");
+            return;
+        }
         if (getCalibrationParam(key)) { alert(`'${key}' is already in the list.`); return; }
         const isFactor = key.endsWith('_factor');
-        const param = { name: key, value: key, checked: true, lower: isFactor ? 0.5 : 0, upper: isFactor ? 1.5 : 1, scale: 'linear' };
+        const lower = (lo ?? '') !== '' ? Number(lo) : (isFactor ? 0.5 : 0);
+        const upper = (hi ?? '') !== '' ? Number(hi) : (isFactor ? 1.5 : 1);
+        if (!Number.isFinite(lower) || !Number.isFinite(upper)) { alert('Lower/upper must be numbers.'); return; }
+        const param = { name: key, value: key, checked: true, lower, upper, scale: 'linear' };
         calibrationParams.push(param);
         container.insertAdjacentHTML('beforeend', parameterRowHtml(param)); addParamKey.value = '';
     });
@@ -280,7 +287,8 @@ export function plotOptuna(container, trials, importance, key) {
     }
     const values = validTrials.map(trial => Number(trial.value));
     const trialNumbers = validTrials.map((trial, index) => trial.number ?? index);
-    const bestValue = Math.min(...values);
+    const maximize = key === 'R2', better = (a, b) => maximize ? a > b : a < b;
+    const bestValue = maximize ? Math.max(...values) : Math.min(...values);
     container.innerHTML = `
         <div class="optuna-chart-grid">
             <div class="optuna-chart" id="optuna-convergence"></div>
@@ -289,14 +297,14 @@ export function plotOptuna(container, trials, importance, key) {
             <div class="optuna-chart" id="optuna-sensitivity"></div>
         </div>
     `;
-    let currentBest = Infinity, name, y1, x2, unit;
+    let currentBest = maximize ? -Infinity : Infinity, name, y1, x2, unit;
     const cumulativeBest = values.map(value => {
-        currentBest = Math.min(currentBest, value); return currentBest;
+        if (better(value, currentBest)) currentBest = value; return currentBest;
     });
-    if (key === 'RMSE') {
-        y1 = 'Smallest RMSE (°C)'; x2 = 'RMSE (°C)'; name = 'RMSE'; unit = ' (°C)';
-    } else if (key === 'R2') {
+    if (key === 'R2') {
         y1 = 'Highest R²'; x2 = 'R²'; name = 'R²'; unit = '';
+    } else {
+        y1 = `Smallest ${key} (°C)`; x2 = `${key} (°C)`; name = key; unit = ' (°C)';
     }
     // Convergence Process
     Plotly.newPlot(
@@ -412,7 +420,7 @@ export function plotOptuna(container, trials, importance, key) {
         }))
         .filter(item => Number.isFinite(item.x) && Number.isFinite(item.y));
     const bestTrial = validTrials.reduce(
-        (best, trial) => Number(trial.value) < Number(best.value) ? trial : best, validTrials[0]
+        (best, trial) => better(Number(trial.value), Number(best.value)) ? trial : best, validTrials[0]
     );
     const bestParamValue = Number(bestTrial[sensitivityColumn]);
     const xLabel = calibrationParams.find(

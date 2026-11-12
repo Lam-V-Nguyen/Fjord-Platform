@@ -15,8 +15,7 @@
                 <div class="tabs-list">
                     <button class="tab-btn" data-tab="settings-tab">Settings</button>
                     <button class="tab-btn" data-tab="preparation-tab">Data Preparation</button>
-                    <button class="tab-btn" data-tab="analysis-tab">Result Analysis</button>
-                    <button class="tab-btn" data-tab="optimization-tab">Optimization</button>
+                    <button class="tab-btn" data-tab="optimization-tab">Result Analysis & Optimization</button>
                     <button class="tab-btn" data-tab="comparison-tab">Comparison</button>
                 </div>
             </div>
@@ -128,60 +127,44 @@
                             <div class="parameter-container"></div>
                             <p class="init-hint" style="margin-top: 10px;">Multi-value keys (e.g. Cdbreakpoints = 6.3d-4 7.23d-3): use <b>Key_factor</b> to scale all
                                 values, or <b>Key[i]</b> to change only value i (0-based).</p>
-                            <div class="row">
+                            <div class="row param-actions">
                                 <div class="field-inline">
                                     <input type="text" id="custom-param-key" placeholder="MDU key, Key_factor or Key[i]">
                                     <button id="custom-param-btn">Add Parameter</button>
                                 </div>
                                 <div class="field-inline">
-                                    <label for="iteration-number">Number of Iterations:</label>
+                                    <label for="iteration-number">Nr. Iterations:</label>
                                     <input type="number" id="iteration-number" min="1" value="50">
+                                    <button id="iteration-btn">2.1. Run Iterations</button>
                                 </div>
-                                <div class="field-inline-4cols">
+                                <div class="field-inline">
                                     <label style="text-align: center;">From:</label>
                                     <input type="text" id="iteration-start" value="1">
                                     <label style="text-align: center;">To:</label>
                                     <input type="text" id="iteration-end" value="50">
-                                </div>
-                                <div class="field-inline">
-                                    <button id="iteration-btn">2.1. Run Iterations</button>
                                     <button id="run-simulation-btn">2.2. Run Simulations</button>
                                 </div>
                             </div>
                         </div>
-
-
-
-
-
-
-
-
-                        
                         <div class="tile model-container" style="grid-column: span 8;">
-                            <div class="field-inline"><h3 style="margin-top: 5px;">3. View Logs</h3>
-                                <div class="row" style="margin-top: -15px;">
-                                    <button type="button" style="font-size: 11px; height: 30px;"
-                                        id="calibration-load-log-btn">Load the last Iteration Log
-                                    </button>
-                                    <div class="progress-container" id="progressbar-container">
-                                        <progress id="progressbar" value="0" max="100"></progress>
-                                        <label id="progress-text"></label>
-                                    </div>
+                            <div class="row log-header">
+                                <h3>3. View Logs</h3>
+                                <button type="button" id="calibration-load-log-btn"
+                                    style="max-width: 180px;">Load the last Iteration Log
+                                </button>
+                                <div class="progress-container" id="progressbar-container">
+                                    <progress id="progressbar" value="0" max="100"></progress>
+                                    <label id="progress-text"></label>
                                 </div>
                             </div>
                             <textarea wrap="off" id="calibration-text" placeholder="Logs..." readonly></textarea>
                         </div>
                     </div>
                 </div>
-                <!-- Tab 2: Result Analysis -->
-                <div class="tabpanel main-panel" data-panel="analysis-tab">
+                <!-- Tab 3: Optimization -->
+                <div class="tabpanel main-panel" data-panel="optimization-tab">
                     <div class="grid">
-                        
-
-
-
-                        <div class="tile"><h3>Simulation Station</h3>
+                        <div class="tile" style="grid-column: span 4;"><h3>Simulation Station</h3>
                             <div class="row">
                                 <div class="field-inline">
                                     <button id="extract-station-btn">Extract Stations from Simulation</button>
@@ -211,15 +194,6 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="tile sensitivity-layout" id="sensitivity-analysis"
-                            style="grid-column: span 8; display: none;"><h3>Correlation Analysis Results</h3>
-                            <div id="sensitivity-container"></div>
-                        </div>
-                    </div>
-                </div>
-                <!-- Tab 3: Optimization -->
-                <div class="tabpanel main-panel" data-panel="optimization-tab">
-                    <div class="grid">
                         <div class="tile" style="grid-column: span 2;"><h3>Surrogate Model</h3>
                             <div class="row">
                                 <div class="field-inline">
@@ -258,6 +232,10 @@
                                 <button id="plot-optimization-btn">Plot Results</button>
                                 <button id="save-optimization-btn">Save Results</button>
                             </div>
+                        </div>
+                        <div class="tile sensitivity-layout" id="sensitivity-analysis"
+                            style="grid-column: span 8; display: none;"><h3>Correlation Analysis Results</h3>
+                            <div id="sensitivity-container"></div>
                         </div>
                         <div class="tile model-container" id="optimization-log"
                             style="grid-column: span 8; display: none;"><h3>View Logs</h3>

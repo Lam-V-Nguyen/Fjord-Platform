@@ -4,7 +4,8 @@ from zipfile import ZipFile, ZIP_DEFLATED
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form, Response, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.concurrency import run_in_threadpool
-from services import functions, data_functions, hyd_functions, flow_functions, yml_update, era5_function
+from services import functions, data_functions, weather_functions
+from services import hyd_functions, flow_functions, yml_update, era5_function
 from config import PROJECT_ROOT, SOURCE_BACKEND
 import geopandas as gpd, pandas as pd, numpy as np
 from services.data_functions import Regnbyge as regnbyge
@@ -76,10 +77,7 @@ async def save_client(request: Request, user=Depends(functions.basic_auth)):
         with open(path, 'w', encoding='utf-8', errors='ignore') as f:
             json.dump(content, f)
         return JSONResponse({'message': 'Registration information is saved successfully.'})
-    except Exception as e:
-        print('/save_client:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/save_client', e)
 
 @router.post("/load_client")
 async def load_client(request: Request, user=Depends(functions.basic_auth)):
@@ -105,10 +103,7 @@ async def reset_station(request: Request, user=Depends(functions.basic_auth)):
         if level_checked: functions.safe_remove(os.path.join(source_dir, 'level.pkl'))
         if rain_checked: functions.safe_remove(os.path.join(source_dir, 'rain.pkl'))
         return JSONResponse({'message': 'Station(s) reset successfully.'})
-    except Exception as e:
-        print('/reset_station:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/reset_station', e)
 
 @router.post("/init_station")
 async def init_station(request: Request, user=Depends(functions.basic_auth)):
@@ -147,10 +142,7 @@ async def init_station(request: Request, user=Depends(functions.basic_auth)):
         name = station[['name', 'type']].values.tolist()
         content = {'name': name, 'point': json.loads(station.to_json())}
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/init_station:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/init_station', e)
 
 @router.post("/plot_station")
 async def plot_station(request: Request):
@@ -175,10 +167,7 @@ async def plot_station(request: Request):
         df['timestamp'] = functions.utc_to_local(df['timestamp'], time_zone)
         content = {'columns': df.columns.tolist(), 'rows': df.values.tolist()}
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/plot_station:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/plot_station', e)
 
 @router.post("/download_station")
 async def download_station(request: Request):
@@ -201,10 +190,7 @@ async def download_station(request: Request):
         df['timestamp'] = functions.utc_to_local(df['timestamp'], time_zone)
         csv_string = df.to_csv(index=False)
         return JSONResponse({'status': 'ok', 'content': csv_string})
-    except Exception as e:
-        print('/download_station:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/download_station', e)
 
 @router.post("/data_upload_gis")
 async def data_upload_gis(file: UploadFile = File(...)):
@@ -213,10 +199,7 @@ async def data_upload_gis(file: UploadFile = File(...)):
         if gdf.crs is None or gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs("EPSG:4326")
         return JSONResponse({"status": "ok", "content": json.loads(gdf.to_json())})
-    except Exception as e:
-        print('/data_upload_gis:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": str(e)})
+    except Exception as e: functions.error('/data_upload_gis', e)
     finally: await file.close()
 
 @router.post("/download_era5")
@@ -293,9 +276,7 @@ async def cds_clear_queue(request: Request, user=Depends(functions.basic_auth)):
     cancelled = [k.split(":", 1)[1] for k in to_cancel if k not in still_running]
     try:
         n = await run_in_threadpool(era5_function.delete_active_jobs, api_key)
-    except Exception as e:
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Could not clear CDS queue: {e}"})
+    except Exception as e: functions.error('/cds_clear_queue', f"Could not clear CDS queue: {e}")
     parts = []
     if cancelled: parts.append(f"Cancelled running download(s): {', '.join(cancelled)}.")
     if still_running:
@@ -321,10 +302,7 @@ async def upload_era5_csv(request: Request, user=Depends(functions.basic_auth)):
         content = df.astype(object).where(pd.notna(df), None).values.tolist()
         functions.safe_remove(path)
         return JSONResponse({'status': 'ok', 'columns': columns, 'content': content})
-    except Exception as e:
-        print('/upload_era5_csv:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/upload_era5_csv', e)
 
 @router.post("/save_era5")
 async def save_era5(request: Request):
@@ -336,10 +314,7 @@ async def save_era5(request: Request):
         df = df.replace([np.inf, -np.inf], np.nan)
         csv_string = df.to_csv(index=False)
         return JSONResponse({'status': 'ok', 'message': 'Saved successfully.', 'content': csv_string})
-    except Exception as e:
-        print('/save_era5:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/save_era5', e)
 
 @router.post("/stations_met")
 async def stations_met(request: Request, user=Depends(functions.basic_auth)):
@@ -369,10 +344,7 @@ async def stations_met(request: Request, user=Depends(functions.basic_auth)):
         if gdf.empty: return JSONResponse({'status': 'error', 'message': f"No '{key}' data available."})
         content = {'length': len(gdf), 'point': functions.clean_json_value(json.loads(gdf.to_json()))}
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/stations_met:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/stations_met', e)
 
 @router.post("/met_parameters")
 async def met_parameters(request: Request):
@@ -394,10 +366,7 @@ async def met_parameters(request: Request):
         df = df[['elementId', 'unit']].dropna().drop_duplicates()
         content = df.values.tolist()
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/met_parameters:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/met_parameters', e)
 
 @router.post("/upload_weather_csv")
 async def upload_weather_csv(request: Request, user=Depends(functions.basic_auth)):
@@ -415,10 +384,7 @@ async def upload_weather_csv(request: Request, user=Depends(functions.basic_auth
         columns, content = df.columns.tolist(), df.values.tolist()
         functions.safe_remove(path)
         return JSONResponse({'status': 'ok', 'columns': columns, 'content': content})
-    except Exception as e:
-        print('/upload_weather_csv:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/upload_weather_csv', e)
 
 @router.post("/save_weather_csv")
 async def save_weather_csv(request: Request):
@@ -451,10 +417,7 @@ async def save_weather_csv(request: Request):
             zip_buffer, media_type='application/zip',
             headers={'Content-Disposition': 'attachment; filename="weather_data.zip"'}
         )
-    except Exception as e:
-        print('/save_weather_csv:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/save_weather_csv', e)
 
 @router.post("/nve_parameters")
 async def nve_parameters(request: Request):
@@ -482,10 +445,7 @@ async def nve_parameters(request: Request):
         if df.empty: return JSONResponse({'status': 'ok', 'content': []})
         df = df.loc[df['parameter'].isin(vars)]
         return JSONResponse({'status': 'ok', 'content': df.values.tolist()})
-    except Exception as e:
-        print('/nve_parameters:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/nve_parameters', e)
 
 @router.post("/stations_nve")
 async def stations_nve(request: Request, user=Depends(functions.basic_auth)):
@@ -512,10 +472,7 @@ async def stations_nve(request: Request, user=Depends(functions.basic_auth)):
         if gdf.empty: return JSONResponse({'status': 'error', 'message': f"No '{key}' data available."})
         content = {'length': len(gdf), 'point': functions.clean_json_value(json.loads(gdf.to_json()))}
         return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e:
-        print('/stations_nve:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/stations_nve', e)
 
 @router.post("/download_nve")
 async def download_nve(request: Request, user=Depends(functions.basic_auth)):
@@ -590,10 +547,7 @@ async def start_meteo(request: Request, user=Depends(functions.basic_auth)):
                 ), daemon=True
             ).start()
         return JSONResponse({"status": "ok", "message": "Weather downloading started"})
-    except Exception as e:
-        print('/start_meteo:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/start_meteo', e)
 
 @router.post("/download_dem")
 async def download_dem(request: Request, user=Depends(functions.basic_auth)):
@@ -620,10 +574,7 @@ async def download_dem(request: Request, user=Depends(functions.basic_auth)):
         async with lock:
             content = data_functions.dem_downloader(directory, key, resolution, gdf_WCS, target_crs)
             return JSONResponse(content)
-    except Exception as e:
-        print('/download_dem:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/download_dem', e)
 
 @router.post("/upload_terrain")
 async def upload_terrain(projectName: str = Form(...), folder: str = Form(...), 
@@ -635,10 +586,7 @@ async def upload_terrain(projectName: str = Form(...), folder: str = Form(...),
         terrain_path = os.path.normpath(os.path.join(dem_dir, f"{fileName}.tif"))
         content = data_functions.prepare_terrain(project_name, terrain_path)
         return JSONResponse(content)
-    except Exception as e:
-        print('/upload_terrain:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/upload_terrain', e)
 
 @router.get("/{project_name}/{file_path:path}/{z}/{x}/{y}.png")
 def hyd_terrain_tiles(project_name: str, file_path: str, z: int, x: int, y: int):
@@ -660,10 +608,7 @@ def hyd_terrain_tiles(project_name: str, file_path: str, z: int, x: int, y: int)
                 return Response(content=image, media_type="image/png")
             image = render(tile.data, mask=tile.mask, img_format="png", colormap=cmap.get("terrain"))
         return Response(content=image, media_type="image/png")
-    except Exception as e:
-        print('/hyd_terrain_tiles:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/hyd_terrain_tiles', e)
 
 @router.post("/hyd_stream_upload")
 async def hyd_stream_upload(request: Request, user=Depends(functions.basic_auth)):
@@ -673,10 +618,7 @@ async def hyd_stream_upload(request: Request, user=Depends(functions.basic_auth)
         folder, file_name, threshold = body.get('folder'), body.get('fileName'), int(body.get('threshold'))
         content = data_functions.stream_detector(project_name, folder, file_name, threshold)
         return JSONResponse(content)
-    except Exception as e:
-        print('/hyd_stream_upload:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/hyd_stream_upload', e)
 
 @router.post("/start_download_soil")
 async def start_download_soil(request: Request, user=Depends(functions.basic_auth)):
@@ -711,18 +653,25 @@ async def start_download_weather(request: Request, user=Depends(functions.basic_
     body = await request.json()
     project_name, _ = functions.project_definer(body.get('projectName'), user)
     redis, key_process = request.app.state.redis, f"{project_name}:{body.get('key')}"
+    source = (body.get('source') or 'era5').strip()
+    cfg = weather_functions.SOURCES.get(source)
+    if cfg is None:
+        return JSONResponse({"status": "error", "message": f"Unknown weather source '{source}'."})
+    api_key = (body.get('apiKey') or '').strip()
+    if cfg["needs_key"] and not api_key:
+        return JSONResponse({"status": "error", "message": f"{cfg['label']} needs the CDS API key."})
     lock = redis.lock(key_process, timeout=60, blocking_timeout=10)
     async with lock:
         if _is_active(processes.get(key_process)):
             return JSONResponse({"status": "running", "message": "Data downloading in progress."})
         now = time.time()
-        processes[key_process] = {"status": "running", "message": "Preparing weather data download...",
-            "started_at": now, "heartbeat": now, "cancel": False}
+        processes[key_process] = {"status": "running", "message": f"Preparing weather data download ({cfg['label']})...",
+            "started_at": now, "heartbeat": now, "cancel": False, "source": source}
         start, end, flow_name = body.get('start'), body.get('end'), body.get('flowName')
-        api_key, time_zone, log_file = body.get('apiKey'), body.get('timeZone'), body.get('logFile')
+        time_zone, log_file = body.get('timeZone'), body.get('logFile')
         threading.Thread(
             target=flow_functions.weather_downloader, 
-            args=(project_name, flow_name, processes, key_process, api_key, start, end, time_zone, log_file), daemon=True
+            args=(project_name, flow_name, processes, key_process, source, api_key, start, end, time_zone, log_file), daemon=True
         ).start()
     return JSONResponse({"status": "ok", "message": "Weather downloading started."})
 
@@ -794,7 +743,4 @@ async def wflow_model(request: Request, user=Depends(functions.basic_auth)):
                     ), daemon=False
                 ).start()
                 return JSONResponse({"status": "ok", "message": "Model run started."})
-    except Exception as e:
-        print('/wflow_model:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/wflow_model', e)

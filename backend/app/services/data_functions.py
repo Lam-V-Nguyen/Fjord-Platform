@@ -368,11 +368,10 @@ def met_downloader(key:str, api_key:str, url:str, dir:str, processes:dict, key_p
         logger.info(f"Saved weather file successfully.")
         logger.handlers[0].flush()
         processes[key_process] = {"status": "finished", "message": "Weather download completed successfully.\n\n"}
-    except Exception as e:
-        print('/met_downloader:\n==============')
-        traceback.print_exc()
+    except Exception as e: 
         logger.exception("Weather download failed.")
         processes[key_process] = {"status": "failed", "message": str(e)}
+        functions.error('/met_downloader', e)
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
         for h in logger.handlers[:]:
@@ -448,10 +447,9 @@ def nve_downloader(key:str, api_key:str, url:str, dir:str, processes:dict, key_p
         logger.handlers[0].flush()
         processes[key_process] = {"status": "finished", "message": "Data download completed successfully.\n\n"}
     except Exception as e:
-        print('/nve_downloader:\n==============')
-        traceback.print_exc()
         logger.exception("Data download failed.")
         processes[key_process] = {"status": "failed", "message": str(e)}
+        functions.error('/nve_downloader', e)
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
         for h in logger.handlers[:]:
@@ -509,8 +507,6 @@ def dem_downloader(directory:str, key:str, resolution:int, boundary:gpd.GeoDataF
             return {'status': 'ok', 'message': 'Download DEM and reprojection completed successfully.'}
         else: return {'status': 'error', 'message': 'Download DEM failed. Try again with lower resolution.'}
     except Exception as e:
-        print('/dem_downloader:\n==============')
-        traceback.print_exc()
         for temp_file in (
             os.path.join(directory, f"{key}.tif.source.tif"),
             os.path.join(directory, f"{key}.tif.tmp.tif")
@@ -518,7 +514,7 @@ def dem_downloader(directory:str, key:str, resolution:int, boundary:gpd.GeoDataF
             if os.path.exists(temp_file):
                 try: functions.safe_remove(temp_file)
                 except OSError: pass
-        return {"status": 'error', "message": str(e)}
+        functions.error('/dem_downloader', e)
 
 def prepare_terrain(project_name:str, dem_path:str):
     # Convert to COG
@@ -598,10 +594,7 @@ def stream_detector(project_name:str, folder:str, dem_name:str, threshold:int):
         tile_url = f"/{project_name}/{folder}/{strord_name}/{{z}}/{{x}}/{{y}}.png"
         contents = {"tile_url": tile_url, "bounds": bounds, 'min_max': [0, 1]}
         return {'status': 'ok', 'content': contents}
-    except Exception as e: 
-        print('/stream_detector:\n==============')
-        traceback.print_exc()
-        return {'status': 'error', 'message': str(e)}
+    except Exception as e: functions.error('/stream_detector', e)
 
 def catchment_detector(directory:str, dem_name:str, lat:float, lon:float):
     flw_path = os.path.normpath(os.path.join(directory, f"{dem_name}_flowdir.tif"))
@@ -624,18 +617,30 @@ def catchment_detector(directory:str, dem_name:str, lat:float, lon:float):
 
 def raster_vector(raster_path:str, lookup_table:pd.DataFrame, catchment:gpd.GeoDataFrame):
     with xr.open_dataset(raster_path, engine='rasterio') as src:
-        land = src.squeeze(drop=True).load()
-        data, transform = land.values, src.rio.transform()
+        var_name = list(src.data_vars)[0]
+        land = src[var_name].squeeze(drop=True).load()
+        data = np.asarray(land.values)
+        transform = land.rio.transform()
+        crs, nodata = land.rio.crs, land.rio.nodata
+    # Validate raster data
+    if data.ndim != 2:
+        raise ValueError(f"Expected a 2D raster, got shape {data.shape}")
+    if not np.issubdtype(data.dtype, np.number):
+        raise TypeError(f"Invalid raster dtype: {data.dtype}")
+    # Create valid data mask
+    mask = np.isfinite(data)
+    if nodata is not None and not np.isnan(nodata):
+        mask &= data != nodata
+    if not mask.any(): return gpd.GeoDataFrame()
+    # Convert raster to polygons
     results = (
         {'geometry': geom, 'properties': {'value': value}}
-        for geom, value in shapes(data, transform=transform)
+        for geom, value in shapes(data, mask=mask, transform=transform)
     )
     gdf = gpd.GeoDataFrame.from_features(list(results))
     if len(gdf) == 0: return gpd.GeoDataFrame()
-    gdf.set_crs(land.rio.crs, inplace=True)
-    gdf['value'] = gdf['value'].astype(int)
-    # Remove nodata
-    gdf = gdf[~gdf.value.isin([land.rio.nodata])].reset_index(drop=True)
+    gdf = gdf.set_crs(crs) # Set CRS
+    gdf['value'] = gdf['value'].astype(int) # Remove nodata and convert values
     # Assign values to landcover
     gdf = gdf.merge(lookup_table, left_on='value', right_on='corine', how='left')
     gdf = gdf.rename(columns={'value': 'id'})
@@ -644,8 +649,7 @@ def raster_vector(raster_path:str, lookup_table:pd.DataFrame, catchment:gpd.GeoD
     if gdf.crs != "EPSG:4326": gdf = gdf.to_crs("EPSG:4326")
     gdf = gdf.explode(index_parts=False)
     gdf = gdf[gdf.geometry.geom_type == 'Polygon']
-    gdf = gdf.reset_index(drop=True)
-    return gdf
+    return gdf.reset_index(drop=True)
 
 async def renew_redis_lock(lock, ttl=120, interval=30):
     while True:
@@ -755,8 +759,5 @@ def write_forcing(directory:str, start:str, end:str, time_zone:str, interval:str
         ds_final = ds_final.chunk({"time": 1, "y": chunksizes[1], "x": chunksizes[2]})
         ds_final.to_netcdf(out_path, engine='netcdf4', encoding=encoding)
         return {"status": "completed", "message": "Weather forcing data saved successfully."}
-    except Exception as e:
-        print('/write_forcing:\n==============')
-        traceback.print_exc()
-        return {"status": "failed", "message": str(e)}
+    except Exception as e: functions.error('/write_forcing', e)
 

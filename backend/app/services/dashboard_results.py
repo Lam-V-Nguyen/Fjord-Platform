@@ -1,6 +1,4 @@
 """
-dashboard_results.py
-====================
 Đọc kết quả mô phỏng THỦY ĐỘNG LỰC (HYD, D-Flow FM) và CHẤT LƯỢNG NƯỚC (WAQ, D-Water Quality)
 của một dự án cho Dashboard. Đây là nguồn dữ liệu CHÍNH của trang Overview.
 
@@ -23,12 +21,13 @@ from datetime import datetime
 import numpy as np, pandas as pd, xarray as xr
 from config import PROJECT_ROOT
 from services import constants
+from pyproj import Transformer
 
 _LOCK = threading.Lock()
 _MESH_CACHE: dict[str, tuple[float, dict]] = {}
 _RANGE_CACHE: dict[str, tuple[float, list]] = {}
 
-# Biến bản đồ HYD hiển thị trên Dashboard (tên trong map file -> nhãn, đơn vị, thang màu)
+# Map HYD variables on the Dashboard (name in map file -> lable, unit, color bar)
 HYD_MAP_VARS = {
     "mesh2d_tem1": {"label": "Temperature", "unit": "°C", "palette": "thermal"},
     "mesh2d_sa1": {"label": "Salinity", "unit": "ppt", "palette": "haline"},
@@ -37,7 +36,7 @@ HYD_MAP_VARS = {
     "mesh2d_waterdepth": {"label": "Water depth", "unit": "m", "palette": "depth"},
     "mesh2d_Contaminant": {"label": "Contaminant", "unit": "mg/m³", "palette": "quality"},
 }
-# Biến trạm HYD (his)
+# HYD station variables (his)
 HYD_HIS_VARS = {
     "temperature": {"label": "Temperature", "unit": "°C"},
     "salinity": {"label": "Salinity", "unit": "ppt"},
@@ -49,10 +48,7 @@ HIS_TO_MAP = {"temperature": "mesh2d_tem1", "salinity": "mesh2d_sa1", "velocity_
     "mesh2d_ucmag", "waterlevel": "mesh2d_s1", "Contaminant": "mesh2d_Contaminant"}
 SKIP_WAQ = {"station_name", "station_x", "station_y", "station_z", "nTimesDlwqBnd", "mesh2d_layer_dlwq"}
 
-
-# ======================================================================
-# helpers
-# ======================================================================
+# Helpers
 def _r(v, n=3):
     try:
         f = float(v)
@@ -68,7 +64,7 @@ def _mtime(path: str) -> float:
     except Exception: return 0.0
 
 def _open(path: str | None) -> xr.Dataset | None:
-    """Mở Zarr (hoặc NetCDF) với cache theo mtime."""
+    """Open Zarr (or NetCDF) with cache and mtime"""
     if not path or not os.path.exists(path): return None
     try: ds = xr.open_zarr(path) if path.endswith(".zarr") else xr.open_dataset(path)
     except Exception: return None
@@ -84,7 +80,7 @@ def _decode(values) -> list[str]:
     return out
 
 def _name_key(name) -> str:
-    """Chuẩn hoá tên trạm để so khớp (bỏ khoảng trắng, không phân biệt hoa thường)."""
+    """Normalize station name (Remove space, ignore lower or cap)"""
     if isinstance(name, (bytes, np.bytes_)):
         name = name.decode("utf-8", "ignore")
     return str(name).strip().lower()
@@ -124,10 +120,8 @@ def _crs_of(ds) -> str | None:
 def _to_wgs84(x, y, crs):
     x, y = np.asarray(x, float), np.asarray(y, float)
     if crs is None or str(crs).upper() in ("EPSG:4326", "EPSG:4258"):
-        # Có thể đã là độ; nếu số lớn thì không reproject được -> trả nguyên
         return x, y
     try:
-        from pyproj import Transformer
         tf = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
         return tf.transform(x, y)
     except Exception:
@@ -141,15 +135,12 @@ def bottom_index(source: str, n_layers: int) -> int:
     return 0 if source == "hyd" else n_layers - 1
 
 def select_layer(da, source: str, layer: str):
-    """layer: 'surface' | 'bottom' | 'average' | số thứ tự."""
+    """layer: 'surface' | 'bottom' | 'average' | order."""
     ld = layer_dim(da, exclude=[d for d in (time_dim(da), station_dim(da), face_dim(da)) if d])
-    if ld is None or ld not in da.dims:
-        return da
+    if ld is None or ld not in da.dims: return da
     n = da.sizes[ld]
-    if layer == "average":
-        return da.mean(dim=ld, skipna=True)
-    if layer == "bottom":
-        return da.isel({ld: bottom_index(source, n)})
+    if layer == "average": return da.mean(dim=ld, skipna=True)
+    if layer == "bottom": return da.isel({ld: bottom_index(source, n)})
     if layer not in (None, "", "surface"):
         try: return da.isel({ld: int(layer)})
         except Exception: pass
@@ -179,7 +170,7 @@ class ProjectResults:
         self.hyd_name, self.waq_name, self.waq_model = None, None, None
         self.paths: dict[str, str | None] = {"hyd_his": None, "hyd_map": None, "waq_his": None, "waq_map": None}
         self._locate(out)
-
+    
     # locate files
     def _locate(self, out):
         if os.path.isdir(self.hyd_dir):
@@ -193,7 +184,7 @@ class ProjectResults:
                 pref = [f for f in mp if self.hyd_name and f.startswith(self.hyd_name)] or mp
                 self.paths["hyd_map"] = os.path.join(self.hyd_dir, pref[0])
                 self.hyd_name = self.hyd_name or pref[0].rsplit("_map", 1)[0]
-        # WAQ: ưu tiên kịch bản đang chọn trong output/config/config.json
+        # WAQ: use selected scenarioin: output/config/config.json
         cfg_path = os.path.join(out, "config", "config.json")
         if os.path.exists(cfg_path):
             try:
@@ -230,10 +221,9 @@ class ProjectResults:
         return self.paths["waq_his"] is not None or self.paths["waq_map"] is not None
 
     def version(self) -> str:
-        """Chuỗi phiên bản cho cache: đổi khi file kết quả thay đổi."""
         return "|".join(f"{k}:{int(_mtime(p))}" for k, p in self.paths.items() if p)
 
-    # ------------------------------------------------------------ time
+    # Time
     def times(self, source: str) -> pd.DatetimeIndex:
         ds = self.ds(f"{source}_his") or self.ds(f"{source}_map")
         if ds is None: return pd.DatetimeIndex([])
@@ -251,7 +241,7 @@ class ProjectResults:
         idx = int(t.searchsorted(ts, side="right") - 1)
         return max(0, min(len(t) - 1, idx))
 
-    # ------------------------------------------------------------ stations
+    # Stations
     def stations(self, source: str) -> list[dict]:
         """Trạm quan trắc (WGS84).
         HYD: D-Flow FM ghi station_x_coordinate/station_y_coordinate + biến CRS -> đọc trực tiếp
@@ -279,7 +269,6 @@ class ProjectResults:
             for n, lo, la in zip(names, np.ravel(lon), np.ravel(lat))]
 
     def waq_obs_points(self) -> dict:
-        """{tên chuẩn hoá: (lat, lon)} từ output/WAQ/<waq>.json -> 'wq_obs'."""
         if not self.waq_name: return {}
         path = os.path.join(self.waq_dir, f"{self.waq_name}.json")
         if not os.path.exists(path): return {}
@@ -303,7 +292,7 @@ class ProjectResults:
         return out
 
     def _domain_bounds(self):
-        """[[lat_min, lon_min], [lat_max, lon_max]] của lưới (nới 2 km) để kiểm tra toạ độ."""
+        """[[lat_min, lon_min], [lat_max, lon_max]] of the grid (extend 2 km) to check coordinates."""
         try: mesh = self.mesh()
         except Exception: mesh = None
         if not mesh: return None
@@ -319,7 +308,6 @@ class ProjectResults:
                 return False
             if bounds is None: return abs(lat) <= 90 and abs(lon) <= 180
             return bounds[0] <= lat <= bounds[2] and bounds[1] <= lon <= bounds[3]
-        # Phương án dự phòng: station_x/y của DELWAQ, thử các cách hiểu và chỉ giữ cách nằm trong miền tính
         his_ll = [None] * len(names)
         if "station_x" in ds.variables and "station_y" in ds.variables:
             x = np.asarray(ds["station_x"].values, float).ravel()
@@ -339,7 +327,7 @@ class ProjectResults:
         out = []
         for i, n in enumerate(names):
             hit = obs.get(_name_key(n))
-            if hit is None:   # DELWAQ cắt tên còn 20 ký tự
+            if hit is None:   # DELWAQ using 20 characters
                 hit = next((v for k, v in obs.items() if k[:20] == _name_key(n)[:20]), None)
             if hit is not None: lat, lon, src = hit[0], hit[1], "scenario"
             else: 
@@ -358,7 +346,6 @@ class ProjectResults:
         if ds is None or "source_sink_name" not in ds.variables: return []
         names = _decode(ds["source_sink_name"].values)
         out: list[dict[str, str | float | None]] = [{"name": n, "lon": None, "lat": None} for n in names]
-        # Toạ độ nguồn (nếu có)
         for xk, yk in (("source_sink_x_coordinate", "source_sink_y_coordinate"),):
             if xk in ds.variables:
                 x = np.asarray(ds[xk].values, float)
@@ -369,7 +356,7 @@ class ProjectResults:
                     o["lon"], o["lat"] = _r(lo, 6), _r(la, 6)
         return out
 
-    # ------------------------------------------------------------ variables
+    # Variables
     def map_variables(self, source: str) -> list[dict]:
         ds = self.ds(f"{source}_map")
         if ds is None: return []
@@ -403,18 +390,15 @@ class ProjectResults:
             out.append({"source": source, "name": name, **meta, "layered": len(da.dims) >= 3})
         return out
 
-    # ------------------------------------------------------------ mesh
+    # Mesh
     def mesh(self) -> dict | None:
-        """GeoJSON của lưới (WGS84) + toạ độ tâm ô. Ưu tiên HYD map, nếu không có dùng WAQ map."""
         key = "hyd_map" if self.paths["hyd_map"] else "waq_map"
         path = self.paths.get(key)
-        if not path:
-            return None
+        if not path: return None
         m = _mtime(path)
         with _LOCK:
             hit = _MESH_CACHE.get(path)
-            if hit and hit[0] == m:
-                return hit[1]
+            if hit and hit[0] == m: return hit[1]
         ds = self.ds(key)
         if ds is None: return None
         try:
@@ -426,12 +410,10 @@ class ProjectResults:
                 fn = ds["NetElemNode"].values
             else: return None
             crs = _crs_of(ds)
-            if crs is None and np.nanmax(np.abs(nx)) > 360:
-                crs = _crs_of(self.ds("hyd_his"))
+            if crs is None and np.nanmax(np.abs(nx)) > 360: crs = _crs_of(self.ds("hyd_his"))
             lon, lat = _to_wgs84(nx, ny, crs)
             lon, lat = np.round(np.asarray(lon), 6), np.round(np.asarray(lat), 6)
             fn = np.where(np.isnan(fn), 0, fn).astype(int) - 1
-            # Một số file lưu face_nodes bắt đầu từ 0 (có -1 làm fill)
             if fn.min() < -1: fn = fn + 1
             features, cx, cy = [], [], []
             for i, row in enumerate(fn):
@@ -458,7 +440,7 @@ class ProjectResults:
             _MESH_CACHE[path] = (m, result)
         return result
 
-    # ------------------------------------------------------------ field (map)
+    # Field (map)
     def field(self, source: str, name: str, layer: str, when) -> dict:
         ds = self.ds(f"{source}_map")
         if ds is None: raise ValueError(f"No {source.upper()} map file in project")
@@ -467,7 +449,6 @@ class ProjectResults:
         td = time_dim(da)
         tidx = self.time_index(source, when)
         da_t = da.isel({td: tidx}) if td else da
-        # WAQ: biến trung bình độ sâu có sẵn (mesh2d_2d_X)
         if source == "waq" and layer == "average":
             alt = name.replace("mesh2d_", "mesh2d_2d_", 1)
             if alt in ds.data_vars: da_t = ds[alt].isel({time_dim(ds[alt]): tidx})
@@ -482,7 +463,7 @@ class ProjectResults:
         }
 
     def value_range(self, source, name, layer) -> list:
-        """Min/max (P2–P98) trên tối đa 24 bước thời gian -> thang màu ổn định khi chạy animation."""
+        """Min/max (P2–P98) over maximum 24 time steps -> more stable for color bar while running animation."""
         path = self.paths.get(f"{source}_map")
         key = f"{path}|{name}|{layer}"
         if path is None: return [0, 1]
@@ -503,14 +484,12 @@ class ProjectResults:
         _RANGE_CACHE[key] = (m, rng)
         return rng
 
-    # ------------------------------------------------------------ station series / profile
+    # Station series / profile
     def station_series(self, source: str, name: str, layer: str, start, end, stations=None, max_points=600) -> dict:
         ds = self.ds(f"{source}_his")
         if ds is None or name not in ds.data_vars: return {"series": [], **var_meta(source, name)}
-        da = ds[name]
-        td, sd = time_dim(da), station_dim(da)
-        t = self.times(source)
-        mask = np.ones(len(t), bool)
+        da = ds[name]; td, sd = time_dim(da), station_dim(da)
+        t = self.times(source); mask = np.ones(len(t), bool)
         if start is not None: mask &= t > pd.Timestamp(start)
         if end is not None: mask &= t <= pd.Timestamp(end)
         idx = np.where(mask)[0]
@@ -530,21 +509,18 @@ class ProjectResults:
         ds = self.ds(f"{source}_his")
         if ds is None or name not in ds.data_vars:
             return f"'{name}' not found in {source.upper()} his file"
-        da = ds[name]
-        td, sd = time_dim(da), station_dim(da)
+        da = ds[name]; td, sd = time_dim(da), station_dim(da)
         ld = layer_dim(da, exclude=[td, sd])
         if ld is None or ld not in da.dims:
             return f"{source.upper()} his file has no vertical layers for '{name}'"
         names = _decode(ds["station_name"].values)
         if station not in names:
-            if station:
-                return f"Station '{station}' is not in the {source.upper()} his file"
+            if station: return f"Station '{station}' is not in the {source.upper()} his file"
             station = names[0]
         j, tidx = names.index(station), self.time_index(source, when)
         vals = np.asarray(da.isel({td: tidx, sd: j}).values, float)
         n = len(vals)
         depth = None
-        # Độ sâu tâm lớp: HYD his có zcoordinate_c (cao độ tâm lớp) và waterlevel
         zds = ds if "zcoordinate_c" in ds.variables else self.ds("hyd_his")
         if zds is not None and "zcoordinate_c" in zds.variables:
             try:
@@ -553,7 +529,7 @@ class ProjectResults:
                 tz = self.time_index("hyd", self.times(source)[tidx])
                 z = np.asarray(zds["zcoordinate_c"].isel(time=tz, stations=jz).values, float)
                 wl = float(zds["waterlevel"].isel(time=tz, stations=jz).values) if "waterlevel" in zds.variables else float(np.nanmax(z))
-                d = wl - z  # HYD: đáy -> mặt
+                d = wl - z  # HYD: bottom -> surface
                 depth = d if source == "hyd" else d[::-1]
             except Exception:
                 depth = None
@@ -561,8 +537,7 @@ class ProjectResults:
             frac = (np.arange(n) + 0.5) / n
             depth = (1 - frac) * 100 if source == "hyd" else frac * 100
             unit_depth = "% depth"
-        else:
-            unit_depth = "m"
+        else: unit_depth = "m"
         order = np.argsort(depth)
         times = self.times(source)
         return {"station": station, "time": _iso(times[tidx]), "depth": [_r(depth[i], 2) for i in order],
@@ -570,7 +545,6 @@ class ProjectResults:
             "source": source, "name": name, **var_meta(source, name)}
 
     def map_name_for(self, source: str, his_name: str) -> str | None:
-        """Tên biến trong file map tương ứng với biến his."""
         ds = self.ds(f"{source}_map")
         if ds is None: return None
         cands = [HIS_TO_MAP.get(his_name)] if source == "hyd" else []
@@ -620,8 +594,8 @@ class ProjectResults:
         tidx = self.time_index(source, when)
         vals = np.asarray(da.isel({td: tidx, fd: i}).values, float).ravel()
         n = len(vals)
-        frac = (np.arange(n) + 0.5) / n                 # tâm lớp, lớp đều (sigma)
-        rel = (1 - frac) if source == "hyd" else frac   # HYD: đáy->mặt; WAQ: mặt->đáy
+        frac = (np.arange(n) + 0.5) / n 
+        rel = (1 - frac) if source == "hyd" else frac   # HYD: botom -> surface; WAQ: surface -> bottom
         wd, unit_depth = None, "% depth"
         hmap = self.ds("hyd_map")
         if hmap is not None and "mesh2d_waterdepth" in hmap.data_vars and hmap.sizes.get("mesh2d_nFaces") == da.sizes[fd]:
@@ -638,19 +612,13 @@ class ProjectResults:
             "cell": i, "cell_distance_m": _r(dist, 0), "source": source, "name": name, **var_meta(source, name)}
     
     def profile(self, source: str, name: str, station: str, when) -> dict | None:
-        """Profile thẳng đứng tại trạm.
-        1) Từ file his nếu biến có chiều lớp và trạm có trong file his của nguồn đó.
-        2) Nếu không (vd. WAQ: wqPreparation chỉ đặt MỘT segment lớp mặt cho mỗi điểm quan trắc,
-           nên WAQ his không có chiều lớp), lấy cột giá trị từ file map tại ô lưới gần trạm nhất.
-        3) Không lấy được -> {"empty": True, "reason": ...} (không phải lỗi).
-        """
         res = self._profile_his(source, name, station, when)
         if isinstance(res, dict): return res
         alt = self._profile_map(source, name, station, when)
         if isinstance(alt, dict): return alt
         return {"empty": True, "reason": alt or res, "station": station, "source": source, "name": name}
 
-    # ------------------------------------------------------------ sources / sinks
+    # Sources / sinks
     def source_discharge(self, start, end) -> list[dict]:
         ds = self.ds("hyd_his")
         if ds is None: return []
@@ -670,7 +638,7 @@ class ProjectResults:
         for o in out: o["share"] = _r(100 * o["value"] / total_in, 1) if o["value"] and o["value"] > 0 else None
         return sorted(out, key=lambda o: -(o["value"] or 0))
 
-    # ------------------------------------------------------------ info
+    # Info
     def info(self) -> dict:
         def block(source):
             his, mp = self.ds(f"{source}_his"), self.ds(f"{source}_map")
@@ -700,7 +668,6 @@ class ProjectResults:
         except Exception: return False
 
 def catalog(project_name: str) -> dict:
-    """Mọi thứ frontend cần để dựng bộ chọn biến/thời gian/trạm."""
     pr = ProjectResults(project_name)
     info = pr.info()
     return {

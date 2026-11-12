@@ -40,10 +40,7 @@ async def reset_config(request: Request, user=Depends(functions.basic_auth)):
             # Delete config in Redis
             await redis.hdel(project_name, "config", "layer_reverse_hyd", "layer_reverse_waq")
             return JSONResponse({"status": "ok", "message": "Configuration reset successfully!"})
-    except Exception as e:
-        print('/reset_config:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {e}"})
+    except Exception as e: functions.error('/reset_config', e)
     
 # Create a new project with necessary folders
 @router.post("/setup_new_project")
@@ -56,10 +53,7 @@ async def setup_new_project(request: Request, user=Depends(functions.basic_auth)
         input_dir = os.path.normpath(os.path.join(project_dir, "input"))
         if not os.path.exists(input_dir): os.makedirs(input_dir, exist_ok=True)
         status, message = project_name, f"Scenario '{body.get('projectName')}' loaded!"
-    except Exception as e:
-        print('/setup_new_project:\n==============')
-        traceback.print_exc()
-        status, message = 'error', f"Error: {str(e)}"
+    except Exception as e: functions.error('/setup_new_project', e)
     return JSONResponse({"status": status, "message": message})
 
 # Copy a project
@@ -80,10 +74,7 @@ async def copy_project(request: Request, user=Depends(functions.basic_auth)):
                 return JSONResponse({"status": 'error', "message": f"Project '{old_name}' does not exist."})
             shutil.copytree(project_folder, os.path.normpath(os.path.join(PROJECT_ROOT, new_name)))
             return JSONResponse({"message": f"HYD scenario '{new_name}' was cloned successfully!"})
-    except Exception as e:
-        print('/copy_project:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/copy_project', e)
     finally:
         if extend_task:
             extend_task.cancel()
@@ -108,10 +99,7 @@ async def delete_project(request: Request, user=Depends(functions.basic_auth)):
             shutil.rmtree(project_folder, onerror=functions.remove_readonly)
             if hasattr(request.app.state, "project_cache"): request.app.state.project_cache.pop(project_name, None)
             return JSONResponse({"status": "ok", "message": f"Project '{name}' was deleted successfully."})
-    except Exception as e:
-        print('/delete_project:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/delete_project', e)
     finally:
         if extend_task:
             extend_task.cancel()
@@ -153,10 +141,7 @@ async def select_project(request: Request, user=Depends(functions.basic_auth)):
             with open(lake_path, 'r') as f: lakes = json.load(f)
             data = sorted(lakes.keys())
         return JSONResponse({"content": data})
-    except Exception as e:
-        print('/select_project:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/select_project', e)
 
 # Set up the database depending on the project
 @router.post("/setup_database")
@@ -328,10 +313,7 @@ async def setup_database(request: Request, user=Depends(functions.basic_auth)):
             await redis.hset(project_name, mapping=redis_mapping)
             print('Configuration loaded successfully.')
             return JSONResponse({"user": project_name, "content": result})
-    except Exception as e:
-        print('/setup_database:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": 'error', "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error('/setup_database', e)
     finally:
         if extend_task:
             extend_task.cancel()
@@ -353,13 +335,7 @@ async def get_config_files(request: Request):
             f"\nPlease rerun the simulation and try again.\nUsing default project 'demo'."
         )
         try: result = functions.project_reader(user_name, project)
-        except Exception:
-            print('/get_config_files:\n==============')
-            traceback.print_exc()
-            return JSONResponse({"status": 'error', 
-                "message": f"Could not load project '{original_project}' or fallback project 'demo'."
-            })
-    if warning:
-        result["status"], result["message"] = "warning", warning
+        except Exception: functions.error('/get_config_files', f"Could not load project '{original_project}' or fallback project 'demo'.")
+    if warning: result["status"], result["message"] = "warning", warning
     else: result["status"] = "ok"
     return JSONResponse(result)

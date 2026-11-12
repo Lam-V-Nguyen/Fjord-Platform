@@ -1,7 +1,6 @@
 import { setupTabs } from "./tabManager.js";
 import { getLastTimeZone } from "./constant.js";
-import {
-    getUser, signalSender, displayTerrain, drawColorbar,
+import { getUser, signalSender, displayTerrain, drawColorbar,
     nameChecker, csvUploader, getProjectList, jsonLoader, fillTable,
     deleteTable, addRowToTable, getDataFromTable, formatDate, updateLog
 } from "./commonFunctions.js";
@@ -13,6 +12,34 @@ const hoverTooltip = L.tooltip({
     permanent: false, direction: 'bottom',
     sticky: true, offset: [0, 10], className: 'custom-tooltip'
 });
+
+// Alternative weather sources (value of #weather-source). needsKey = CDS API key required.
+const WEATHER_SOURCES = {
+    'met-nordic': {
+        needsKey: false, minDate: '2012-09-01', label: 'MET Nordic analysis (MET Norway)',
+        link: 'https://github.com/metno/NWPdocs/wiki/MET-Nordic-dataset',
+        note: '1 km hourly analysis for the Nordic countries, 2012-09 → today, no API key, no queue. ' +
+            'Includes shortwave and longwave radiation. Long periods take a while (one file per hour).'
+    },
+    'era5-timeseries': {
+        needsKey: true, minDate: '1940-01-01', label: 'ERA5 hourly time series (CDS)',
+        link: 'https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries',
+        note: 'Same ERA5 data, optimised for point time series (centre of the catchment) – usually returns in seconds. ' +
+            'Uses the CDS API key.'
+    },
+    'open-meteo': {
+        needsKey: false, minDate: '1940-01-01', label: 'Open-Meteo Historical Weather API',
+        link: 'https://open-meteo.com/en/docs/historical-weather-api',
+        note: 'Point time series (centre of the catchment), no API key. Free use is non-commercial only. ' +
+            'Longwave radiation is estimated from temperature, humidity and cloud cover.'
+    },
+    'era5': {
+        needsKey: true, minDate: '1940-01-01', label: 'ERA5 - Hourly Data (CDS)',
+        link: 'https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download',
+        note: 'Gridded ERA5 from the CDS request queue – may wait a long time when the CDS is busy. ' +
+            'Should use this option if all above options DO NOT work.'
+    },
+};
 
 const $ = (id) => document.getElementById(id);
 const obj = {
@@ -40,7 +67,7 @@ const obj = {
     weatherInputFile: $('weather-input-file'), weatherInputText: $('weather-input-text'), weatherBtn: $('weather-btn'), 
     weatherTable: $('weather-table'), weatherSelector: $('weather-source'), weatherInterval: $('weather-interval'), 
     downloadWeatherBtn: $('weather-download-btn'), weatherLog: $('weather-download-text'), 
-    era5APIBtn: $('era5-api-btn'), cancelWeatherBtn: $('weather-cancel-btn'),
+    era5APIBtn: $('era5-api-btn'), cancelWeatherBtn: $('weather-cancel-btn'), weatherSourceNote: $('weather-source-note'),
     weatherTableContainer: $('weather-table-container'), weatherDownloadContainer: $('weather-download-container'), 
     era5APIContainer: $('era5-api-container'), saveWeatherBtn: $('weather-save-btn'), era5APIKey: $('era5-api-key')
 }
@@ -50,8 +77,9 @@ let currentProject, demLayer = null, drawChecker = '', mapContainer = null, poin
     terrainTileURL = '', terrainMinMax = null, terrainBounds = null, html = '',
     streamTileURL = '', streamMinMax = null, streamBounds = null, catchmentLayer = null,
     catchmentTileURL = '', catchmentBounds = null, pointLayer = null, waterLayer = null,
-    soilLayer = null, soilTileURL = '', soilBounds = null, soilMinMax = null, keyChecker = 'weather',
+    soilLayer = null, soilTileURL = '', soilBounds = null, soilMinMax = null, 
     landLayer = null, landContent = null, selectedRiver = null, riverLayer = null;
+const keyChecker = 'weather', CDS_SOURCES = ['era5', 'era5-timeseries'];
 
 
 setupTabs(document); await getProject(); savePassword();
@@ -109,6 +137,9 @@ function settingManager() {
         } else { obj.soilLayer.innerHTML = defaultOption; }
         obj.weatherStart.value = forcing.start; obj.weatherEnd.value = forcing.end; 
         obj.weatherInterval.value = forcing.interval;
+        if (forcing.start === '' || forcing.end === '') {
+            alert("Could not find weather data. Try to download weather data again.");
+        }
     });
     obj.projectDelete.addEventListener('click', async () => {
         const name = obj.projectName.value.trim();
@@ -789,9 +820,11 @@ function weatherManager() {
         } catch (error) { alert(`Saving forcing weather failed: ${error.message}`); return; }
     });
     obj.weatherSelector.addEventListener('change', (e) => {
-        const value = e.target.value;
-        if (value === 'era5') { obj.era5APIContainer.style.display = 'flex'; }
-        else { obj.era5APIContainer.style.display = 'none'; }
+        const src = WEATHER_SOURCES[e.target.value];
+        obj.era5APIContainer.style.display = src?.needsKey ? 'flex' : 'none';
+        if (obj.weatherSourceNote) {
+            obj.weatherSourceNote.textContent = src ? `Description: ${src.note}` : '';
+        }
     });
     obj.era5APIBtn.addEventListener('click', async () => {
         const apiKey = obj.apikeyEra5.value;
@@ -807,32 +840,32 @@ function weatherManager() {
         const startTime = obj.weatherStart.value, endTime = obj.weatherEnd.value;
         if (startTime === '' || endTime === '') { alert('Please select a time range.'); return; }
         if (new Date(startTime) >= new Date(endTime)) { alert('Start time must be before end time.'); return; }
-        if (value !== 'era5') return;
-        const apiKey = obj.era5APIKey.value.trim();
-        if (!apiKey || apiKey === '') { alert('Please enter your ERA5 API key.'); return; }
+        if (value === 'met-nordic' && new Date(startTime) < new Date('2012-09-01')) {
+            alert('MET Nordic data start on 2012-09-01. Please choose a later start time or another source.'); return; 
+        }
+        const needsKey = CDS_SOURCES.includes(value), apiKey = obj.era5APIKey.value.trim();
+        if (needsKey && apiKey === '') { alert('Please enter your CDS (ERA5) API key.'); return; }
         try {
-            if (value == 'era5') {
-                const contentChecker = { projectName: currentProject, key: keyChecker };
-                const statusRes = await jsonLoader('check_download_status', contentChecker);
-                if (statusRes.status === "running") {
-                    alert(statusRes.cancelling ? 'Previous download is being cancelled. Please wait a moment.'
-                        : 'Weather download is running.'); return;
-                }
-                const content = {
-                    projectName: currentProject, flowName: name, timeZone: getLastTimeZone(),
-                    start: startTime, end: endTime, key: keyChecker, apiKey: apiKey, logFile: logFile
-                };
-                const start = await jsonLoader('start_download_weather', content);
-                if (start.status === "error") { alert(start.message); return; }
-                obj.weatherLog.value = ''; setFlowRunning(true);
-                updateLog(currentProject, obj.weatherLog, 2, keyChecker, async () => {
-                    const res = await jsonLoader('check_download_status', { projectName: currentProject, keyChecker });
-                    setFlowRunning(false);
-                    if (res.cancelled) { alert('Weather download cancelled. No data was saved.'); return; }
-                    if (res.status !== 'finished') { alert(`Weather download failed: ${res.message}`); return; }
-                    alert('Downloading weather completed.');
-                }, logFile);
+            const contentChecker = { projectName: currentProject, key: keyChecker };
+            const statusRes = await jsonLoader('check_download_status', contentChecker);
+            if (statusRes.status === "running") {
+                alert(statusRes.cancelling ? 'Previous download is being cancelled. Please wait a moment.'
+                    : 'Weather download is running.'); return;
             }
+            const content = {
+                projectName: currentProject, flowName: name, timeZone: getLastTimeZone(), source: value,
+                start: startTime, end: endTime, key: keyChecker, apiKey: needsKey ? apiKey : '', logFile: logFile
+            };
+            const start = await jsonLoader('start_download_weather', content);
+            if (start.status !== "ok") { alert(start.message); return; }
+            obj.weatherLog.value = ''; setFlowRunning(true);
+            updateLog(currentProject, obj.weatherLog, 3, keyChecker, async () => {
+                const res = await jsonLoader('check_download_status', { projectName: currentProject, key: keyChecker });
+                setFlowRunning(false);
+                if (res.cancelled) { alert('Weather download cancelled. No data was saved.'); return; }
+                if (res.status !== 'finished') { alert(`Weather download failed: ${res.message}`); return; }
+                alert(res.message || 'Downloading weather completed.');
+            }, logFile);
         } catch (error) { alert(error.message); return; }
     });
     obj.cancelWeatherBtn.addEventListener('click', async () => {

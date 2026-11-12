@@ -1,37 +1,51 @@
-import os, dotenv, rasterio, zipfile, rioxarray, sys, pyflwdir, re, stat, time, psutil
-import logging, gc, shutil, traceback, subprocess, dask, threading, uuid, rioxarray
+import os, dotenv, rasterio, zipfile, rioxarray, sys, pyflwdir, rioxarray, stat
+import logging, gc, shutil, traceback, subprocess, threading, re, time, psutil
 import geopandas as gpd, numpy as np, pandas as pd, xarray as xr
-from shapely.geometry import Polygon, MultiPolygon, shape
+from shapely.geometry import shape
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt
-from netCDF4 import Dataset, date2num
 from rasterio.io import MemoryFile
 from rasterio.enums import Resampling
 from rasterio.features import rasterize, shapes
-from services import functions, flow_functions, wflow_config, era5_function
-from datetime import datetime
+from services import functions, flow_functions, \
+    wflow_config, era5_function, weather_functions
 from pyflwdir import dem
 from config import PROJECT_ROOT, WFLOW_PATH
 from dask.distributed import get_client
-from dask.delayed import delayed
-from dask.base import compute
-from pyproj import CRS, Transformer
-from datetime import timezone, timedelta
-from typing import Any, cast
 from dask import config
+from pyproj import CRS, Transformer
+
 
 try: HAS_DASK = True
 except ImportError: HAS_DASK = False
 
-# if "bool" not in np.__dict__: np.bool = np.bool_
 
 dotenv.load_dotenv()
 MET_url, MET_client_id = os.getenv('MET_ProstAPI_URL'), os.getenv('MET_ProstAPI_CLIENT_ID')
 NVE_url, NVE_client_id = os.getenv('NVE_URL'), os.getenv('NVE_API_KEY')
 NODATA_DEM, NODATA_INT, NODATA_SOIL_THICKNESS, G = -9999.0, 0, -99999, 9.80665
-CHUNK_T, CHUNK_XY = 24, 128
+CHUNK_T, CHUNK_XY, CACHE_MAX_AGE_DAYS = 24, 128, 2
 LAPSE_T = 0.0065                       # K/m
 ISRIC_URL = "https://files.isric.org/soilgrids/former/2017-03-10/data/"
+DOWNLOAD_RETRIES, RETRY_WAIT_S = 3, (30, 120, 300)
+FORCING = {
+    "precip": ("mm",    lambda s: np.clip(s["tp"] * 1000.0, 0.0, None)),
+    "temp": ("degC",  lambda s: s["t2m"] - 273.15),
+    "kin": ("W/m^2", lambda s: np.clip(s["ssrd"] / 3600.0, 0.0, None)),
+    "kout": ("W/m^2", lambda s: np.clip(s["tisr"] / 3600.0, 0.0, None)),
+    "wind": ("m/s",   lambda s: np.hypot(s["u10"], s["v10"])),
+    "press_msl": ("hPa",   lambda s: s["msl"] / 100.0),
+}
+FORCING_SOURCES = {
+    "total_precipitation": "tp", # Precipitation
+    "2m_temperature": "t2m", # Temperature
+    "surface_solar_radiation_downwards": "ssrd", # Shortwave radiation
+    "toa_incident_solar_radiation": "tisr", # Top-of-atmosphere incident solar radiation
+    "10m_u_component_of_wind": "u10", # U-component of wind
+    "10m_v_component_of_wind": "v10", # V-component of wind
+    "mean_sea_level_pressure": "msl", # Mean sea level pressure
+}
+
 
 soils = [
     ['Clay', 'Sand', 'Silt', 'Bulk density', 'Soil organic carbon', 'Soil pH'],
@@ -55,23 +69,6 @@ soil_type_reverse = {
 }
 soil_depth_reverse = {v: k for k, v in soil_depths.items()}
 
-FORCING_SOURCES = {
-    "total_precipitation": "tp", # Precipitation
-    "2m_temperature": "t2m", # Temperature
-    "surface_solar_radiation_downwards": "ssrd", # Shortwave radiation
-    "toa_incident_solar_radiation": "tisr", # Top-of-atmosphere incident solar radiation
-    "10m_u_component_of_wind": "u10", # U-component of wind
-    "10m_v_component_of_wind": "v10", # V-component of wind
-    "mean_sea_level_pressure": "msl", # Mean sea level pressure
-}
-FORCING = {
-    "precip": ("mm",    lambda s: np.clip(s["tp"] * 1000.0, 0.0, None)),
-    "temp": ("degC",  lambda s: s["t2m"] - 273.15),
-    "kin": ("W/m^2", lambda s: np.clip(s["ssrd"] / 3600.0, 0.0, None)),
-    "kout": ("W/m^2", lambda s: np.clip(s["tisr"] / 3600.0, 0.0, None)),
-    "wind": ("m/s",   lambda s: np.hypot(s["u10"], s["v10"])),
-    "press_msl": ("hPa",   lambda s: s["msl"] / 100.0),
-}
 
 class StreamToLogger:
     PROGRESS_PATTERN = re.compile(r'\[\s*[#=]*\s*\]\s*\|\s*\d+%\s*Completed\s*\|')
@@ -222,9 +219,9 @@ class Regridder:
             out += src[:, idx[:, k]] * w[:, k]
         return out.reshape(t, rows, nx)
 
-def interpolate_extrapolate(data, mask_nan, get_nearest=False, power=2, max_neighbors=8):
-    h, w = data.shape
-    mask_valid = ~mask_nan
+
+def _interpolate_extrapolate(data, mask_nan, get_nearest=False, power=2, max_neighbors=8):
+    h, w = data.shape; mask_valid = ~mask_nan
     y_valid, x_valid = np.where(mask_valid)
     valid_values = data[mask_valid]
     y_fill, x_fill = np.where(mask_nan)
@@ -251,12 +248,6 @@ def interpolate_extrapolate(data, mask_nan, get_nearest=False, power=2, max_neig
         nearest_values = valid_values[indices]
         result[y_fill, x_fill] = nearest_values
     return result
-
-def remove_holes(geom):
-    if isinstance(geom, Polygon): return Polygon(geom.exterior)
-    elif isinstance(geom, MultiPolygon):
-        return MultiPolygon([Polygon(p.exterior) for p in geom.geoms])
-    else: return geom
 
 def write_geotif(array, profile, output_path, nodata=NODATA_DEM, units=None):
     temp_path = output_path + ".tmp.tif"
@@ -307,80 +298,6 @@ def create_LAI(arr_2D, terrain, out_path, nodata=255):
     df.index.name = os.path.basename(out_path).replace("_lai.csv", "")
     df.to_csv(out_path, index=True)
 
-def era5_area(west, south, east, north, snap=True, buffer=0.01, grid=None):
-    grid = grid or era5_function.ERA5_GRID_DEG
-    if not snap: return [north + buffer, west - buffer, south - buffer, east + buffer]
-    n, s = np.ceil(north / grid) * grid, np.floor(south / grid) * grid
-    w, e = np.floor(west / grid) * grid, np.ceil(east / grid) * grid
-    if n == s: n += grid
-    if e == w: e += grid
-    eps = grid * 0.2
-    return [round(n + eps, 4), round(w - eps, 4), round(s - eps, 4), round(e + eps, 4)]
-
-def _fill_time_gaps(a):
-    if not np.isnan(a).any(): return a
-    df = pd.DataFrame(a).interpolate(axis=0, limit_direction="both")
-    return df.fillna(0.0).to_numpy(dtype=np.float32)
-
-def _source_window(src, t0, t1):
-    win = src.isel(time=slice(t0, t1))
-    raw = {}
-    for short in FORCING_SOURCES.values():
-        da = win[short]
-        extra = [d for d in da.dims if d not in ("time", "latitude", "longitude")]
-        if extra: da = da.isel({d: 0 for d in extra})
-        dims = [d for d in ("time", "latitude", "longitude") if d in da.dims]
-        arr = da.transpose(*dims).values.astype(np.float32)
-        raw[short] = _fill_time_gaps(arr.reshape(arr.shape[0], -1))
-    return {var: fn(raw).astype(np.float32) for var, (_, fn) in FORCING.items()}
-
-def _download_month(client, api_key, tag, request, download_dir, start_time, end_time,
-    processes, process_key, logger, max_wait_s, keep_z):
-    target = os.path.join(download_dir, f"{tag}.download")
-    msg = f"Requesting ERA5 {tag} ({len(request['variable'])} variables in 1 request)..."
-    logger.info(msg)
-    era5_function.set_status(processes, process_key, "running", msg)
-    lock = era5_function.account_lock(api_key)
-    while not lock.acquire(timeout=1):
-        era5_function.check_cancel(processes, process_key)
-        era5_function.set_status(
-            processes, process_key, "running", "Waiting for another ERA5 download with the same CDS account to finish..."
-        )
-    try:
-        era5_function.retrieve(
-            client, era5_function.DATASET_GRID, request, target, logger, processes, process_key, f"cds:{process_key}", max_wait_s
-        )
-    finally: lock.release()
-    era5_function.check_cancel(processes, process_key)
-    ds = era5_function.open_download(target, os.path.join(download_dir, tag), processes, process_key)
-    missing = [s for s in FORCING_SOURCES.values() if s not in ds.data_vars]
-    if missing: raise era5_function.ERA5Error(f"Missing variables in ERA5 {tag}: {missing}")
-    z = None
-    if keep_z and "z" in ds.data_vars:
-        zda = ds["z"].isel(time=0)
-        z = zda.transpose(*[d for d in ("latitude", "longitude") if d in zda.dims]).values
-    ds = ds.drop_vars([v for v in ds.data_vars if v not in FORCING_SOURCES.values()])
-    ds = ds.sel(time=slice(start_time, end_time))
-    out = os.path.join(download_dir, f"src_{tag}.nc")
-    ds.to_netcdf(out)
-    n = ds.sizes["time"]
-    lat, lon = ds["latitude"].values, ds["longitude"].values
-    ds.close()
-    shutil.rmtree(os.path.join(download_dir, tag), ignore_errors=True)
-    os.remove(target)
-    logger.info(f"{tag}: {n} hourly steps, ERA5 grid {lat.size}×{lon.size}")
-    return out, n, lat, lon, z
-
-def _open_sources(files, time_window):
-    if HAS_DASK:
-        return xr.open_mfdataset(files, combine="nested", concat_dim="time", chunks={"time": time_window},
-            data_vars="minimal", coords=cast(Any, "minimal"), compat="override", parallel=False)
-    parts = []
-    for f in files:
-        with xr.open_dataset(f) as d:
-            parts.append(d.load())
-    return xr.concat(parts, dim="time")
-
 def setup_logger(name, log_path: str):
     log_path = os.path.abspath(log_path)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -390,8 +307,7 @@ def setup_logger(name, log_path: str):
     # Remove old handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
-        handler.flush()
-        handler.close()
+        handler.flush(); handler.close()
     # Create a new file handler
     file_handler = logging.FileHandler(
         log_path, mode="a", encoding="utf-8", delay=False
@@ -405,203 +321,49 @@ def setup_logger(name, log_path: str):
     file_handler.flush()
     return logger
 
-def weather_downloader(project_name, flow_name, processes, process_key, api_key, start, end, time_zone, 
-    log_file, buffer=0.01, method="bilinear", snap_area=True, temp_lapse_correction=True, 
-    max_wait_hours=6, block_mb=128, n_workers=None, k_idw=4):
+def weather_downloader(project_name, flow_name, processes, process_key, 
+    source, api_key, start, end, time_zone, log_file, **options):
     # Prepare forcing data from the global model ARE5
     # Source: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download
     project_dir = os.path.join(PROJECT_ROOT, project_name)
     log_dir = os.path.join(project_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.normpath(os.path.join(log_dir, log_file))
-    if os.path.exists(log_path): os.remove(log_path)
-    flow_dir = os.path.normpath(os.path.join(project_dir, "flows", flow_name))    
-    forcing_dir = os.path.normpath(os.path.join(flow_dir, 'forcing'))
-    os.makedirs(forcing_dir, exist_ok=True)    
-    logger = setup_logger(f"{process_key}:cdsapi", log_path)
-    download_dir = os.path.normpath(os.path.join(forcing_dir, f"download_{uuid.uuid4().hex[:8]}"))
-    forcing_path = os.path.normpath(os.path.join(forcing_dir, "weather_forcing.nc"))
-    tmp_path, max_wait_s = forcing_path + ".part",  max_wait_hours * 3600
-    n_workers = n_workers or min(4, os.cpu_count() or 1)
-    nc, src = None, None
+    log_path = os.path.join(log_dir, os.path.basename(log_file))
     try:
-        era5_function.set_status(processes, process_key, "running", "Weather downloader started.")
+        if os.path.exists(log_path): os.remove(log_path)
+    except OSError: pass
+    flow_dir = os.path.normpath(os.path.join(project_dir, "flows", os.path.basename(flow_name)))
+    logger = setup_logger(f"{process_key}:weather", log_path)
+    label = weather_functions.SOURCES.get(source, {}).get("label", source)
+    try:
+        era5_function.set_status(processes, process_key, "running", f"Weather downloader started ({label}).")
         era5_function.check_cancel(processes, process_key)
-        logger.info("Weather downloader started.")
-        if not api_key or not str(api_key).strip(): raise era5_function.ERA5Error("Missing CDS API key.")
         start_time = functions.local_to_utc(start, time_zone).replace(tzinfo=None)
         end_time = functions.local_to_utc(end, time_zone).replace(tzinfo=None)
-        if start_time >= end_time:
-            raise era5_function.ERA5Error("Start time must be before end time.")
-        latest = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=era5_function.ERA5_LATENCY_DAYS)
-        if end_time > latest:
-            raise era5_function.ERA5Error(
-                f"ERA5 is only available until about {latest:%Y-%m-%d} (≈{era5_function.ERA5_LATENCY_DAYS} days delay).")
-        raw_path = os.path.join(flow_dir, "raw", "dtm_raw.tif")
-        catchment_path = os.path.join(flow_dir, "catchment", "catchment.geojson")
-        if not os.path.exists(raw_path):
-            raise era5_function.ERA5Error("No DEM found. Please process terrain first.")
-        if not os.path.exists(catchment_path):
-            raise era5_function.ERA5Error("No catchment found. Please process terrain first.")
-        # DEM
-        with rasterio.open(raw_path) as srcr:
-            dem = srcr.read(1).astype("float32")
-            dem_crs, transform, nodata = srcr.crs, srcr.transform, srcr.nodata
-        mask_nan = np.isnan(dem)
-        if nodata is not None: mask_nan |= dem == nodata
-        dem = np.where(mask_nan, 0.0, dem).astype("float32")
-        ny, nx = dem.shape
-        x_coords = transform.c + (np.arange(nx) + 0.5) * transform.a
-        y_coords = transform.f + (np.arange(ny) + 0.5) * transform.e
-        logger.info(f"DEM grid: {ny} × {nx} cells ({ny * nx / 1e6:.2f} M), CRS {dem_crs.to_string()}")
-        # Catchment
-        catchment = gpd.read_file(catchment_path)
-        if catchment.crs is None or catchment.crs.to_epsg() != 4326:
-            catchment = catchment.to_crs("EPSG:4326")
-        west, south, east, north = catchment.total_bounds
-        area = era5_area(west, south, east, north, snap=snap_area, buffer=buffer)
+        logger.info(f"Weather downloader started – source: {label}")
         logger.info(f"Local: {start} -> {end} ({time_zone}) | UTC: {start_time} -> {end_time}")
-        logger.info(f"ERA5 area [N, W, S, E]: {area}")
-        # Download ERA5 data month by month
-        os.makedirs(download_dir, exist_ok=True)
-        client = era5_function.make_client(api_key)
-        req_vars = list(FORCING_SOURCES) + (["geopotential"] if temp_lapse_correction else [])
-        files, n_total, grid_ref, z_src = [], 0, None, None
-        months = list(era5_function.month_requests(start_time, end_time, req_vars, area))
-        for i, (tag, request) in enumerate(months, 1):
-            logger.info(f"[{i}/{len(months)}] {tag}")
-            f, n, lat, lon, z = _download_month(
-                client, api_key, tag, request, download_dir, start_time, end_time,
-                processes, process_key, logger, max_wait_s, keep_z=z_src is None)
-            if grid_ref is None: grid_ref = (lat, lon)
-            elif lat.shape != grid_ref[0].shape or lon.shape != grid_ref[1].shape \
-                    or not (np.allclose(lat, grid_ref[0]) and np.allclose(lon, grid_ref[1])):
-                raise era5_function.ERA5Error(f"ERA5 grid of {tag} differs from previous months.")
-            if z is not None and z_src is None: z_src = z
-            files.append(f); n_total += n
-        if n_total == 0 or grid_ref is None: raise era5_function.ERA5Error("No data in the requested time range.")
-        lat_src, lon_src = grid_ref
-        # Interpolation setup
-        era5_function.check_cancel(processes, process_key)
-        era5_function.set_status(processes, process_key, "running", "Preparing interpolation...")
-        cy = min(CHUNK_XY, ny)
-        tw = int(block_mb * 1e6 // (cy * nx * 4) // CHUNK_T * CHUNK_T)
-        tw = max(CHUNK_T, min(tw, 24 * 31, -(-n_total // CHUNK_T) * CHUNK_T))
-        src = _open_sources(files, tw)
-        if src.sizes["time"] != n_total:
-            raise era5_function.ERA5Error("Inconsistent number of time steps after merging months.")
-        times = pd.to_datetime(src["time"].to_index())
-        use_lapse = temp_lapse_correction and z_src is not None
-        if temp_lapse_correction and z_src is None:
-            logger.warning("ERA5 orography not available -> no temperature lapse-rate correction.")
-        regridder = Regridder(lat_src, lon_src, x_coords, y_coords, dem_crs, method=method, k_idw=k_idw,
-            z_src=z_src if use_lapse else None, cache_dir=download_dir, cache_limit_mb=1024)
-        logger.info(f"Interpolation: {regridder.describe()}")
-        if use_lapse:
-            zs = regridder.z_src
-            if zs is not None:
-                logger.info(f"Temperature lapse-rate correction ON (ERA5 terrain {zs.min():.0f}–{zs.max():.0f} m, "
-                    f"DEM {dem[~mask_nan].min():.0f}–{dem[~mask_nan].max():.0f} m)")
-        logger.info(f"Processing: {n_total} hours × {ny}×{nx} cells | window {tw} h × {cy} rows | "
-            f"{'dask, ' + str(n_workers) + ' threads' if HAS_DASK else 'sequential (dask not installed)'}")
-        if os.path.exists(tmp_path): os.remove(tmp_path)
-        nc = Dataset(tmp_path, "w", format="NETCDF4")
-        nc.createDimension("time", None); nc.createDimension("y", ny); nc.createDimension("x", nx)
-        time_var = nc.createVariable("time", "f8", ("time",))
-        time_var.units = "hours since 1900-01-01 00:00:00"
-        time_var.calendar = "proleptic_gregorian"
-        time_var.time_zone = "UTC"
-        nc.createVariable("y", "f8", ("y",))[:] = y_coords
-        nc.createVariable("x", "f8", ("x",))[:] = x_coords
-        crs_var = nc.createVariable("crs", "i4")
-        crs_var.grid_mapping_name = "latitude_longitude" if dem_crs.is_geographic else "transverse_mercator"
-        crs_var.crs_wkt = dem_crs.to_wkt()
-        epsg = dem_crs.to_epsg()
-        if epsg is not None: crs_var.epsg_code = epsg
-        chunks = (CHUNK_T, cy, min(CHUNK_XY, nx))
-        nc_vars = {}
-        for var, (unit, _) in FORCING.items():
-            v = nc.createVariable(var, "f4", ("time", "y", "x"), zlib=True, complevel=4,
-                fill_value=NODATA_DEM, shuffle=True, chunksizes=chunks, least_significant_digit=2)
-            v.units, v.grid_mapping = unit, "crs"
-            nc_vars[var] = v
-        nc.source = "ERA5 reanalysis (Copernicus Climate Change Service)"
-        nc.interpolation = regridder.describe()
-        nc.temperature_lapse_correction = f"{LAPSE_T * 1000} K/km" if use_lapse else "none"
-        # Interpolate blocks of data in parallel
-        write_lock = threading.Lock()
-        row_blocks = [(r0, min(r0 + cy, ny)) for r0 in range(0, ny, cy)]
-        def process_block(r0, r1, win, g0, g1):
-            era5_function.check_cancel(processes, process_key)
-            idx, w, zi = regridder.get(r0, r1)
-            rows = r1 - r0
-            mask_b = mask_nan[r0:r1]
-            lapse = None
-            if use_lapse:
-                if zi is not None: lapse = (LAPSE_T * (zi.reshape(rows, nx) - dem[r0:r1])).astype(np.float32)
-                else: lapse = None
-            for var in FORCING:
-                out = regridder.apply(win[var], idx, w, rows, nx)
-                if var == "temp" and lapse is not None: out += lapse[None, :, :]
-                out[:, mask_b] = NODATA_DEM
-                with write_lock:
-                    nc_vars[var][g0:g1, r0:r1, :] = out
-                del out
-            return rows
-        for w0 in range(0, n_total, tw):
-            era5_function.check_cancel(processes, process_key)
-            w1 = min(w0 + tw, n_total)
-            win = _source_window(src, w0, w1)
-            if HAS_DASK:
-                tasks = [delayed(process_block)(r0, r1, win, w0, w1) for r0, r1 in row_blocks]
-                compute(*tasks, scheduler="threads", num_workers=n_workers)
-            else:
-                for r0, r1 in row_blocks:
-                    process_block(r0, r1, win, w0, w1)
-            with write_lock:
-                time_var[w0:w1] = date2num(list(times[w0:w1].to_pydatetime()), time_var.units, time_var.calendar)
-            pct = 100.0 * w1 / n_total
-            msg = f"Interpolating forcing: {pct:.0f}% ({times[w1 - 1]:%Y-%m-%d %H:%M} UTC)"
-            logger.info(msg)
-            era5_function.set_status(processes, process_key, "running", msg)
-            del win; gc.collect()
-        # Finalize
-        era5_function.check_cancel(processes, process_key)
-        nc.close(); nc = None; src.close(); src = None
-        os.replace(tmp_path, forcing_path)
-        logger.info(f"Saved forcing file: {forcing_path} ({n_total} hourly steps, UTC)")
-        era5_function.set_status(processes, process_key, "finished", "Weather download completed successfully.\n\n\n")
+        n_total = weather_functions.download_forcing(
+            source, flow_dir, api_key, start_time, end_time, processes, process_key, logger, time_zone, **options)
+        era5_function.set_status(processes, process_key, "finished",
+            f"Weather download completed successfully ({label}, {n_total} hourly steps).\n\n\n")
     except era5_function.DownloadCancelled as e:
         logger.info("=" * 70)
-        logger.info(f"{e} Previous forcing file (if any) was kept.")
+        logger.info(f"{e} Previous forcing file (if any) was kept. "
+            "Downloaded variables are cached - starting again resumes the download.")
         era5_function.set_status(processes, process_key, "failed", "Download cancelled by user.", cancelled=True)
     except era5_function.ERA5Error as e:
         logger.error(f"FAILED: {e}")
+        logger.info("Downloaded variables are cached - starting again resumes the download.")
         era5_function.set_status(processes, process_key, "failed", str(e))
     except Exception as e:
         logger.error("Weather download failed:\n" + traceback.format_exc())
         era5_function.set_status(processes, process_key, "failed", str(e))
     finally:
-        for obj in (nc, src):
-            if obj is not None:
-                try: obj.close()
-                except Exception: pass
-        if os.path.exists(tmp_path):
-            try: os.remove(tmp_path)
-            except OSError: pass
-        shutil.rmtree(download_dir, ignore_errors=True)
         gc.collect()
         for h in logger.handlers[:]:
-            try:
-                h.flush()
-                h.close()
+            try: h.flush(); h.close()
             except Exception: pass
             logger.removeHandler(h)
-
-def burn(geoms, height, width, transform):
-    out = np.zeros((height, width), dtype="uint8")
-    rasterize([(g, 1) for g in geoms], out=out, transform=transform, fill=0)
-    return out.astype(bool)
 
 def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name:str, 
     soil_source:str, water:str, dtm_path:str, catchment_path:str, log_file:str):
@@ -639,8 +401,7 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
         else:
             valid_mask = ~np.ma.getmaskarray(dtm)
             if nodata is None: valid_mask = np.isfinite(dtm.data)
-            polygons = [
-                shape(geom)
+            polygons = [shape(geom)
                 for geom, value in shapes(
                     valid_mask.astype(np.uint8), mask=valid_mask, transform=transform
                 ) if value == 1
@@ -670,8 +431,9 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
             result = rioxarray.open_rasterio(url)
             if isinstance(result, list): src = result[0]
             else: src = result
-            data_xr = src.rio.clip_box(minx=min_lon-pad, miny=min_lat-pad,
-                                        maxx=max_lon+pad, maxy=max_lat+pad)
+            data_xr = src.rio.clip_box(
+                minx=min_lon-pad, miny=min_lat-pad, maxx=max_lon+pad, maxy=max_lat+pad
+            )
             data_xr = data_xr.rio.reproject_match(ref, resampling=Resampling.nearest)
             isric_nodata = data_xr.rio.nodata
             data_xr = data_xr.load()
@@ -695,7 +457,7 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
             soil_thickness_array, mask_valid = read_isric(soil_thickness_url)
             # Interpolate data
             logger.info("Interpolating soil thickness data...")
-            soil_thickness_values = flow_functions.interpolate_extrapolate(soil_thickness_array, ~mask_valid, True)
+            soil_thickness_values = _interpolate_extrapolate(soil_thickness_array, ~mask_valid, True)
             soil_thickness_values = np.where(np.isfinite(soil_thickness_values), soil_thickness_values, NODATA_SOIL_THICKNESS)
             soil_thickness_values = soil_thickness_values.astype(np.int32)
             # Clip to catchment & lake
@@ -704,7 +466,7 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
             soil_thickness_path = os.path.normpath(os.path.join(soil_dir, 'soilthickness.tif'))
             profile_writer = profile.copy()
             profile_writer.update(dtype=np.int32)
-            flow_functions.write_geotif(soil_thickness_values, profile_writer, soil_thickness_path, NODATA_SOIL_THICKNESS, 'cm')
+            write_geotif(soil_thickness_values, profile_writer, soil_thickness_path, NODATA_SOIL_THICKNESS, 'cm')
             logger.info(f"Saving soil thickness data to: {soil_thickness_path}")
             # Download soil data
             for _, values in soil_types.items():
@@ -715,23 +477,23 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
                     soil_array, mask_valid = read_isric(file_url)
                     # Interpolate data
                     logger.info(f"Interpolating {file}_{depth}_250m_ll.tif...")
-                    soil_values = flow_functions.interpolate_extrapolate(soil_array, ~mask_valid, True)
+                    soil_values = _interpolate_extrapolate(soil_array, ~mask_valid, True)
                     soil_values = soil_values / scale
                     soil_values = np.where(np.isfinite(soil_values), soil_values, nodata_soil)
                     if mask_lake is not None: soil_values[mask_lake] = nodata_soil
                     soil_values[~mask_catchment] = nodata_soil
                     path = os.path.normpath(os.path.join(soil_dir, f'{name}_{depth}.tif'))
                     profile_writer.update(dtype=dtype)
-                    flow_functions.write_geotif(soil_values, profile_writer, path, nodata_soil, unit)
+                    write_geotif(soil_values, profile_writer, path, nodata_soil, unit)
                     logger.info(f"Saved downloaded data to: {path}")
         else:
             logger.error(f"Unsupported soil_source: {soil_source}")
             raise ValueError(f"Unsupported soil_source: {soil_source}")
         logger.handlers[0].flush()
-        processes[process_key] = {"status": "finished", "message": "\nSoil data downloaded successfully.\n\n"}
+        processes[process_key] = {
+            "status": "finished", "message": "\nSoil data downloaded successfully.\n\n"
+        }
     except Exception as e:
-        print('/soil_downloader:\n==============')
-        traceback.print_exc()
         if logger: logger.exception("Data download failed.")
         processes[process_key] = {"status": "failed", "message": str(e)}
     finally:
@@ -740,12 +502,11 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
             except Exception: pass
         if logger:
             for h in logger.handlers[:]:
-                try:
-                    h.flush()
-                    h.close()
+                try: h.flush(); h.close()
                 finally: logger.removeHandler(h)
 
-def hydro_creator(directory:str, dem_path:str, area_km2:float, logger:logging.Logger, river_path:str, water_path:str | None):
+def hydro_creator(directory:str, dem_path:str, area_km2:float, 
+    logger:logging.Logger, river_path:str, water_path:str | None):
     with rasterio.open(dem_path) as src:
         dem_array = src.read(1)
         crs, nodata = src.crs, src.nodata
@@ -824,7 +585,7 @@ def hydro_creator(directory:str, dem_path:str, area_km2:float, logger:logging.Lo
         file_path = os.path.normpath(os.path.join(directory, file))
         logger.info(f"Creating data: {file_path}")
         logger.info(f"Writing data to: {file_path}")
-        flow_functions.write_geotif(array[0], profile_writer, file_path, array[1])
+        write_geotif(array[0], profile_writer, file_path, array[1])
 
 def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str, log_file:str, area:float=10):
     project_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name))
@@ -836,24 +597,21 @@ def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str
     if os.path.exists(log_path): os.remove(log_path)
     logger = setup_logger("wflow", log_path)
     try:
-        logger.info("Checking wflow inputs...")
-        logger.info("="*60)
+        logger.info("Checking wflow inputs..."); logger.info("="*60)
         logger.info("Checking weather forcing data...")
         forcing_path = os.path.normpath(os.path.join(model_dir, 'forcing', 'weather_forcing.nc'))
         if not os.path.exists(forcing_path):
             logger.info("Weather forcing data not found.")
             processes[process_key] = {"status": "failed", "message": "Weather forcing data not found."}
             return
-        logger.info(f"Found weather forcing data at: {forcing_path}")
-        logger.info("="*60)
+        logger.info(f"Found weather forcing data at: {forcing_path}"); logger.info("="*60)
         logger.info("Checking terrain data...")
         terrain_path = os.path.normpath(os.path.join(model_dir, 'raw', 'dtm_raw.tif'))
         if not os.path.exists(terrain_path):
             logger.info("Terrain data not found.")
             processes[process_key] = {"status": "failed", "message": "Terrain data not found."}
             return
-        logger.info(f"Found terrain data at: {terrain_path}")
-        logger.info("="*60)
+        logger.info(f"Found terrain data at: {terrain_path}"); logger.info("="*60)
         logger.info("Checking water area data...")
         water_dir = os.path.join(model_dir, 'water_area')
         water_files = [f for f in os.listdir(water_dir) if f.endswith(".geojson")] if os.path.isdir(water_dir) else []
@@ -863,8 +621,7 @@ def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str
         else:
             water_path = os.path.normpath(os.path.join(water_dir, water_files[0]))
             logger.info(f"Found water area data at: {water_path}")
-        logger.info("="*60)
-        logger.info("Checking river data...")
+        logger.info("="*60); logger.info("Checking river data...")
         river_dir = os.path.normpath(os.path.join(model_dir, 'river'))
         river_files = [f for f in os.listdir(river_dir)]
         if len(river_files) != 2:
@@ -872,8 +629,7 @@ def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str
             processes[process_key] = {"status": "failed", "message": "Please upload river data."}
             return
         river_path = os.path.normpath(os.path.join(river_dir, 'river.gpkg'))
-        logger.info(f"Found river data at: {river_dir}")
-        logger.info("="*60)
+        logger.info(f"Found river data at: {river_dir}"); logger.info("="*60)
         logger.info("Checking template hydro data...")
         # Prepare template raster dataset
         hydro_dir = os.path.normpath(os.path.join(model_dir, 'hydro'))
@@ -883,8 +639,7 @@ def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str
         os.makedirs(hydro_dir, exist_ok=True)
         logger.info(f"Creating template hydro data at: {hydro_dir}")
         hydro_creator(hydro_dir, terrain_path, area, logger, river_path, water_path)
-        logger.info("Write hydro data completed.")
-        logger.info("=" * 60)
+        logger.info("Write hydro data completed."); logger.info("=" * 60)
         logger.info("Checking landcover data...")
         landcover_dir = os.path.normpath(os.path.join(model_dir, 'landcover'))
         landcover_files = [f for f in os.listdir(landcover_dir)]
@@ -892,8 +647,7 @@ def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str
             logger.info("Number of landcover files is not equal to 3.")
             processes[process_key] = {"status": "failed", "message": "Please download landcover data."}
             return
-        logger.info(f"Found landcover data at: {landcover_dir}")
-        logger.info("=" * 60)
+        logger.info(f"Found landcover data at: {landcover_dir}"); logger.info("=" * 60)
         logger.info("Checking soil data...")
         soil_dir = os.path.normpath(os.path.join(model_dir, 'soil'))
         soil_files = [f for f in os.listdir(soil_dir) if f.endswith('.tif')]
@@ -906,19 +660,14 @@ def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str
             logger.info(f"\n\n\n{message}\n")
             processes[process_key] = {"status": "failed", "message": "Please download soil data."}
             return
-        logger.info(f"Found soil data at: {soil_dir}")
-        logger.info("=" * 60)
-        logger.handlers[0].flush()
+        logger.info(f"Found soil data at: {soil_dir}"); logger.info("=" * 60); logger.handlers[0].flush()
         processes[process_key] = {"status": "finished", "message": "\nChecking Wflow inputs completed.\n\n"}
     except Exception as e:
-        print('/wflow_check:\n==============')
-        traceback.print_exc()
         logger.exception("Check of wflow failed.")
         processes[process_key] = {"status": "failed", "message": str(e)}
     finally:
         for h in logger.handlers[:]:
-            h.close()
-            logger.removeHandler(h)
+            h.close(); logger.removeHandler(h)
 
 def _safe_rmtree(path, max_retries=5, delay=1.0, logger=None):
     if not os.path.exists(path): return True
@@ -929,9 +678,7 @@ def _safe_rmtree(path, max_retries=5, delay=1.0, logger=None):
     for attempt in range(max_retries):
         try:
             gc.collect()
-            try:
-                from dask.distributed import get_client
-                get_client().close()
+            try: get_client().close()
             except Exception: pass
             gc.collect()
             def _on_error(func, path, exc_info):
@@ -946,8 +693,7 @@ def _safe_rmtree(path, max_retries=5, delay=1.0, logger=None):
             _log(f"Attempt {attempt+1}/{max_retries}: {e}")
             if attempt < max_retries - 1: time.sleep(delay * (attempt + 1))
             else: return False
-        except FileNotFoundError:
-            return True
+        except FileNotFoundError: return True
         except Exception as e:
             _log(f"Attempt {attempt+1}/{max_retries}: {e}")
             if attempt < max_retries - 1: time.sleep(delay)
@@ -990,14 +736,11 @@ def _cleanup_model(model, logger=None):
     except Exception as e:
         _log(f"Cleanup model error: {e}")
     finally:
-        try:
-            del model
+        try: del model
         except Exception: pass
         gc.collect()
         try:
-            from dask.distributed import get_client
-            client = get_client()
-            client.close()
+            client = get_client(); client.close()
         except Exception: pass
         gc.collect()
 
@@ -1008,9 +751,7 @@ def _cleanup_after_failure(model_dir, model_folder, logger=None):
             except: pass
     mod_path = os.path.normpath(os.path.join(model_dir, model_folder))
     try:
-        from dask.distributed import get_client
-        client = get_client()
-        client.close()
+        client = get_client(); client.close()
     except Exception: pass
     for _ in range(3):
         gc.collect()
@@ -1093,8 +834,6 @@ def prepare_hydromt(project_name, flow_name, model_folder, start, end, step, tim
         logger.info(f"Prepare HydroMT completed.")
         logger.handlers[0].flush()
     except Exception as e:
-        print('/prepare_hydromt:\n==============')
-        traceback.print_exc()
         logger.exception("Prepare HydroMT failed: %s", e)
         error = e
     finally:
@@ -1116,56 +855,44 @@ def run_hydromt(project_name: str, flow_name:str, model_folder:str, log_path:str
     sys.stdout, sys.stderr = stream_logger, stream_logger
     error = None
     try:
-        logger.info("Running HydroMT...")
-        logger.info("=" * 36)
+        logger.info("Running HydroMT..."); logger.info("=" * 36)
         wflow_path = os.path.normpath(os.path.join(WFLOW_PATH, "wflow_cli", "bin", "wflow_cli.exe"))
         toml_path = os.path.normpath(os.path.join(model_dir, "wflow_sbm.toml"))
         if not os.path.isfile(wflow_path):
             message = f"Wflow executable not found: {wflow_path}"
-            logger.info("=" * 36)
-            logger.info(message)
-            logger.info("=" * 36)
+            logger.info("=" * 36); logger.info(message); logger.info("=" * 36)
             raise FileNotFoundError(message)
         if not os.path.isfile(toml_path):
             message = f"TOML config not found: {toml_path}"
-            logger.info("=" * 36)
-            logger.info(message)
-            logger.info("=" * 36)
+            logger.info("=" * 36); logger.info(message); logger.info("=" * 36)
             raise FileNotFoundError(message)
         if not os.path.isdir(model_dir):
             message = f"Model dir not found: {model_dir}"
-            logger.info("=" * 36)
-            logger.info(message)
-            logger.info("=" * 36)
+            logger.info("=" * 36); logger.info(message); logger.info("=" * 36)
             raise FileNotFoundError(message)
         cmd = [wflow_path, toml_path]
         process = subprocess.Popen(
-            cmd, cwd=model_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            cmd, cwd=model_dir, stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT, text=True, bufsize=1
         )
-        if process.stdout is None: raise RuntimeError("stdout is not available; did you pass stdout=PIPE?")
+        if process.stdout is None: 
+            raise RuntimeError("stdout is not available; did you pass stdout=PIPE?")
         for line in process.stdout: 
-            logger.info(line.strip())
-            logger.handlers[0].flush()
-        process.wait()
-        logger.info("=" * 36)
+            logger.info(line.strip()); logger.handlers[0].flush()
+        process.wait(); logger.info("=" * 36)
         if process.returncode == 0:
             logger.info(f"Run HydroMT completed successfully.")
         else: 
             logger.info(f"Run HydroMT failed.")
             error = RuntimeError(f"wflow_cli exited with code: {process.returncode}")
-        logger.info("=" * 36)
-        logger.handlers[0].flush()
+        logger.info("=" * 36); logger.handlers[0].flush()
     except Exception as e:
-        print('/run_hydromt:\n==============')
-        traceback.print_exc()
-        logger.exception("Prepare HydroMT failed: %s", e)
-        error = e
+        logger.exception("Prepare HydroMT failed: %s", e); error = e
     finally:
         for h in logger.handlers[:]:
             try: h.flush()
             except Exception: pass
-            h.close()
-            logger.removeHandler(h)
+            h.close(); logger.removeHandler(h)
         sys.stdout, sys.stderr = old_stdout, old_stderr
     if error is not None: raise error
 
@@ -1192,9 +919,7 @@ def wflow_run(project_name:str, processes:dict, process_key:str, flow_name:str, 
     def _reset_log_file():
         try:
             for h in logger.handlers[:]:
-                try:
-                    h.flush()
-                    h.close()
+                try: h.flush(); h.close()
                 except Exception: pass
                 logger.removeHandler(h)
             if os.path.exists(log_path): os.remove(log_path)
@@ -1207,20 +932,16 @@ def wflow_run(project_name:str, processes:dict, process_key:str, flow_name:str, 
             logger.handlers[0].flush()
         except Exception: pass
     try:
-        for i, (idx, row) in enumerate(df.iterrows()):
+        for i, (_, row) in enumerate(df.iterrows()):
             temp_name, temp_lat, temp_lon = row['id'], row['lat'], row['lon']
             if i > 0: _reset_log_file()
             logger.info("="*70)
             logger.info(f"Checking candidate: {temp_name} [{temp_lat}, {temp_lon}]")
             logger.info("="*70)
             try:
-                client = get_client()
-                client.close()
-                del client
+                client = get_client(); client.close(); del client
             except Exception: pass
-            gc.collect()
-            config.set(scheduler='threads')
-            prepare_ok = False
+            gc.collect(); config.set(scheduler='threads'); prepare_ok = False
             try:
                 gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy([temp_lon], [temp_lat]), crs='EPSG:4326')
                 if gdf.crs != crs: gdf = gdf.to_crs(crs)
@@ -1250,12 +971,9 @@ def wflow_run(project_name:str, processes:dict, process_key:str, flow_name:str, 
                 run_hydromt(project_name, flow_name, model_folder, log_path)
                 logger.info(f"Candidate '{temp_name}' SUCCESS.")
                 candidate_results.append({"point": temp_name, "lat": temp_lat, "lon": temp_lon, "status": "success"})
-                success_point = temp_name
-                logger.info("="*70)
+                success_point = temp_name; logger.info("="*70)
                 logger.info(f"Model run SUCCEEDED with candidate: {temp_name} [{temp_lat}, {temp_lon}]")
-                logger.info("Process completed. Stopping candidate iteration.")
-                logger.info("="*70)
-                break
+                logger.info("Process completed. Stopping candidate iteration."); logger.info("="*70); break
             except Exception as e:
                 logger.exception("Run HydroMT failed for candidate '%s'.",temp_name )
                 candidate_results.append({
@@ -1264,14 +982,12 @@ def wflow_run(project_name:str, processes:dict, process_key:str, flow_name:str, 
                 })
                 if not prepare_ok:
                     logger.error(f"Prepare data for hydromt failed - Skipping run_hydromt for candidate '{temp_name}'.")
-                    logger.info("=" * 70)
-                    logger.info("")
+                    logger.info("=" * 70); logger.info("")
                 _cleanup_after_failure(model_dir, model_folder, logger)
                 gc.collect()
                 continue
         if success_point is not None:
-            processes[process_key] = {
-                "status": "finished",
+            processes[process_key] = { "status": "finished",
                 "message": f"\n\nProcess completed successfully with candidate '{success_point}'.\n"
                     f"Total candidates tried: {len(candidate_results)}.",
                 "success_point": success_point, "results": candidate_results,
@@ -1290,11 +1006,9 @@ def wflow_run(project_name:str, processes:dict, process_key:str, flow_name:str, 
         processes[process_key] = {"status": "failed", "message": str(e)}
     finally:
         try:
-            client = get_client()
-            client.close()
+            client = get_client(); client.close()
         except Exception: pass
         gc.collect()
         sys.stdout, sys.stderr = old_stdout, old_stderr
         for h in logger.handlers[:]:
-            h.close()
-            logger.removeHandler(h)
+            h.close(); logger.removeHandler(h)
