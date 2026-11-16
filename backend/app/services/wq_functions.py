@@ -125,7 +125,6 @@ def hydTimeInfo(hyd_path: str) -> dict:
     if missing: raise ValueError(f"Missing in .hyd file: {missing}")
     return info
 
-
 def simWindowChecker(parameters: dict, noq: int) -> tuple:
     info = hydTimeInfo(parameters['hyd_path'])
     conv = info['conv_step']
@@ -165,8 +164,7 @@ def poiInspector(ptr_path: str, n_vertical: int) -> dict:
     noq = poi.shape[0]
     min_ptr = int(poi[:, :2].min())
     return {
-        'noq': noq, 'exchange_x': noq - int(n_vertical),
-        'n_boundaries': -min_ptr if min_ptr < 0 else 0,
+        'noq': noq, 'exchange_x': noq - int(n_vertical), 'n_boundaries': -min_ptr if min_ptr < 0 else 0
     }
 
 def wqPreparation(parameters:dict, key:str, output_folder:str, includes_folder:str) -> tuple[str | None, str]:

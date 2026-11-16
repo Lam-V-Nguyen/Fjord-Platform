@@ -23,12 +23,13 @@ const obj = {
     sourceInitTemp: $('hyd-source-temperature'), sourceInitSalinity: $('hyd-source-salinity'),
     sourceDrawBtn: $('hyd-source-draw-btn'), sourceTopLeft: $('hyd-source-top-left'), 
     sourceBottomRight: $('hyd-source-bottom-right'), sourceDEM: $('hyd-source-terrain-download-btn'), 
-    sourceDEMResolution: $('hyd-source-terrain-resolution'), meteoAPI: $('era5-meteo-id'), weatherAPI: $('era5-weather-id'),
+    sourceDEMResolution: $('hyd-source-terrain-resolution'), meteoAPI: $('era5-meteo-id'), 
     sourceThreshold: $('hyd-source-threshold'), sourceFlowBtn: $('hyd-source-flow-btn'),
     sourceArea: $('hyd-source-area'), sourceContainer: $('hyd-source-container'),
     sourceComputeBtn: $('hyd-source-compute-btn'), sourceTable: $('hyd-source-table'), 
     sourceSave: $('hyd-source-save-btn'), meteoLocation: $('meteo-picker-btn'), 
     meteoLat: $('meteo-lat'), meteoLon: $('meteo-lon'), meteoSource: $('hyd-meteo-station'), 
+    meteoERA5Container: $('era5-meteo-container'), weatherAPI: $('era5-weather-id'),
     meteoTable: $('meteo-table'), meteoLog: $('meteo-log-text'), meteoDownload: $('meteo-download-btn'), 
     meteoSave: $('meteo-save-btn'), meteoLogContainer: $('meteo-log-container'), meteoCancelBtn: $('meteo-cancel-btn'),
     weatherLocation: $('weather-picker-btn'), weatherLat: $('weather-lat'), weatherLon: $('weather-lon'), 
@@ -40,7 +41,9 @@ const obj = {
 
 let currentProject, nveLayer = null, nveSelected = false, picker = '', mapContainer = null,
     pointCollections = [], drawChecked = false, currentPolygon = null, polygonMarkers = [],
-    demLayer = null, streamLayer = null, subbasinLayer = null, pointLayer = null, catchmentLayer = null;
+    demLayer = null, streamLayer = null, subbasinLayer = null, pointLayer = null, meteo, request, 
+    catchmentLayer = null, meteoFollowing = false, weatherFollowing = false, variables;
+const METEO_KEY = 'meteo', WEATHER_KEY = 'weather';
 
 setupTabs(document); await getProject();
 const mapObj = await initMap('leaflet-map-hyd-preparation');
@@ -144,7 +147,7 @@ async function nveSourceManagement(){
                 const content_csv = { 
                     projectName: currentProject, fileName: `${key}.csv`, ignore_stationName: true
                 };
-                const csv = await jsonLoader('upload_weather_csv', content_csv);
+                const csv = await jsonLoader('upload_era5_csv', content_csv);
                 if (csv.status === 'error') { 
                     alert(csv.message); deleteTable(obj.dischargeTable); return; 
                 }
@@ -261,65 +264,79 @@ async function sourceManagement() {
 }
 
 async function meteoManagement() {
-    await loadClient('era5', obj.meteoAPI);
-    const setMeteoRunning = (running) => {
-        obj.meteoCancelBtn.style.display = running ? 'block' : 'none';
-        obj.meteoCancelBtn.disabled = false; obj.meteoCancelBtn.textContent = 'Cancel';
-    };
-    setMeteoRunning(false);
+    await loadClient('era5', obj.meteoAPI); setRunning(false, METEO_KEY);
     obj.meteoLocation.addEventListener('click', () => { picker = 'meteo'; });
-    obj.meteoSource.addEventListener('change', () => {
-        obj.meteoLog.value = ''; deleteTable(obj.meteoTable);
-        const row = ["YYYY-MM-DD HH:MM:SS", "Humidity", "Air temperature", "Cloud coverage"];
-        addRowToTable(obj.meteoTable, row);
+    obj.meteoSource.addEventListener('change', (e) => {
+        const value = e.target.value; 
+        if (value === '') { return; } 
+        else {
+            obj.meteoLog.value = ''; deleteTable(obj.meteoTable);
+            const row = ["YYYY-MM-DD HH:MM:SS", "Humidity", "Air temperature", "Cloud coverage"];
+            addRowToTable(obj.meteoTable, row);
+        }
+        obj.meteoERA5Container.style.display = value === 'era5' ? 'flex': 'none';
     });
     obj.meteoDownload.addEventListener('click', async () => {
-        const lat = obj.meteoLat.value, lon = obj.meteoLon.value, logFile = 'meteo_HYD_log.txt';
-        const key = 'meteo', dataService = obj.meteoSource.value;
-        const apiKey = obj.meteoAPI.value;
-        if (apiKey === '') { alert('Please enter your NVE API key.'); return; }
+        const lat = obj.meteoLat.value, lon = obj.meteoLon.value;
         if (lat === '' || lon === '') { alert('Please select a location on map.'); return; }
         const start = obj.sourceStart.value, end = obj.sourceEnd.value;
         if (!start || !end) { alert('Please select start/end date(s).'); return; }
         if (new Date(start) > new Date(end)) { alert('Start date must not be after end date.'); return; }
+        const source = obj.meteoSource.value, logFile = 'meteo_HYD_log.txt';
+        if (source === '') { alert('Please select a data source.'); return; }
+        obj.weatherSave.style.display = 'none'; const apiKey = obj.meteoAPI.value; 
+        if (apiKey === '' && obj.meteoSource.value === 'era5') { alert('Please enter your ERA5 API key.'); return; }
+        variables = ["relative_humidity_2m", "2m_temperature", "total_cloud_cover"];
+        if (source === 'era5') { variables.push("2m_dewpoint_temperature"); }
         try {
-            const contentChecker = { projectName: currentProject, key: key };
+            const contentChecker = { projectName: currentProject, key: METEO_KEY };
             const statusRes = await jsonLoader('check_download_status', contentChecker);
             if (statusRes.status === "running") {
                 alert(statusRes.cancelling ? 'Previous download is being cancelled. Please wait a moment.'
-                    : 'Meteo download is running.'); return;
+                    : 'Meteo download is running.');
+                followDownload(
+                    currentProject, logFile, meteoFollowing, METEO_KEY, obj.meteoLogContainer, 
+                    obj.meteoLog, obj.meteoTable, obj.meteoSave, obj.meteoCancelBtn
+                ); return;
             }
+            meteoFollowing = false; obj.meteoLogContainer.style.display = 'flex';
+            obj.meteoTable.style.display = 'none';
             const content = { 
-                projectName: currentProject, apiKey: apiKey, lat: lat, lon: lon, dataService: dataService, 
-                start: start, end: end, key: key, timeZone: getLastTimeZone(), logFile: logFile
+                projectName: currentProject, lat: lat, lon: lon, source: source, rh: true,
+                startTime: start, endTime: end, key: METEO_KEY, logFile: logFile, 
+                apiKey: apiKey, timeZone: getLastTimeZone(), variables: variables
             };
-            const request = await jsonLoader('start_meteo', content);
-            if (request.status === 'error') { alert(request.message); return; }
-            obj.meteoLog.value = ''; setMeteoRunning(true);
-            updateLog(currentProject, obj.meteoLog, 2, key, async () => {
-                const res = await jsonLoader('check_download_status', { projectName: currentProject, key });
-                setMeteoRunning(false);
+            if (source === 'era5') { request = await jsonLoader('download_era5', content); }
+            else if (source === 'open-meteo') { request = await jsonLoader('download_point_weather', content); }
+            if (request.status !== 'ok') { alert(request.message); return; }
+            obj.meteoLog.value = ''; setRunning(true, METEO_KEY);
+            updateLog(currentProject, obj.meteoLog, 2, METEO_KEY, async () => {
+                const res = await jsonLoader('check_download_status', { projectName: currentProject, key: METEO_KEY });
+                setRunning(false, METEO_KEY);
                 if (res.cancelled) { alert('Meteo download cancelled. No data was saved.'); return; }
                 if (res.status !== 'finished') { alert(`Meteo download failed: ${res.message}`); return; }
                 alert('Downloading meteo data completed.');
                 signalSender('showOverlay', 'Uploading meteological data to table. Please wait...');
-                let meteo;
-                try { meteo = await jsonLoader('upload_weather_csv', { projectName: currentProject, fileName: `${key}.csv` }); }
+                const csv = { projectName: currentProject, fileName: `${METEO_KEY}.csv` };
+                try { meteo = await jsonLoader('upload_era5_csv', csv); }
                 finally { signalSender('hideOverlay'); }
-                if (meteo.status === 'error') { alert(meteo.message); return; }
+                if (meteo.status !== 'ok') { alert(meteo.message); return; }
                 addDataToTable(obj.meteoTable, meteo.columns, meteo.content);
                 obj.meteoLogContainer.style.display = 'none'; obj.meteoTable.style.display = 'table';
+                obj.meteoSave.style.display = 'block';
             }, logFile);
         } catch (error) { alert(error.message || error); return; }
     });
     obj.meteoCancelBtn.addEventListener('click', async () => {
-        if (!confirm('Cancel the ERA5 download?')) return;
+        if (!confirm('Cancel data download?')) return;
         obj.meteoCancelBtn.disabled = true; obj.meteoCancelBtn.textContent = 'Cancelling...';
         try {
             const res = await jsonLoader('cancel_download_era5', { projectName: currentProject, key: 'meteo' });
-            if (res.status === 'idle') setMeteoRunning(false); 
-            obj.meteoCancelBtn.style.display = 'none'; alert('ERA5 download cancelled.');
-        } catch (error) { obj.meteoCancelBtn.disabled = false; alert(error.message || error); }
+            if (res.status === 'idle') setRunning(false, METEO_KEY); 
+            obj.meteoCancelBtn.style.display = 'none'; alert('Data download cancelled.');
+        } catch (error) { 
+            obj.meteoCancelBtn.disabled = false; alert(error.message || error);
+        }
     });
     obj.meteoSave.addEventListener('click', async () => {
         const data = getDataFromTable(obj.meteoTable, true);
@@ -333,13 +350,7 @@ async function meteoManagement() {
 
 async function weatherManagement() {
     await loadClient('era5', obj.era5WeatherAPI); await loadClient('nve', obj.gtsWeatherAPI);
-    const setWeatherRunning = (running) => {
-        if (obj.weatherSource.value !== "era5") return;
-        obj.weatherCancel.style.display = running ? 'block' : 'none';
-        obj.weatherCancel.disabled = false;
-        obj.weatherCancel.textContent = 'Cancel';
-    };
-    setWeatherRunning(false);
+    setRunning(false, WEATHER_KEY);
     obj.weatherLocation.addEventListener('click', () => { picker = 'weather'; });
     obj.weatherSource.addEventListener('change', async(e) => {
         const value = e.target.value;
@@ -349,50 +360,65 @@ async function weatherManagement() {
         } else if (value === "era5") {
             obj.gtsContainer.style.display = 'none'; obj.era5Container.style.display = 'flex';
             if (obj.era5WeatherAPI.value === '') await loadClient('era5', obj.era5WeatherAPI);
-        }
+        } else { obj.era5Container.style.display = 'none'; obj.gtsContainer.style.display = 'none'; }
         obj.weatherLog.value = ''; deleteTable(obj.weatherTable);
         addRowToTable(obj.weatherTable, ["YYYY-MM-DD HH:MM:SS", "Wind Speed", "Wind Direction"]);
     });
     obj.weatherDownload.addEventListener('click', async () => {
         const lat = obj.weatherLat.value, lon = obj.weatherLon.value, logFile = 'weather_HYD_log.txt';
-        const key = 'wind', dataService = obj.weatherSource.value;
         if (lat === '' || lon === '') { alert('Please select a location on map.'); return; }
         const start = obj.sourceStart.value, end = obj.sourceEnd.value;
         if (start === '' || end === '') { alert('Please select start/end date(s).'); return; }
         const source = obj.weatherSource.value;
-        const apiKey = source === "nve-gts" ? obj.gtsWeatherAPI.value : obj.era5WeatherAPI.value;
-        if (apiKey === '') { alert('Please enter your API key.'); return; }
+        if (source === '') { alert('Please select the data source.'); return; }
+        const apiKey = source === 'era5' ? obj.era5WeatherAPI.value.trim()
+            : source === 'nve-gts' ? obj.gtsWeatherAPI.value.trim() : '';
+        if (source === 'era5' && !apiKey) { alert('Please enter your CDS (ERA5) API key.'); return; }
         try {
-            const contentChecker = {projectName: currentProject, key: key};
+            const contentChecker = {projectName: currentProject, key: WEATHER_KEY};
             const statusRes = await jsonLoader('check_download_status', contentChecker);
-            if (statusRes.status === "running") { alert("Wind download is running."); return; }
-            obj.weatherLog.value = ''; 
-            if (obj.weatherSource.value === "era5") obj.weatherCancel.style.display = 'block';
+            if (statusRes.status === "running") {
+                alert(statusRes.cancelling ? 'Previous download is being cancelled. Please wait a moment.'
+                    : 'Weather download is running.');
+                followDownload(
+                    currentProject, logFile, weatherFollowing, WEATHER_KEY, null, 
+                    obj.weatherLog, obj.weatherTable, obj.weatherSave, obj.weatherCancel
+                ); return;
+            }
+            obj.weatherLog.value = ''; weatherFollowing = false;
             const content = { 
-                projectName: currentProject, apiKey: apiKey, lat: lat, lon: lon, dataService: dataService, 
-                start: start, end: end, key: key, timeZone: getLastTimeZone(), logFile: logFile
+                projectName: currentProject, lat: lat, lon: lon, source: source, timeZone: getLastTimeZone(),
+                startTime: start, endTime: end, logFile: logFile, key: WEATHER_KEY, apiKey: apiKey
             };
-            const request = await jsonLoader('start_meteo', content);
-            if (request.status === 'error') { alert(request.message); return; }
-            setWeatherRunning(true);
-            updateLog(currentProject, obj.weatherLog, 2, key, async () => {
-                alert('Downloading wind data completed.');
-                const res = { projectName: currentProject, fileName: `${key}.csv` };
+            const request = await jsonLoader('hyd_weather_download', content);
+            if (request.status !== 'ok') { alert(request.message); return; }
+            setRunning(true, WEATHER_KEY);
+            updateLog(currentProject, obj.weatherLog, 2, WEATHER_KEY, async () => {
+                const res = await jsonLoader('check_download_status', { projectName: currentProject, key: WEATHER_KEY });
+                setRunning(false, WEATHER_KEY);
+                if (res.cancelled) { alert('Weather download cancelled. No data was saved.'); return; }
+                if (res.status !== 'finished') { alert(`Weather download failed: ${res.message}`); return; }
+                alert('Downloading weather data completed.');
+                const csv = { projectName: currentProject, fileName: `${WEATHER_KEY}.csv` };
                 signalSender('showOverlay', 'Uploading weather data to table. Please wait...');
-                const wind = await jsonLoader('upload_weather_csv', res); signalSender('hideOverlay');
-                if (wind.status === 'error') { alert(wind.message); return; }
-                addDataToTable(obj.weatherTable, wind.columns, wind.content);
+                try { meteo = await jsonLoader('upload_era5_csv', csv); }
+                finally { signalSender('hideOverlay'); }
+                if (meteo.status !== 'ok') { alert(meteo.message); return; }
+                addDataToTable(obj.weatherTable, meteo.columns, meteo.content);
             }, logFile);
         } catch (error) { alert(error.message || error); return; }
     });
     obj.weatherCancel.addEventListener('click', async () => {
-        if (!confirm('Cancel the ERA5 download?')) return;
+        if (!confirm('Cancel the weather download?')) return;
         obj.weatherCancel.disabled = true; obj.weatherCancel.textContent = 'Cancelling...';
         try {
-            const res = await jsonLoader('cancel_download_era5', { projectName: currentProject, key: 'wind' });
-            if (res.status === 'idle') setWeatherRunning(false); 
-            obj.weatherCancel.style.display = 'none'; alert('ERA5 download cancelled.');
-        } catch (error) { obj.weatherCancel.disabled = false; alert(error.message || error); }
+            const res = await jsonLoader('cancel_download_era5', { projectName: currentProject, key: WEATHER_KEY });
+            if (res.status === 'idle') { setRunning(false, WEATHER_KEY); }
+            obj.weatherCancel.style.display = 'none'; alert('Weather download cancelled.');
+        } catch (error) { 
+            obj.weatherCancel.textContent = 'Cancel';
+            obj.weatherCancel.disabled = false; alert(error.message || error); 
+        }
     });
     obj.weatherSave.addEventListener('click', async () => {
         const data = getDataFromTable(obj.weatherTable, true);
@@ -402,6 +428,46 @@ async function weatherManagement() {
             alert(`Save file successfully.`);
         } catch (e) { alert(`Failed to save wind data:\n${e.message}`);}
     });
+}
+
+function followDownload(currentProject, logFile, keyFollow, key, logContainer, logText, table,
+    saveBtn, cancelBtn, clearLog=false) {
+    if (keyFollow) { alert('Data is being downloaded.'); return; }
+    keyFollow = true;
+    if (clearLog) logText.value = '';
+    if (logContainer) logContainer.style.display = 'flex'; 
+    saveBtn.style.display = 'none'; table.style.display = 'none';
+    setRunning(true, key);
+    updateLog(currentProject, logText, 2, key, async () => {
+        keyFollow = false;
+        const res = await jsonLoader('check_download_status', { projectName: currentProject, key: key });
+        setRunning(false, key);
+        if (res.status !== 'finished') { alert(`Weather download failed: ${res.message}`); return; }
+        signalSender('showOverlay', 'Uploading weather data to table. Please wait...');
+        let csv;
+        try { csv = await jsonLoader('upload_era5_csv', { projectName: currentProject, fileName: `${key}.csv` }); }
+        finally { signalSender('hideOverlay'); }
+        if (csv.status === 'error') { alert(csv.message); return; }
+        addDataToTable(table, csv.columns, csv.content);
+        saveBtn.style.display = 'block'; logContainer.style.display = 'none';
+        table.style.display = 'table'; cancelBtn.style.display = 'none';
+    }, logFile);
+}
+
+function setRunning(running, key) {
+    if (key === METEO_KEY) {
+        obj.meteoDownload.disabled = running;
+        if (obj.meteoCancelBtn) {
+            obj.meteoCancelBtn.style.display = running ? 'inline-block' : 'none';
+            obj.meteoCancelBtn.disabled = false; obj.meteoCancelBtn.textContent = 'Cancel';
+        }
+    } else if (key === WEATHER_KEY) {
+        obj.weatherDownload.disabled = running;
+        if (obj.weatherCancel) {
+            obj.weatherCancel.style.display = running ? 'inline-block' : 'none';
+            obj.weatherCancel.disabled = false; obj.weatherCancel.textContent = 'Cancel';
+        }
+    }
 }
 
 function mapOptions(map) {

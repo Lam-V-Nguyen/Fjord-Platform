@@ -594,33 +594,38 @@ function unGridManager() {
         }
     });
     // Create grid
-    obj.createGrid.addEventListener('click', async () => {
+    obj.createGrid.addEventListener('click', async (e) => {
         if (pointLayer === null) { alert("Please generate vertexes first."); return; }
+        if (e.target.disabled) return;
         const levelSelector = obj.scaleSelector.value, pointCollection = [];
-        if (levelSelector === "auto") { levelValue = ''; } 
-        else { levelValue = Number(obj.scaleFactor.value); }
-        pointLayer.eachLayer(layer => {
-            const latlng = layer.getLatLng();
-            pointCollection.push([latlng.lat, latlng.lng]);
-        });
-        if (pointCollection.length === 0) { alert("No vertexes found."); return; }
-        pointCollection.push(pointCollection[0]);
-        signalSender('showOverlay', 'Generating an Unstructured Grid.\nPlease wait...');
-        const contents = { 
-            projectName: currentProject, pointCollection: pointCollection, levelValue: levelValue 
-        }
-        const response = await jsonLoader('grid_creator', contents); signalSender('hideOverlay');
-        if (response.status === "error") { alert(response.message); return; }
-        gridLayer = clearMap(gridLayer, mapObj); orthoLayer = clearMap(orthoLayer, mapObj);
-        gridLayer = await plotUnstructuredGrid(response.content.polygon, mapObj);
-        interpolatedPointLayer = clearMap(interpolatedPointLayer, mapObj);
-        gridPoints = clearMap(gridPoints, mapObj); 
-        gridPoints = await plotUnstructuredGrid(response.content.point, mapObj, 'black');
-        moveChecked = false; obj.moveCheckbox.checked = false;
-        refineChecked = false; obj.refinementCheckbox.checked = false;
-        obj.refinementCheckbox.dispatchEvent(new Event('change'));
-        obj.depthCheckbox.checked = false; obj.depthCheckbox.dispatchEvent(new Event('change'));
-        obj.orthoCheckbox.checked = false; obj.orthoCheckbox.dispatchEvent(new Event('change'));
+    levelValue = levelSelector === "auto" ? '' : Number(obj.scaleFactor.value);
+    if (levelValue !== '' && (!Number.isFinite(levelValue) || levelValue <= 0)) {
+        alert("Scale factor must be a positive number."); return;
+    }
+    pointLayer.eachLayer(layer => {
+        const latlng = layer.getLatLng();
+        pointCollection.push([latlng.lat, latlng.lng]);
+    });
+    if (pointCollection.length < 3) { alert("Polygon must have at least 3 vertexes."); return; }
+    const contents = { projectName: currentProject, pointCollection: pointCollection, levelValue: levelValue };
+    e.target.disabled = true; let response = null;
+    signalSender('showOverlay', 'Generating an Unstructured Grid.\nPlease wait...');
+    try { response = await jsonLoader('grid_creator', contents); }
+    catch (error) { alert(`Grid generation failed: ${error.message || error}`); return; }
+    finally { signalSender('hideOverlay'); e.target.disabled = false; }
+    if (!response || response.status === "error") {
+        alert(response?.message || "Grid generation failed (no response from server)."); return;
+    }
+    gridLayer = clearMap(gridLayer, mapObj); orthoLayer = clearMap(orthoLayer, mapObj);
+    gridLayer = await plotUnstructuredGrid(response.content.polygon, mapObj);
+    interpolatedPointLayer = clearMap(interpolatedPointLayer, mapObj);
+    gridPoints = clearMap(gridPoints, mapObj);
+    gridPoints = await plotUnstructuredGrid(response.content.point, mapObj, 'black');
+    moveChecked = false; obj.moveCheckbox.checked = false;
+    refineChecked = false; obj.refinementCheckbox.checked = false;
+    obj.refinementCheckbox.dispatchEvent(new Event('change'));
+    obj.depthCheckbox.checked = false; obj.depthCheckbox.dispatchEvent(new Event('change'));
+    obj.orthoCheckbox.checked = false; obj.orthoCheckbox.dispatchEvent(new Event('change'));
     });
     // Generate orthogonality
     obj.orthoCheckbox.addEventListener('change', async (e) => {
@@ -760,45 +765,35 @@ function unGridManager() {
         if (e.target.checked) { mapObj.addLayer(interpolatedLayer); }
         else { mapObj.removeLayer(interpolatedLayer); }
     });
-    obj.saveGrid.addEventListener('click', async() => {
+    obj.saveGrid.addEventListener('click', async () => {
         if (interpolatedPointLayer === null) { alert("No interpolated grid found. Please interpolate grid first."); return; }
-        signalSender('showOverlay', 'Saving interpolated grid data to a NetCDF file.\nPlease wait...');
-        // Check browser support
         if (!window.showSaveFilePicker) {
-            alert(
-                "Your browser does not support choosing a save location.\n" +
-                "Please use a recent version of Chrome or Edge."
-            );
+            alert("Your browser does not support choosing a save location.\nPlease use a recent version of Chrome or Edge.");
             return;
         }
+        let fileHandle;
         try {
-            const fileHandle = await window.showSaveFilePicker({
+            fileHandle = await window.showSaveFilePicker({
                 suggestedName: "Grid.nc",
-                types: [
-                    { description: 'NetCDF files', accept: {'application/x-netcdf': ['.nc']}}
-                ]
+                types: [{ description: 'NetCDF files', accept: { 'application/x-netcdf': ['.nc'] } }]
             });
-            const contents = { 
-                projectName: currentProject, gridPoints: interpolatedPointLayer.toGeoJSON() 
-            };
+        } catch (error) { if (error.name !== 'AbortError') alert(error.message); return; }
+        signalSender('showOverlay', 'Saving interpolated grid data to a NetCDF file.\nPlease wait...');
+        try {
             const response = await fetch('/grid_saver', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(contents)
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ projectName: currentProject, gridPoints: interpolatedPointLayer.toGeoJSON() })
             });
-            if (!response.ok) {
-                throw new Error(`Server returned HTTP ${response.status}`);
+            const type = response.headers.get('content-type') || '';
+            if (!response.ok || type.includes('application/json')) {
+                const err = type.includes('application/json') ? await response.json() : null;
+                throw new Error(err?.message || `Server returned HTTP ${response.status}`);
             }
-            const blob = await response.blob();
             const writable = await fileHandle.createWritable();
-            await writable.write(blob); await writable.close();
-            alert(`Grid saved successfully.`);
-        } catch (error) {
-            // User cancelled the Save dialog
-            if (error.name === 'AbortError') { return; }
-            alert(`Error saving grid: ${error.message}`);
-        }
-        signalSender('hideOverlay');
+            await writable.write(await response.blob()); await writable.close();
+            alert('Grid saved successfully.');
+        } catch (error) { alert(`Error saving grid: ${error.message}`); }
+        finally { signalSender('hideOverlay'); }
     });
     obj.reCheckGrid.addEventListener('click', () => obj.reCheckGridFile.click());
     obj.reCheckGridFile.addEventListener('change', async (e) => {

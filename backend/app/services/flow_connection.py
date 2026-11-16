@@ -4,65 +4,11 @@ from pyproj import CRS, Transformer
 from fastapi import Response
 from fastapi.responses import JSONResponse
 from config import PROJECT_ROOT
-from services import functions
+from services import functions, constants
 from scipy.ndimage import gaussian_filter
 from rasterio import features as rio_features
 from rasterio.transform import from_origin
 
-
-M_PER_DEG, FORMAT, VIEW_DIR = 111_320.0, 1, "viewer"
-# PCRaster LDD: 1 SW 2 S 3 SE 4 W 5 pit 6 E 7 NW 8 N 9 NE
-LDD = {1: (-1, -1), 2: (0, -1), 3: (1, -1), 4: (-1, 0), 6: (1, 0), 7: (-1, 1), 8: (0, 1), 9: (1, 1)}
-
-VAR_INFO = {
-    "overland_flow": ("m³/s", "Overland discharge", False, "flow", "Overland flow"),
-    "overland_depth": ("m", "Overland water depth", False, "depth", "Overland flow"),
-    "overland_volume": ("m³", "Overland water volume", False, "depth", "Overland flow"),
-    "soil_evapotranspiration": ("mm/Δt", "Actual evapotranspiration", True, "runoff", "Soil"),
-    "soil_storage_total": ("mm", "Total water storage", False, "depth", "Soil"),
-    "soil_infiltration_volume": ("mm/Δt", "Infiltration", True, "depth", "Soil"),
-    "soil_transpiration_volume": ("mm/Δt", "Transpiration", True, "runoff", "Soil"),
-    "soil_runoff": ("mm/Δt", "Total surface runoff", True, "runoff", "Soil"),
-    "soil_net_runoff": ("mm/Δt", "Net surface runoff", True, "runoff", "Soil"),
-    "soil_water_volume_fraction": ("-", "Water volume fraction", False, "depth", "Soil"),
-    "soil_water_volume_percentage": ("%", "Water volume percentage", False, "depth", "Soil"),
-    "soil_water_rootzone_volume_fraction": ("-", "Root-zone water fraction", False, "depth", "Soil"),
-    "soil_water_rootzone_volume_percentage": ("%", "Root-zone water percentage", False, "depth", "Soil"),
-    "soil_water_rootzone_depth": ("mm", "Root-zone water storage", False, "depth", "Soil"),
-    "soil_water_unsatzone_depth": ("mm", "Unsaturated store", False, "depth", "Soil"),
-    "soil_water_satzone_capillary_volume_flux": ("mm/Δt", "Capillary rise", True, "depth", "Groundwater"),
-    "soil_water_satzone_recharge_volume_flux": ("mm/Δt", "Recharge to saturated zone", True, "depth", "Groundwater"),
-    "soil_water_satzone_net_recharge_volume_flux": ("mm/Δt", "Net recharge", True, "depth", "Groundwater"),
-    "soil_water_satzone_leakage_volume_flux": ("mm/Δt", "Leakage", True, "depth", "Groundwater"),
-    "soil_water_satzone_depth": ("mm", "Water table depth", False, "hours", "Groundwater"),
-    "river_discharge": ("m³/s", "River discharge", False, "flow", "River"),
-    "river_depth": ("m", "River depth", False, "depth", "River"),
-    "river_volume": ("m³", "River volume", False, "depth", "River"),
-    "river_lateral_inflow": ("m³/s", "Lateral inflow to river", False, "flow", "River"),
-    "lake_volume": ("m³", "Lake volume", False, "depth", "Lakes & reservoirs"),
-    "lake_level": ("m", "Lake level", False, "depth", "Lakes & reservoirs"),
-    "lake_inflow": ("m³/s", "Lake inflow", False, "flow", "Lakes & reservoirs"),
-    "lake_outflow": ("m³/s", "Lake outflow", False, "flow", "Lakes & reservoirs"),
-    "reservoir_volume": ("m³", "Reservoir volume", False, "depth", "Lakes & reservoirs"),
-    "reservoir_inflow": ("m³/s", "Reservoir inflow", False, "flow", "Lakes & reservoirs"),
-    "reservoir_outflow": ("m³/s", "Reservoir outflow", False, "flow", "Lakes & reservoirs"),
-    "snow_water": ("mm", "Snow water equivalent", False, "depth", "Snow & glacier"),
-    "snow_melt": ("mm/Δt", "Snow melt", True, "depth", "Snow & glacier"),
-    "snow_runoff": ("mm/Δt", "Snowpack runoff", True, "depth", "Snow & glacier"),
-    "glacier_melt": ("mm/Δt", "Glacier melt", True, "depth", "Snow & glacier"),
-    "vegetation_stemflow": ("mm/Δt", "Stemflow", True, "depth", "Vegetation"),
-    "vegetation_throughfall": ("mm/Δt", "Throughfall", True, "depth", "Vegetation"),
-}
-LAYER_SEP = "__layer"
-LDD_NAMES = ["local_drain_direction", "wflow_ldd", "ldd"]
-RIVER_NAMES = ["river_mask", "wflow_river"]
-BASIN_NAMES = ["subcatchment", "wflow_subcatch", "basins"]
-SLOPE_NAMES = ["land_slope", "Slope", "slope"]
-LAND_N_NAMES = ["land_manning_n", "N"]
-RIVER_W_NAMES = ["river_width", "wflow_riverwidth"]
-RIVER_N_NAMES = ["river_manning_n", "N_River"]
-RIVER_S_NAMES = ["river_slope", "RiverSlope"]
-LDD_UNIT = {k: (dx / math.hypot(dx, dy), dy / math.hypot(dx, dy)) for k, (dx, dy) in LDD.items()}
 
 class NpyRows:
     def __init__(self, path):
@@ -119,20 +65,17 @@ def water_on_display(path, west, south, dlon, dlat, nx, ny):
         out_shape=(ny, nx), transform=tr, fill=0, dtype="uint8")
     return w[::-1].astype(bool)                              
 
-def needs_rebuild(model_dir, res=None, view_dir=VIEW_DIR):
+def needs_rebuild(model_dir, res=None, view_dir=constants.VIEW_DIR):
     p = model_paths(model_dir, view_dir)
     if not os.path.exists(p["output"]):
         raise FileNotFoundError(f"Wflow output not found: {p['output']}. Run the wflow model first.")
     meta_path = os.path.join(p["cache"], "meta.json")
-    if not os.path.exists(meta_path):
-        return "No viewer cache yet"
+    if not os.path.exists(meta_path): return "No viewer cache yet"
     try:
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
-    except Exception:
-        return "Viewer meta.json is broken"
-    if meta.get("format") != FORMAT:
-        return "Old viewer cache format"
+    except Exception: return "Viewer meta.json is broken"
+    if meta.get("format") != constants.FORMAT: return "Old viewer cache format"
     if os.path.getmtime(p["output"]) > float(meta.get("output_mtime", 0)) + 1:
         return "Model output is newer than the viewer cache"
     if res in (None, ""): pass
@@ -141,8 +84,7 @@ def needs_rebuild(model_dir, res=None, view_dir=VIEW_DIR):
             return f"Resolution changed {meta['grid']['res_m']} m -> auto"
     elif abs(float(res) - float(meta["grid"]["res_m"])) > 1e-6:
         return f"Resolution changed {meta['grid']['res_m']} -> {res} m"
-    if "velocity" not in meta:
-        return "Viewer cache has no velocity field (particles)"
+    if "velocity" not in meta: return "Viewer cache has no velocity field (particles)"
     # Cache cũ được ghi khi tạo vận tốc bị lỗi (velocity = null) dù output có dòng chảy mặt -> dựng lại
     if meta.get("velocity") is None and not meta.get("velocity_error") and \
             any(v in meta.get("variables", {}) for v in ("overland_flow", "river_discharge")):
@@ -150,10 +92,8 @@ def needs_rebuild(model_dir, res=None, view_dir=VIEW_DIR):
     if meta.get("velocity") and not os.path.exists(os.path.join(p["cache"], meta["velocity"]["file"])):
         return "Velocity cache file is missing"
     for v, info in meta.get("variables", {}).items():
-        if not os.path.exists(os.path.join(p["cache"], f"{info['kind']}_{v}.npy")):
-            return f"Cache file for {v} is missing"
-    if meta.get("water") != water_signature(water_file(model_dir)):
-        return "Water area changed"
+        if not os.path.exists(os.path.join(p["cache"], f"{info['kind']}_{v}.npy")): return f"Cache file for {v} is missing"
+    if meta.get("water") != water_signature(water_file(model_dir)): return "Water area changed"
     return None
 
 def wflow_ctx(project_name, flow_name, model_folder, user, META):
@@ -165,18 +105,15 @@ def wflow_ctx(project_name, flow_name, model_folder, user, META):
     try:
         meta = META[directory] = load_meta(directory)
         return directory, meta, None
-    except FileNotFoundError:
-        return directory, None, f"Meta.json not found at {meta_path}"
-    except Exception as e:
-        return directory, None, f"Cannot read {meta_path}: {e}"
+    except FileNotFoundError: return directory, None, f"Meta.json not found at {meta_path}"
+    except Exception as e: return directory, None, f"Cannot read {meta_path}: {e}"
 
 def not_ready(detail=""):
     return JSONResponse(status_code=404, content={"status": "error",
         "message": f"Viewer data not initialized. {detail} (pid {os.getpid()})".strip()})
 
-def model_paths(model_dir, view_dir=VIEW_DIR):
-    cfg = {}
-    toml = os.path.join(model_dir, "wflow_sbm.toml")
+def model_paths(model_dir, view_dir=constants.VIEW_DIR):
+    cfg, toml = {}, os.path.join(model_dir, "wflow_sbm.toml")
     if os.path.exists(toml):
         with open(toml, "rb") as f:
             cfg = tomllib.load(f)
@@ -193,7 +130,7 @@ def model_paths(model_dir, view_dir=VIEW_DIR):
         "static": os.path.join(model_dir, static_name),
         "basins": os.path.join(model_dir, "staticgeoms", "basins.geojson"),
         "rivers_src": os.path.join(model_dir, "staticgeoms", "rivers.geojson"),
-        "cache": os.path.join(model_dir, view_dir or VIEW_DIR),   # view_dir: cache riêng (vd. dashboard)
+        "cache": os.path.join(model_dir, view_dir or constants.VIEW_DIR)
     }
 
 def get_crs(*datasets, default="EPSG:25833"):
@@ -224,11 +161,11 @@ def build_velocity(cache_dir, ds, static, flip, cell, src_crs, x, ys, src,
     def rd(name, sl):
         a = np.asarray(ds[name].isel(time=sl).transpose("time", "y", "x").values, dtype=np.float32)
         return a[:, ::-1] if flip else a
-    ldd = static(LDD_NAMES)
+    ldd = static(constants.LDD_NAMES)
     if ldd is not None:
         code = np.nan_to_num(ldd.astype(float)).astype(int)
         ux, uy = np.zeros(code.shape), np.zeros(code.shape)
-        for c, (dx, dy) in LDD_UNIT.items():
+        for c, (dx, dy) in constants.LDD_UNIT.items():
             m = code == c; ux[m], uy[m] = dx, dy
         how = "LDD"
     else:
@@ -261,17 +198,16 @@ def build_velocity(cache_dir, ds, static, flip, cell, src_crs, x, ys, src,
         a = static(names)
         return np.full(domain.shape, default) if a is None else np.nan_to_num(a.astype(float), nan=default)
     has_h, has_hr = "overland_depth" in ds, "river_depth" in ds
-    S_land = np.maximum(arr(SLOPE_NAMES, 1e-3), 1e-4) if not has_h else None
-    n_land = arr(LAND_N_NAMES, 0.1) if not has_h else None
-    rmask = static(RIVER_NAMES)
+    S_land = np.maximum(arr(constants.SLOPE_NAMES, 1e-3), 1e-4) if not has_h else None
+    n_land = arr(constants.LAND_N_NAMES, 0.1) if not has_h else None
+    rmask = static(constants.RIVER_NAMES)
     rmask = (np.nan_to_num(rmask.astype(float)) > 0) if rmask is not None else np.zeros(domain.shape, bool)
     use_river = "river_discharge" in ds and rmask.any()
-    W_r = np.maximum(arr(RIVER_W_NAMES, cell), 0.5) if use_river else None
-    S_r = np.maximum(arr(RIVER_S_NAMES, 1e-3), 1e-4) if use_river and not has_hr else None
-    n_r = arr(RIVER_N_NAMES, 0.036) if use_river and not has_hr else None
+    W_r = np.maximum(arr(constants.RIVER_W_NAMES, cell), 0.5) if use_river else None
+    S_r = np.maximum(arr(constants.RIVER_S_NAMES, 1e-3), 1e-4) if use_river and not has_hr else None
+    n_r = arr(constants.RIVER_N_NAMES, 0.036) if use_river and not has_hr else None
     r_sel = rmask.ravel()[src] if use_river else None
-    Nv = src.size
-    path = os.path.join(cache_dir, "velocity.npy")
+    Nv, path = src.size, os.path.join(cache_dir, "velocity.npy")
     out = np.lib.format.open_memmap(path, mode="w+", dtype="<f2", shape=(T, 2, Nv))
     rng, samples = np.random.default_rng(0), []
     for k in range(0, T, chunk):
@@ -282,18 +218,17 @@ def build_velocity(cache_dir, ds, static, flip, cell, src_crs, x, ys, src,
                 Q = np.abs(rd("overland_flow", sl).reshape(n, -1)[:, src])
                 if has_h: H = rd("overland_depth", sl).reshape(n, -1)[:, src]
                 else:
-                    # n_land/S_land chỉ được tạo khi output KHÔNG có overland_depth (luôn khác None ở đây)
                     assert n_land is not None and S_land is not None
                     H = (Q * n_land.ravel()[src] / (cell * np.sqrt(S_land.ravel()[src]))) ** 0.6
                 wet = np.isfinite(Q) & np.isfinite(H) & (H > depth_threshold)
                 spd = np.where(wet, Q / (np.where(wet, H, 1) * cell), spd)
             if use_river:
                 Qr = np.abs(rd("river_discharge", sl).reshape(n, -1)[:, src])
-                assert W_r is not None and r_sel is not None        # use_river -> luôn có
+                assert W_r is not None and r_sel is not None
                 W = W_r.ravel()[src]
                 if has_hr: Hr = rd("river_depth", sl).reshape(n, -1)[:, src]
                 else:
-                    assert n_r is not None and S_r is not None      # chỉ None khi có river_depth
+                    assert n_r is not None and S_r is not None
                     Hr = (Qr * n_r.ravel()[src] / (W * np.sqrt(S_r.ravel()[src]))) ** 0.6
                 wet_r = r_sel[None] & np.isfinite(Qr) & np.isfinite(Hr) & (Hr > depth_threshold)
                 spd = np.where(wet_r, Qr / (np.where(wet_r, Hr, 1) * W), spd)
@@ -312,14 +247,14 @@ def build_velocity(cache_dir, ds, static, flip, cell, src_crs, x, ys, src,
         "note": "u = east, v = north (m/s); NaN = dry cell"
     }
 
-def velocity_bytes(model_dir, meta, i, view_dir=VIEW_DIR):
+def velocity_bytes(model_dir, meta, i, view_dir=constants.VIEW_DIR):
     vel = meta.get("velocity")
     if not vel:
         raise FileNotFoundError("No velocity field in the viewer cache")
     return NpyRows(os.path.join(model_paths(model_dir, view_dir)["cache"], vel["file"])).row_bytes_at(i)
 
 def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48, 
-    crs=None, progress=None, only=None, water_path="auto", view_dir=VIEW_DIR):
+    crs=None, progress=None, only=None, water_path="auto", view_dir=constants.VIEW_DIR):
     p = model_paths(model_dir, view_dir)
     if not os.path.exists(p["output"]):
         raise FileNotFoundError(f"Wflow output not found: {p['output']} (run the model first).")
@@ -332,12 +267,9 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
                 "Grid output is required – scalar/point outputs cannot be mapped.")
         src_crs = CRS.from_user_input(crs) if crs else get_crs(ds, st)
         x, y = ds.x.values.astype(float), ds.y.values.astype(float)
-        flip = y[0] > y[-1]
-        ys = y[::-1] if flip else y
-        cell = float(abs(x[1] - x[0]))
-        ny0, nx0 = ys.size, x.size
-        times = pd.to_datetime(ds.time.values)
-        T, layer_of = len(times), {}
+        flip = y[0] > y[-1]; ys = y[::-1] if flip else y
+        cell = float(abs(x[1] - x[0])); ny0, nx0 = ys.size, x.size
+        times = pd.to_datetime(ds.time.values); T, layer_of = len(times), {}
         for v in ds.data_vars:
             dims = set(ds[v].dims)
             if not {"time", "y", "x"} <= dims: continue
@@ -345,7 +277,7 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
             if not extra: layer_of[v] = (v, {}, None)
             elif len(extra) == 1:
                 for n in range(ds.sizes[extra[0]]):
-                    layer_of[f"{v}{LAYER_SEP}{n + 1}"] = (v, {extra[0]: n}, n + 1)
+                    layer_of[f"{v}{constants.LAYER_SEP}{n + 1}"] = (v, {extra[0]: n}, n + 1)
         if only: layer_of = {k: val for k, val in layer_of.items() if k in only or val[0] in only}
         variables = list(layer_of)
         if not variables: raise ValueError("No (time, y, x) variables in output.nc")
@@ -360,42 +292,35 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
             a = np.asarray(ds[src].isel(time=sl, **sel).transpose("time", "y", "x").values, dtype=np.float32)
             return a[:, ::-1] if flip else a
         # Valid area on the original grid
-        basin = static(BASIN_NAMES)
-        if basin is not None:
-            domain = np.nan_to_num(basin.astype(float)) > 0
-        else:
-            first = read(variables[0], slice(0, 1))[0]
-            domain = np.isfinite(first)
-        river = static(RIVER_NAMES)
+        basin = static(constants.BASIN_NAMES)
+        if basin is not None: domain = np.nan_to_num(basin.astype(float)) > 0
+        else: first = read(variables[0], slice(0, 1))[0]; domain = np.isfinite(first)
+        river = static(constants.RIVER_NAMES)
         river = (np.nan_to_num(river.astype(float)) > 0) & domain if river is not None else np.zeros_like(domain)
-        ldd = static(LDD_NAMES)
+        ldd = static(constants.LDD_NAMES)
         to_ll = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
         to_xy = Transformer.from_crs("EPSG:4326", src_crs, always_xy=True)
         ii, jj = np.nonzero(domain)
         bx = np.array([x[jj].min() - cell, x[jj].max() + cell]); by = np.array([ys[ii].min() - cell, ys[ii].max() + cell])
         corners = to_ll.transform(np.r_[bx, bx], np.r_[by[0], by[0], by[1], by[1]])
         west, east, south, north = min(corners[0]), max(corners[0]), min(corners[1]), max(corners[1])
-        lat_mid = 0.5 * (south + north)
-        kx = M_PER_DEG * math.cos(math.radians(lat_mid))
+        lat_mid = 0.5 * (south + north); kx = constants.M_PER_DEG * math.cos(math.radians(lat_mid))
         n_dom = int(domain.sum())
         res_auto = res in (None, "", "auto", 0)
         if res_auto:
             area = n_dom * cell * cell
             res = _nice(max(cell, math.sqrt(area * T * 2 / (budget_mb_per_var * 1e6))))
         res = float(res)
-        dlat, dlon = res / M_PER_DEG, res / kx
+        dlat, dlon = res / constants.M_PER_DEG, res / kx
         nx, ny = int(math.ceil((east - west) / dlon)), int(math.ceil((north - south) / dlat))
         lon = west + (np.arange(nx) + 0.5) * dlon; lat = south + (np.arange(ny) + 0.5) * dlat
-        LON, LAT = np.meshgrid(lon, lat)
-        PX, PY = to_xy.transform(LON.ravel(), LAT.ravel())
+        LON, LAT = np.meshgrid(lon, lat); PX, PY = to_xy.transform(LON.ravel(), LAT.ravel())
         ci = np.floor((PX - (x.min() - cell / 2)) / cell).astype(int)
         cj = np.floor((PY - (ys.min() - cell / 2)) / cell).astype(int)
         ok = (ci >= 0) & (ci < nx0) & (cj >= 0) & (cj < ny0)
         ok[ok] &= domain[cj[ok], ci[ok]]
-        vflat = np.flatnonzero(ok)
-        src = cj[ok] * nx0 + ci[ok]
-        Nv = vflat.size
-        mask_out = ok.reshape(ny, nx).astype(np.uint8)
+        vflat = np.flatnonzero(ok); src = cj[ok] * nx0 + ci[ok]
+        Nv = vflat.size; mask_out = ok.reshape(ny, nx).astype(np.uint8)
         wpath = water_file(model_dir) if water_path == "auto" else water_path
         water = water_on_display(wpath, west, south, dlon, dlat, nx, ny)
         if water is not None: mask_out[(mask_out == 1) & water] = 2
@@ -404,17 +329,17 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
         src_idx = src.astype(np.int64)
         np.save(os.path.join(p["cache"], "src_index.npy"), src_idx)
         # River
-        r_i, r_j = np.nonzero(river)
-        r_flat = r_i * nx0 + r_j
-        feats = []
+        r_i, r_j = np.nonzero(river); r_flat = r_i * nx0 + r_j; feats = []
         for k, (i, j) in enumerate(zip(r_i, r_j)):
             x0, y0 = x[j], ys[i]
-            d = LDD.get(int(ldd[i, j])) if ldd is not None else None
+            d = constants.LDD.get(int(ldd[i, j])) if ldd is not None else None
             if d: x1, y1 = x0 + d[0] * cell, y0 + d[1] * cell
             else: x1, y1 = x0, y0
             (lo0, lo1), (la0, la1) = to_ll.transform([x0, x1], [y0, y1])
-            feats.append({"type": "Feature", "properties": {"id": k},
-                "geometry": {"type": "LineString", "coordinates": [[lo0, la0], [lo1, la1]]}})
+            feats.append({
+                "type": "Feature", "properties": {"id": k},
+                "geometry": {"type": "LineString", "coordinates": [[lo0, la0], [lo1, la1]]}
+            })
         with open(os.path.join(p["cache"], "rivers.geojson"), "w", encoding="utf-8") as f:
             json.dump({"type": "FeatureCollection", "features": feats}, f)
         Nr = len(feats)
@@ -439,22 +364,15 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
             sl = slice(k, min(k + chunk, T))
             for v in variables:
                 a = read(v, sl).reshape(sl.stop - sl.start, -1)[:, idx[kinds[v]]]
-                out[v][sl] = a.astype(dtypes[v])
-                s = stats[v]
-                fin = np.isfinite(a)
-                a0 = np.where(fin, a, -np.inf)
-                cm = a0.max(0); ca = a0.argmax(0) + k
-                upd = cm > s["max"]
-                s["max"][upd] = cm[upd]; s["tmax"][upd] = ca[upd]
-                s["sum"] += np.where(fin, a, 0).sum(0); s["n"] += fin.sum(0)
-                vals = a[fin]
+                out[v][sl] = a.astype(dtypes[v]); s = stats[v]; fin = np.isfinite(a)
+                a0 = np.where(fin, a, -np.inf); cm = a0.max(0); ca = a0.argmax(0) + k
+                upd = cm > s["max"]; s["max"][upd] = cm[upd]; s["tmax"][upd] = ca[upd]
+                s["sum"] += np.where(fin, a, 0).sum(0); s["n"] += fin.sum(0); vals = a[fin]
                 if vals.size: samples[v].append(rng.choice(vals, min(vals.size, 20000), replace=False))
             if progress: progress(sl.stop, T)
         meta_vars = {}
         for v in variables:
-            out[v].flush()
-            s = stats[v]
-            mx = np.where(np.isfinite(s["max"]), s["max"], np.nan)
+            out[v].flush(); s = stats[v]; mx = np.where(np.isfinite(s["max"]), s["max"], np.nan)
             mean = np.where(s["n"] > 0, s["sum"] / np.maximum(s["n"], 1), np.nan)
             total = np.where(s["n"] > 0, s["sum"], np.nan)
             np.savez(os.path.join(p["cache"], f"stats_{v}.npz"), max=mx.astype(np.float32),
@@ -462,9 +380,8 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
                 tmax=np.where(s["n"] > 0, s["tmax"], -1).astype(np.int32)
             )
             smp = np.concatenate(samples[v]) if samples[v] else np.array([0.0])
-            pos = smp[smp > 0]
-            src, _, layer = layer_of[v]
-            unit, desc, flux, ramp, group = VAR_INFO.get(
+            pos = smp[smp > 0]; src, _, layer = layer_of[v]
+            unit, desc, flux, ramp, group = constants.VAR_INFO.get(
                 src, (ds[src].attrs.get("units", ""), ds[src].attrs.get("long_name", src), False, "depth", "Other")
             )
             if layer: desc = f"{desc} – layer {layer}"
@@ -478,7 +395,7 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
             }
         step_h = float((times[1] - times[0]).total_seconds() / 3600) if T > 1 else 1.0
         meta = {
-            "format": FORMAT, "version": f"{int(time.time())}-{res}",
+            "format": constants.FORMAT, "version": f"{int(time.time())}-{res}",
             "output_mtime": os.path.getmtime(p["output"]), "crs": src_crs.to_string(),
             "grid": {"nx": nx, "ny": ny, "lon0": float(lon[0]), "lat0": float(lat[0]), "dlon": dlon, "dlat": dlat,
                 "bounds": [[south, west], [south + ny * dlat, west + nx * dlon]], "res_m": res,
@@ -489,7 +406,7 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
         # Particle
         try:
             meta["velocity"] = build_velocity(p["cache"], ds, static, flip, cell, src_crs, x, ys, src_idx, domain, T, chunk)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Hạt chỉ là phần phụ: lỗi vận tốc không được làm hỏng cả cache viewer
             meta["velocity"], meta["velocity_error"] = None, str(e)
             print(f"build_cache: velocity field skipped – {e}")
@@ -501,7 +418,7 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
         if st is not None:
             st.close()
 
-def load_meta(model_dir, view_dir=VIEW_DIR):
+def load_meta(model_dir, view_dir=constants.VIEW_DIR):
     with open(os.path.join(model_paths(model_dir, view_dir)["cache"], "meta.json"), encoding="utf-8") as f:
         return json.load(f)
 
@@ -512,12 +429,12 @@ def get_bin(request, data, headers=None):
         headers.update({"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
     return Response(data, media_type="application/octet-stream", headers=headers)
 
-def frame_bytes(model_dir, meta, var, i, view_dir=VIEW_DIR):
+def frame_bytes(model_dir, meta, var, i, view_dir=constants.VIEW_DIR):
     info = meta["variables"][var]
     path = os.path.join(model_paths(model_dir, view_dir)["cache"], f"{info['kind']}_{var}.npy")
     return NpyRows(path).row_bytes_at(i)
 
-def point_series(model_dir, meta, lat, lon, variables=None, river_radius_cells=3, view_dir=VIEW_DIR):
+def point_series(model_dir, meta, lat, lon, variables=None, river_radius_cells=3, view_dir=constants.VIEW_DIR):
     g = meta["grid"]
     cache = model_paths(model_dir, view_dir)["cache"]
     ix = int(math.floor((lon - g["lon0"]) / g["dlon"] + 0.5))
@@ -549,12 +466,10 @@ def point_series(model_dir, meta, lat, lon, variables=None, river_radius_cells=3
         out["series"][v] = [None if not np.isfinite(x) else round(float(x), 6) for x in s]
     return out
 
-def stat_array(model_dir, meta, var, stat, threshold=None, view_dir=VIEW_DIR):
-    info = meta["variables"][var]
-    cache = model_paths(model_dir, view_dir)["cache"]
+def stat_array(model_dir, meta, var, stat, threshold=None, view_dir=constants.VIEW_DIR):
+    info = meta["variables"][var]; cache = model_paths(model_dir, view_dir)["cache"]
     if stat == "above":
-        if threshold is None:
-            raise ValueError("threshold is required for stat=above")
+        if threshold is None: raise ValueError("threshold is required for stat=above")
         rows = NpyRows(os.path.join(cache, f"{info['kind']}_{var}.npy"))
         count = np.zeros(rows.shape[1], np.float32)
         for block in rows.iter_chunks():

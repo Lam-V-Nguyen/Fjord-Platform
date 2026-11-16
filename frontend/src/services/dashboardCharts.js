@@ -99,7 +99,7 @@ export function renderDonut(id, distribution) {
     Plotly.react(node, data, layout, CONFIG);
 }
 
-// ------------------------------------------------------------------ Station time series (HYD/WAQ his)
+// Station time series (HYD/WAQ his)
 // payload: {series:[{name,x,y}], label, unit}; opts: {threshold:{medium,high,direction}, highlight}
 export function renderStationSeries(id, payload, opts = {}) {
     const node = el(id);

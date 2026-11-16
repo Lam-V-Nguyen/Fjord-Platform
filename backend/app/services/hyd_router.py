@@ -1,4 +1,4 @@
-import os, re, traceback, asyncio
+import os, re, asyncio
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from services import functions

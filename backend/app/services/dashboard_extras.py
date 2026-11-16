@@ -25,14 +25,13 @@ import numpy as np, geopandas as gpd
 from config import PROJECT_ROOT
 from shapely.geometry import box
 from services.dashboard_results import ProjectResults, _crs_of
+from services import constants
 
-VELOCITY_PAIRS = [("mesh2d_ucxa", "mesh2d_ucya"), ("ucxa", "ucya"), ("mesh2d_ucx", "mesh2d_ucy"), ("ucx", "ucy")]
+
 _LOCKS: dict[str, threading.Lock] = {}
-_WFLOW_META: dict[str, dict] = {}
 _NPY_HDR: dict[str, tuple] = {}
 _ASYNC_LOCKS: dict[str, Any] = {}
-DASH_MOVE_DIR, DASH_VIEW_DIR = "movement",  "viewer"
-
+_WFLOW_META: dict[str, dict] = {}
 
 def _lock(key: str) -> threading.Lock:
     return _LOCKS.setdefault(key, threading.Lock())
@@ -45,7 +44,7 @@ def _lazy(name: str):
 
 # Movement
 def _movement_files(project: str) -> dict[str, str]:
-    d = os.path.join(PROJECT_ROOT, project, "output", DASH_MOVE_DIR)
+    d = os.path.join(PROJECT_ROOT, project, "output", constants.DASH_MOVE_DIR)
     return {"dir": d, "meta": os.path.join(d, "meta.json"), "frames": os.path.join(d, "frames.npy"),
         "mask": os.path.join(d, "mask.npy"), "polygon": os.path.join(d, "domain.geojson")}
 
@@ -90,7 +89,7 @@ def _read_json(path: str) -> Optional[dict]:
 def _hyd_movement_source(project: str) -> dict[str, Any]:
     pr = ProjectResults(project); ds = pr.ds("hyd_map")
     if ds is None: return {"ok": False, "reason": "No HYD map file (output/HYD/*_map.zarr) yet."}
-    pair = next((p for p in VELOCITY_PAIRS if p[0] in ds.data_vars and p[1] in ds.data_vars), None)
+    pair = next((p for p in constants.VELOCITY_PAIRS if p[0] in ds.data_vars and p[1] in ds.data_vars), None)
     if pair is None:
         return {"ok": False, "reason": "HYD map has no velocity components (mesh2d_ucx/ucy). Enable them in the HYD output settings."}
     crs = _crs_of(ds)
@@ -183,11 +182,11 @@ def wflow_status(project: str) -> dict[str, Any]:
     for name in sorted(p.name for p in os.scandir(flows_dir) if p.is_dir()):
         model = fc.wflow_dir(project, name)
         if not os.path.isdir(model): continue
-        try: paths = fc.model_paths(model, DASH_VIEW_DIR)
+        try: paths = fc.model_paths(model, constants.DASH_VIEW_DIR)
         except Exception: continue
         has_output = os.path.exists(paths["output"]); ready = False
         if has_output:
-            try: ready = fc.needs_rebuild(model, None, DASH_VIEW_DIR) is None
+            try: ready = fc.needs_rebuild(model, None, constants.DASH_VIEW_DIR) is None
             except Exception: ready = False
         scenarios.append({"name": name, "has_output": has_output, "ready": ready,
             "mtime": os.path.getmtime(paths["output"]) if has_output else 0})
@@ -219,7 +218,7 @@ def _parse_res(res) -> Optional[float]:
     return v if v > 0 else None
 
 def _build_wflow_cache(fc, model: str, res: Optional[float]) -> None:
-    fc.build_cache(model, res, view_dir=DASH_VIEW_DIR)
+    fc.build_cache(model, res, view_dir=constants.DASH_VIEW_DIR)
 
 def wflow_init(project: str, flow: str, res=None, rebuild: bool = False) -> dict[str, Any]:
     fc, err = _lazy("flow_connection")
@@ -230,14 +229,14 @@ def wflow_init(project: str, flow: str, res=None, rebuild: bool = False) -> dict
     try:
         try:
             res = _parse_res(res)
-            reason = "Rebuild requested" if rebuild else fc.needs_rebuild(model, res, DASH_VIEW_DIR)
+            reason = "Rebuild requested" if rebuild else fc.needs_rebuild(model, res, constants.DASH_VIEW_DIR)
         except FileNotFoundError as e: return {"error": str(e)}
         if reason:
             _WFLOW_META.pop(model, None)
             _build_wflow_cache(fc, model, res)
-        meta = _WFLOW_META[model] = fc.load_meta(model, DASH_VIEW_DIR)
+        meta = _WFLOW_META[model] = fc.load_meta(model, constants.DASH_VIEW_DIR)
     finally: lock.release()
-    cache = fc.model_paths(model, DASH_VIEW_DIR)["cache"]; variables = {}
+    cache = fc.model_paths(model, constants.DASH_VIEW_DIR)["cache"]; variables = {}
     for k, v in meta.get("variables", {}).items():
         variables[k] = {kk: v.get(kk) for kk in (
             "kind", "units", "description", "vmin", "p99", "max", "log", "dtype", "n", "group", "flux")}
@@ -258,7 +257,7 @@ def wflow_init(project: str, flow: str, res=None, rebuild: bool = False) -> dict
 def wflow_stat(project: str, flow: str, var: str, stat: str, threshold=None):
     """ Summarise for each cell during the period: max | mean | sum | tmax (peak time) | above."""
     model, meta, fc = wflow_context(project, flow)
-    arr = np.asarray(fc.stat_array(model, meta, var, stat, threshold, view_dir=DASH_VIEW_DIR), dtype="<f4")
+    arr = np.asarray(fc.stat_array(model, meta, var, stat, threshold, view_dir=constants.DASH_VIEW_DIR), dtype="<f4")
     fin = arr[np.isfinite(arr)]
     lo = float(fin.min()) if fin.size else 0.0
     hi = float(np.percentile(fin, 99)) if fin.size else 1.0
@@ -269,14 +268,14 @@ def wflow_context(project: str, flow: str):
     if fc is None: raise RuntimeError(err)
     model = fc.wflow_dir(project, flow)
     meta = _WFLOW_META.get(model)
-    if meta is None: meta = _WFLOW_META[model] = fc.load_meta(model, DASH_VIEW_DIR)
+    if meta is None: meta = _WFLOW_META[model] = fc.load_meta(model, constants.DASH_VIEW_DIR)
     return model, meta, fc
 
 def wflow_geometry(project: str, flow: str, kind: str) -> dict:
     model, meta, fc = wflow_context(project, flow)
     empty = {"type": "FeatureCollection", "features": []}
     if kind == "basins":
-        path = fc.model_paths(model, DASH_VIEW_DIR)["basins"]
+        path = fc.model_paths(model, constants.DASH_VIEW_DIR)["basins"]
         if not os.path.exists(path): return empty
         gdf = gpd.read_file(path)
         if gdf.crs is not None and gdf.crs.to_epsg() != 4326:

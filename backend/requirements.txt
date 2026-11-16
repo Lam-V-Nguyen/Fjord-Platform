@@ -1,3 +1,8 @@
+# 1. Create environment: python -m venv "c:\Envs\myfirstproject"
+# 2. Active:
+# (Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& c:\Envs\myfirstproject\Scripts\Activate.ps1)
+# python.exe -m pip install --upgrade pip
+# 3. Install: pip install --r .\backend\requirements.txt 
 uvicorn==0.46.0
 fastapi==0.136.1
 msgpack==1.1.2
@@ -10,11 +15,10 @@ sknw==0.15
 hydromt-wflow==1.0.1
 ipywidgets==8.1.8
 cdsapi==0.7.7
-# OWSLib==0.35.0
-# whitebox==2.3.6
 terracatalogueclient==0.1.19
 scikit-image==0.26.0
-numpy==1.26.4 # Important
+# numpy==1.26.4 # Important
+numpy>=2.0,<2.4
 seaborn==0.13.2
 dask[complete]==2026.1.2
 rio-tiler==9.4.12

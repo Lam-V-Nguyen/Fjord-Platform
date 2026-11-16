@@ -1,5 +1,5 @@
-import os, dotenv, base64, requests, math, rasterio, pyflwdir
-import traceback, sys, shutil, json, asyncio, rioxarray
+import os, dotenv, base64, requests, math, rasterio, pyflwdir, time
+import traceback, sys, shutil, json, asyncio
 from rasterio.warp import calculate_default_transform, reproject, transform_bounds
 from rasterio.shutil import copy as rio_copy
 from shapely.geometry import Point, shape
@@ -8,9 +8,9 @@ from rasterio.features import shapes
 from rasterio.crs import CRS
 import pandas as pd, xarray as xr, numpy as np, geopandas as gpd
 from config import PROJECT_ROOT
-from services import functions, flow_functions, era5_function
+from services import functions, flow_functions, era5_function, weather_functions, constants
 from services.flow_functions import StreamToLogger
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import dask.array as da
 from pyflwdir import dem
 from typing import Any, cast
@@ -28,9 +28,7 @@ class Regnbyge():
         self.username, self.password = username, password
         self.token = self.get_Token()
         if self.token is None:
-            raise RuntimeError(
-                f"Cannot get access token. Check credentials for client '{name}'."
-            )
+            raise RuntimeError(f"Cannot get access token. Check credentials for client '{name}'.")
 
     def get_Token(self):
         # Encode client_id:client_secret to Base64
@@ -39,13 +37,13 @@ class Regnbyge():
         auth_base64 = base64.b64encode(auth_bytes).decode('utf-8')
         # Define the headers
         headers = {
-            'Authorization': f'Basic {auth_base64}',
-            'Accept': 'application/json',
+            'Authorization': f'Basic {auth_base64}', 'Accept': 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         # Define the body parameters (in x-www-form-urlencoded format)
         body = {'username': self.username, 'password': self.password,
-                'scope': 'openid regnbyge', 'grant_type': 'password'}
+            'scope': 'openid regnbyge', 'grant_type': 'password'
+        }
         response = requests.request("POST", self.token_url, headers=headers, data=body, timeout=30)
         if response.status_code == 200: return response.json().get('access_token')
         else: return None
@@ -129,107 +127,135 @@ class Regnbyge():
         data = data.replace(float("nan"), None) # Fill NaN values
         return data
     
-def era5_downloader(key:str, api_key:str, dir:str, processes:dict, key_process:str, vars:list, lat:float, 
-    lon:float, start:str, end:str, time_zone:str, log_file:str, ERA5_LATENCY_DAYS:int = 6, method: str = "bilinear", 
-    elevation: float | None = None, auto_elevation: bool = True, max_wait_hours: float = 2):
+def era5_downloader(key:str, api_key:str, dir:str, processes:dict, key_process:str, vars:list, rh:bool, lat:float, 
+    lon:float, start:str, end:str, time_zone:str, log_file:str, elevation: float | None = None, 
+    auto_elevation: bool = True, elevation_correction: bool = True, max_wait_hours: float = 2):
     # Prepare forcing data from the global model ARE5
     # Source: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download
     # Remove old log
-    log_path = os.path.join(dir, "logs", log_file)
-    if os.path.exists(log_path): os.remove(log_path)
+    log_dir = os.path.join(dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, os.path.basename(log_file))
+    try:
+        if os.path.exists(log_path): os.remove(log_path)
+    except OSError: pass
     logger = flow_functions.setup_logger(f"era5.{key_process}", log_path)
-    download_dir = os.path.join(dir, 'download')
-    csv_path = os.path.normpath(os.path.join(dir, f'{key}.csv'))
+    download_dir = os.path.join(dir, f"download_{key}")
+    csv_path = os.path.normpath(os.path.join(dir, f"{key}.csv"))
     tmp_csv, max_wait_s = csv_path + ".part", max_wait_hours * 3600
     try:
-        era5_function.set_status(processes, key_process, "running", "ERA5 downloader started.")
+        era5_function.set_status(processes, key_process, "running", "ERA5 time-series downloader started.")
+        era5_function.check_cancel(processes, key_process)
         if not api_key or not str(api_key).strip(): raise era5_function.ERA5Error("ERA5 API key is missing or empty.")
         lat, lon = float(lat), float(lon)
         if not (-90 <= lat <= 90 and -180 <= lon <= 360):
             raise era5_function.ERA5Error(f"Invalid location: lat={lat}, lon={lon}")
-        method = (method or "bilinear").lower()
-        if method not in ("bilinear", "nearest"):
-            raise era5_function.ERA5Error(f"Unknown interpolation method: {method}")
-        start_time = functions.local_to_utc(start, time_zone)
-        end_time = functions.local_to_utc(end, time_zone)
-        if (start_time >= end_time):
-            raise era5_function.ERA5Error("Start time must be before end time.")
-        latest = datetime.now(timezone.utc) - timedelta(days=ERA5_LATENCY_DAYS)
+        start_time = era5_function.to_naive_utc(functions.local_to_utc(start, time_zone))
+        end_time = era5_function.to_naive_utc(functions.local_to_utc(end, time_zone))
+        if start_time >= end_time: raise era5_function.ERA5Error("Start time must be before end time.")
+        latest = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None) - pd.Timedelta(days=constants.ERA5_LATENCY_DAYS)
         if end_time > latest:
-            raise era5_function.ERA5Error(
-                f"ERA5 is only available until about {latest:%Y-%m-%d} (≈{era5_function.ERA5_LATENCY_DAYS} days delay).")
-        wanted, wants_wind, cds_vars = era5_function.var_detector(vars, logger)
-        if not wanted: raise era5_function.ERA5Error("Please select at least one ERA5 variable.")
-        h_site = era5_function.elevation_detector(wanted, lat, lon, elevation, auto_elevation, logger)
-        do_elev = h_site is not None
-        era5_function.set_status(processes, key_process, "running", "Preparing ERA5 request...")
+            raise era5_function.ERA5Error(f"ERA5 is only available until about {latest:%Y-%m-%d} (≈{constants.ERA5_LATENCY_DAYS} days delay).")
+        hours = pd.date_range(start_time.ceil("h"), end_time.floor("h"), freq="h")
+        if len(hours) == 0: raise era5_function.ERA5Error("No full hour in the requested time range.")
+        det = era5_function.var_detector(vars, logger) 
+        cds_vars = dict(det[2]); wants_wind = bool(det[1]) or any(v in constants.DERIVED for v in (vars or []))
+        if not cds_vars and not wants_wind and not rh:
+            raise era5_function.ERA5Error("Please select at least one ERA5 variable.")
+        if wants_wind:
+            cds_vars.update({k: s for k, s in constants.WIND_COMPONENTS.items() if k not in cds_vars})
+        if rh:
+            cds_vars.setdefault("2m_temperature", "t2m")
+            cds_vars.setdefault("2m_dewpoint_temperature", "d2m")
+        compute_tisr = constants.TOA_CDS_NAME in cds_vars
+        ts_vars = {c: s for c, s in cds_vars.items() if c != constants.TOA_CDS_NAME}
+        out_cols = [constants.VARIABLES[v] for v in vars if v in constants.VARIABLES]
+        if wants_wind:
+            out_cols = [c for c in out_cols if c not in ("u10", "v10")] + ["wind_speed", "wind_direction"]
+        if rh: out_cols = ["rh"] + [c for c in out_cols if c != "rh"]
+        out_cols = list(dict.fromkeys(out_cols))
         glat, glon = era5_function.snap_to_era5_grid(lat, lon)
-        logger.info(f"Location: lat={lat}, lon={lon} | method: {method}")
-        if method == "bilinear":
-            for (la, lo), w in era5_function.bilinear_weights(lat, lon).items():
-                logger.info(f"  ERA5 corner ({la}, {lo}) weight {w:.3f}")
-        else: logger.info(f"Nearest ERA5 grid point: {glat}, {glon}")
-        logger.info(f"Local: {start} -> {end} ({time_zone}) | UTC: {start_time} -> {end_time}")
-        logger.info(f"Variables: {', '.join(cds_vars)}")
+        h_site = None
+        if elevation_correction:
+            h_site = era5_function.elevation_detector(list(ts_vars.values()), lat, lon, elevation, auto_elevation, logger)
+        logger.info(f"Dataset: {constants.DATASET_POINT} (one request for the whole period)")
+        logger.info(f"Location: lat={lat}, lon={lon} -> nearest ERA5 grid point ({glat}, {glon})")
+        logger.info(f"Local: {start} -> {end} ({time_zone}) | UTC: {hours[0]} -> {hours[-1]} ({len(hours)} hours)")
+        logger.info(f"Variables from CDS: {', '.join(ts_vars) or '-'}"
+            + (" | TOA incident solar radiation: computed (not in the time-series dataset)" if compute_tisr else ""))
         logger.info("=" * 70)
         shutil.rmtree(download_dir, ignore_errors=True)
         os.makedirs(download_dir, exist_ok=True)
-        all_units, h_era_values, frames, done = {}, [], [], False
-        common = dict(api_key=api_key, lat=lat, lon=lon, method=method, processes=processes,
+        all_units, h_era_values = {}, []
+        common = dict(api_key=api_key, lat=lat, lon=lon, method="nearest", processes=processes,
             key_process=key_process, download_dir=download_dir, all_units=all_units,
             h_era_values=h_era_values, max_wait_s=max_wait_s, logger=logger)
-        if method == "nearest":
+        def _fetch_locked(**kw):
+            lock = era5_function.account_lock(api_key)
+            while not lock.acquire(timeout=1):
+                era5_function.check_cancel(processes, key_process)
+                era5_function.set_status(processes, key_process, "running", "Waiting for another ERA5 download with the same CDS account...")
+            try: return era5_function.fetch(**kw, **common)
+            finally: lock.release()
+        df = pd.DataFrame(index=hours)
+        if ts_vars:
+            request = {"variable": list(ts_vars), "location": {"latitude": glat, "longitude": glon},
+                "date": [f"{hours[0]:%Y-%m-%d}/{hours[-1]:%Y-%m-%d}"], "data_format": "netcdf"}
+            df = _fetch_locked(dataset=constants.DATASET_POINT, tag="timeseries", request=request,
+                names=list(dict.fromkeys(ts_vars.values())))
+        do_elev = h_site is not None
+        if do_elev:
             try:
-                req = {"variable": list(cds_vars), "location": {"latitude": glat, "longitude": glon},
-                    "date": [f"{start_time:%Y-%m-%d}/{end_time:%Y-%m-%d}"], "data_format": "netcdf"}
-                ts = era5_function.fetch(
-                    dataset=era5_function.DATASET_POINT, tag="timeseries", request=req, names=wanted, **common
-                )
-                if do_elev:
-                    area, _, _ = era5_function.single_point_area(lat, lon)
-                    era5_function.fetch(dataset=era5_function.DATASET_GRID, tag="orography",
-                        request=era5_function.orography_request(start_time, area), names=["z"], **common)
-                frames, done = [ts], True
+                area, _, _ = era5_function.single_point_area(lat, lon)
+                _fetch_locked(dataset=constants.DATASET_GRID, tag="orography",
+                    request=era5_function.orography_request(hours[0].to_pydatetime(), area), names=["z"])
             except era5_function.DownloadCancelled: raise
             except Exception as e:
-                logger.warning(f"Time-series dataset failed ({e}). Falling back to gridded download.")
-                frames.clear()
+                logger.warning(f"ERA5 orography not available ({e}) -> no elevation correction.")
                 h_era_values.clear()
-        if not done:
-            area = era5_function.cell_area(lat, lon) if method == "bilinear" else era5_function.single_point_area(lat, lon)[0]
-            logger.info(f"Download area [N, W, S, E]: {area}")
-            req_vars = list(cds_vars) + (["geopotential"] if do_elev else [])
-            names = wanted + (["z"] if do_elev else [])
-            for tag, req in era5_function.month_requests(start_time, end_time, req_vars, area):
-                logger.info(f"Request: {tag}")
-                df = era5_function.fetch(dataset=era5_function.DATASET_GRID, tag=tag, request=req, names=names, **common)
-                frames.append(df.drop(columns=["z"], errors="ignore"))
+        era5_function.check_cancel(processes, key_process)
         era5_function.set_status(processes, key_process, "running", "Processing data...")
-        df = pd.concat(frames).sort_index()
-        df = df[~df.index.duplicated(keep="first")]
-        df = df.loc[(df.index >= start_time) & (df.index <= end_time)]
-        if df.empty: raise era5_function.ERA5Error("No data in the requested time range.")
-        if df.isna().any().any(): logger.info(f"Missing values per column: {df.isna().sum()[lambda s: s > 0].to_dict()}")
+        df = df[~df.index.duplicated(keep="first")].sort_index().reindex(hours)
+        if ts_vars:
+            n_missing = int(df.isna().any(axis=1).sum())
+            if n_missing == len(hours): raise era5_function.ERA5Error("No data in the requested time range.")
+            if n_missing:
+                logger.warning(f"{n_missing}/{len(hours)} hour(s) missing in the ERA5 response -> filled by time interpolation.")
+                df = df.interpolate(limit_direction="both")
+        if compute_tisr:
+            df["tisr"] = weather_functions.toa_hourly(hours, np.array([[lat]]), np.array([[lon]]))[:, 0, 0]
+            all_units["tisr"] = "J m**-2"
+        for c in constants.ACCUMULATED_J:
+            if c in df and not all_units.get(c): all_units[c] = "J m**-2"
         if do_elev:
             if h_era_values: df = era5_function.apply_elevation_correction(df, float(np.mean(h_era_values)), h_site, logger)
             else: logger.warning("ERA5 orography not available -> no elevation correction.")
+        if rh:
+            es = lambda t_c: 6.112 * np.exp(17.67 * t_c / (t_c + 243.5))
+            t_c = df["t2m"] - 273.15
+            td_c = np.minimum(df["d2m"], df["t2m"]) - 273.15
+            df["rh"] = (100.0 * es(td_c) / es(t_c)).clip(0.0, 100.0)
         df = era5_function.convert_units(df, all_units)
-        if wants_wind:
-            df = era5_function.add_wind(df)
-            df = df.drop(columns=[v for v in ["u10", "v10"] if v in df.columns], errors="ignore")
-        df = df.round(4)
-        df.index = functions.utc_to_local(df.index, time_zone)
+        if wants_wind: df = era5_function.add_wind(df)
+        missing_cols = [c for c in out_cols if c not in df.columns]
+        if missing_cols: raise era5_function.ERA5Error(f"Variables missing in the result: {missing_cols}")
+        df = df[out_cols].round(4)
+        df.index = functions.utc_to_local(df.index.tz_localize("UTC"), time_zone)
         df.index.name = "Time"
-        df.reset_index().to_csv(tmp_csv, index=False)
+        era5_function.check_cancel(processes, key_process)
+        out = df.reset_index()
+        if "rh" in out.columns:
+            out = out[["Time", "rh"] + [c for c in out.columns if c not in ("Time", "rh")]]
+        out.to_csv(tmp_csv, index=False)
         os.replace(tmp_csv, csv_path)
         logger.info(f"Final table: {df.shape[0]} rows x {df.shape[1]} columns")
         logger.info(f"Saved CSV to: {csv_path}")
         logger.info("=" * 70)
         logger.info("Weather download completed successfully.")
         era5_function.set_status(processes, key_process, "finished", "Weather download completed successfully.\n\n")
-    except era5_function.DownloadCancelled as e:
-        logger.info(str(e))
-        era5_function.set_status(processes, key_process, "failed", str(e))
+    except era5_function.DownloadCancelled:
+        logger.info("=" * 70); logger.info("Download cancelled by user. No data was saved.")
+        era5_function.set_status(processes, key_process, "failed", "Download cancelled by user.", cancelled=True)
     except era5_function.ERA5Error as e:
         logger.error(f"FAILED: {e}")
         era5_function.set_status(processes, key_process, "failed", str(e))
@@ -242,9 +268,7 @@ def era5_downloader(key:str, api_key:str, dir:str, processes:dict, key_process:s
             try: os.remove(tmp_csv)
             except OSError: pass
         for h in logger.handlers[:]:
-            try:
-                h.flush()
-                h.close()
+            try: h.flush(); h.close()
             except Exception: pass
             logger.removeHandler(h)
 
@@ -319,14 +343,12 @@ def met_downloader(key:str, api_key:str, url:str, dir:str, processes:dict, key_p
                     data = response.json()
                     records = data.get('data', [])
                     if not records: 
-                        logger.info(f"  {element}: empty -> NaN")
-                        continue
+                        logger.info(f"  {element}: empty -> NaN"); continue
                     stations = pd.DataFrame(records)
                     stations = stations.explode('observations', ignore_index=True)
                     obs = pd.json_normalize(stations['observations'])
                     if obs.empty: 
-                        logger.info(f"  {element}: empty -> NaN")
-                        continue
+                        logger.info(f"  {element}: empty -> NaN"); continue
                     result = pd.concat([
                         stations[['sourceId', 'referenceTime']].reset_index(drop=True),
                         obs.reset_index(drop=True)
@@ -378,6 +400,41 @@ def met_downloader(key:str, api_key:str, url:str, dir:str, processes:dict, key_p
             h.close()
             logger.removeHandler(h)
 
+def _nve_series_info(base_url, headers, station_id, logger):
+    r = _nve_get(f"{base_url}/Series", headers, {"StationId": station_id}, logger)
+    r.raise_for_status(); out = {}
+    for s in r.json().get("data", []) or []:
+        res = {}
+        for item in s.get("resolutionList") or []:
+            rt = item.get("resTime", item.get("resolutionTime"))
+            if rt is None: continue
+            t0 = pd.to_datetime(item.get("dataFromTime"), utc=True, errors="coerce")
+            t1 = pd.to_datetime(item.get("dataToTime"), utc=True, errors="coerce")
+            res[int(rt)] = (t0, t1)
+        out.setdefault(int(s["parameter"]), {}).update(res)
+    return out
+
+def _nve_get(url, headers, params, logger, retries=4):
+    r = None
+    for k in range(retries):
+        r = requests.get(url, params=params, headers=headers, timeout=120)
+        if r.status_code != 429: return r
+        try: wait = min(60, int(r.headers.get("Retry-After", "")))
+        except ValueError: wait = 5 * (k + 1)
+        logger.warning(f"  HydAPI throttling (HTTP 429) -> wait {wait} s and try again...")
+        time.sleep(wait)
+    return r
+
+def _nve_station_name(base_url, headers, station_id, logger):
+    try:
+        r = _nve_get(f"{base_url}/Stations", headers, {"StationId": station_id}, logger)
+        if r.status_code != 200: return ""
+        data = r.json().get("data") or []
+        return (data[0].get("stationName") or "").strip() if data else ""
+    except Exception as e:
+        logger.warning(f"  Cannot read station name for {station_id}: {e}")
+        return ""
+
 def nve_downloader(key:str, api_key:str, url:str, dir:str, processes:dict, key_process:str, 
     ids:list, columns:list, vars:list, interval:int, start:str, end:str, time_zone:str, log_file:str):
     log_path = os.path.join(dir, "logs", log_file)
@@ -385,75 +442,98 @@ def nve_downloader(key:str, api_key:str, url:str, dir:str, processes:dict, key_p
     logger = flow_functions.setup_logger(key, log_path)
     old_stdout, old_stderr = sys.stdout, sys.stderr
     sys.stdout, sys.stderr = StreamToLogger(logger), StreamToLogger(logger)
-    start_local = pd.Timestamp(start).tz_localize(time_zone)
-    end_local = pd.Timestamp(end).tz_localize(time_zone) + pd.Timedelta(days=1)
-    start_time, end_time = start_local.tz_convert('UTC'), end_local.tz_convert('UTC')
-    if (start_time >= end_time): 
-        logger.info("Start time must be before end time.")
-        processes[key_process] = {"status": "failed", "message": "Start time must be before end time."}
-    try:    
-        csv_path = os.path.normpath(os.path.join(dir, f'{key}.csv'))
-        headers = { "X-API-Key": api_key, "Accept": "application/json" }
-        start_date = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-        end_date = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')    
-        logger.info("NVE downloader started.")
-        logger.info(f"Starting time: {start}   -->   Ending time: {end}")
-        logger.info("="*60)
-        all_observations = []
-        for station in ids:
-            station_id = station[0]
-            logger.info(f"Downloading data for station: {station_id}")
-            for i in range(len(vars)):
-                element = vars[i]
-                logger.info(f"Station: {station_id}, Element: {element}")
-                params = {
-                    "StationId": station_id, "Parameter": element, "ResolutionTime": interval,
-                    "ReferenceTime": f"{start_date}/{end_date}"
-                }
-                try:
-                    response = requests.get(url, params=params, headers=headers, timeout=60)
-                    if response.status_code != 200:
-                        logger.info(f"Request failed for {station_id} | {element}: {response.status_code}")
-                        continue
-                    response.raise_for_status()
-                    data = response.json()
-                    records = data.get('data', [])
-                    if not records: 
-                        logger.info(f"  {element}: empty -> NaN")
-                        continue
-                    stations = pd.DataFrame(records)
-                    stations = stations.explode('observations', ignore_index=True)
-                    obs = pd.json_normalize(stations['observations'])
-                    if obs.empty:
-                        logger.info(f"  {element}: empty -> NaN")
-                        continue
-                    obs = obs[['time', 'value']]
-                    obs['Time'] = pd.to_datetime(obs['time'], utc=True)
-                    obs['stationId'], obs[columns[i]] = station_id, obs['value']
-                    obs = obs[['Time', 'stationId', columns[i]]]
-                    all_observations.append(obs)
-                except requests.exceptions.RequestException as e:
-                    logger.exception(f"Request failed for {station_id} | {element}: {e}")
-            logger.info("*"*40)
-        df = pd.concat(all_observations, ignore_index=True) if all_observations else pd.DataFrame()
-        if df.empty:
-            logger.error("No data downloaded")
-            processes[key_process] = {"status": "failed", "message": "No data downloaded."}
+    try:
+        start_time = pd.Timestamp(start).tz_localize(time_zone).tz_convert("UTC")
+        end_time = (pd.Timestamp(end).tz_localize(time_zone) + pd.Timedelta(days=1)).tz_convert("UTC")
+        if start_time >= end_time:
+            logger.error("Start time must be before end time.")
+            era5_function.set_status(processes, key_process, "failed", "Start time must be before end time.")
             return
-        df['Time'] = functions.utc_to_local(df['Time'], time_zone)
+        interval = int(interval)
+        if interval not in constants.NVE_CHUNK_DAYS:
+            raise ValueError(f"ResolutionTime {interval} is invalid. HydAPI only support 0 (inst), 60 (hourly), 1440 (daily).")
+        headers = {"X-API-Key": api_key, "Accept": "application/json"}
+        base_url = url.rsplit("/", 1)[0]
+        logger.info("NVE downloader started.")
+        logger.info(f"Local: {start} -> {end} ({time_zone}) | UTC: {start_time} -> {end_time} | ResolutionTime={interval}")
+        logger.info("=" * 60); frames, n_series, names = [], 0, {}
+        for station in ids:
+            sid = str(station[0]).strip()
+            logger.info(f"Station: {sid}")
+            try: series = _nve_series_info(base_url, headers, sid, logger)
+            except Exception as e:
+                logger.warning(f"  Cannot read /Series ({e}) -> download directly without checking."); series = None
+            for element, column in zip(vars, columns):
+                era5_function.check_cancel(processes, key_process)
+                p = int(element)
+                if series is not None:
+                    avail = series.get(p)
+                    if not avail:
+                        logger.info(f"  {column}: This station doesn't have this data -> Ignore"); continue
+                    if interval not in avail:
+                        logger.info(f"  {column}: doesn't has the solution {interval}; only {sorted(avail)} -> Ignore"); continue
+                    t0, t1 = avail[interval]
+                    if (pd.notna(t1) and t1 < start_time) or (pd.notna(t0) and t0 > end_time):
+                        logger.info(f"  {column}: only has data between {t0:%Y-%m-%d} -> {t1:%Y-%m-%d}, outside required period -> Ignore"); continue
+                chunk = pd.Timedelta(days=constants.NVE_CHUNK_DAYS[interval]); c0, got = start_time, 0
+                while c0 < end_time:
+                    c1 = min(c0 + chunk, end_time)
+                    params = {"StationId": sid, "Parameter": p, "ResolutionTime": interval,
+                        "ReferenceTime": f"{c0:%Y-%m-%dT%H:%M:%S}/{c1:%Y-%m-%dT%H:%M:%S}"}
+                    r = _nve_get(url, headers, params, logger)
+                    if r.status_code in (401, 403):
+                        logger.error(f"HydAPI rejects API key (HTTP {r.status_code}). Recheck NVE API key.")
+                        era5_function.set_status(
+                            processes, key_process, "failed", f"HydAPI rejects API key (HTTP {r.status_code}). Recheck NVE API key."
+                        )
+                    if r.status_code != 200:
+                        logger.warning(f"  {column}: HTTP {r.status_code} – {r.text[:300]}")
+                    else:
+                        for s in r.json().get("data", []) or []:
+                            if s.get("stationName"): names.setdefault(sid, s["stationName"].strip())
+                            obs = s.get("observations") or []
+                            if not obs: continue
+                            o = pd.DataFrame(obs)
+                            frames.append(pd.DataFrame({
+                                "Time": pd.to_datetime(o["time"], utc=True), "stationId": sid,
+                                column: pd.to_numeric(o["value"], errors="coerce")}))
+                            got += len(o)
+                    c0 = c1
+                    era5_function.set_status(processes, key_process, "running", f"NVE: {sid} – {column}")
+                logger.info(f"  {column}: {got} value" if got else f"  {column}: empty in this period")
+                n_series += bool(got)
+            logger.info("*" * 40)
+        if not frames:
+            logger.error("No data downloaded.")
+            era5_function.set_status(processes, key_process, "failed", "No data downloaded.")
+            return
+        df = pd.concat(frames, ignore_index=True)
+        df = df.groupby(["Time", "stationId"], as_index=False, sort=True).first()
+        df = df[(df["Time"] >= start_time) & (df["Time"] < end_time)]
+        for sid in df["stationId"].unique():
+            if not names.get(sid): names[sid] = _nve_station_name(base_url, headers, sid, logger)
+        df["stationName"] = df["stationId"].map(names).fillna("")
+        value_cols = [c for c in dict.fromkeys(columns) if c in df.columns]
+        df = df[["Time", "stationId", "stationName"] + value_cols]
+        df["Time"] = functions.utc_to_local(df["Time"], time_zone)
+        logger.info("Stations: " + ", ".join(f"{k} ({v})" for k, v in names.items()))
+        csv_path = os.path.normpath(os.path.join(dir, f"{key}.csv"))
+        if 'Discharge (m³/s)' in columns: df = df[["Time", "Discharge (m³/s)"]]
         df.to_csv(csv_path, index=False)
+        logger.info(f"{n_series} serie(s) | table {df.shape[0]} rows × {df.shape[1]} columns")
         logger.info(f"Saved data to: {csv_path}")
-        logger.info(f"Saved data file successfully.")
-        logger.handlers[0].flush()
-        processes[key_process] = {"status": "finished", "message": "Data download completed successfully.\n\n"}
+        era5_function.set_status(processes, key_process, "finished", "Data download completed successfully.\n\n")
+    except era5_function.DownloadCancelled:
+        logger.info("Download cancelled by user.")
+        era5_function.set_status(processes, key_process, "failed", "Download cancelled by user.", cancelled=True)
     except Exception as e:
         logger.exception("Data download failed.")
-        processes[key_process] = {"status": "failed", "message": str(e)}
-        functions.error('/nve_downloader', e)
+        era5_function.set_status(processes, key_process, "failed", str(e))
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
         for h in logger.handlers[:]:
-            h.close()
+            try: h.flush(); h.close()
+            except Exception: pass
             logger.removeHandler(h)
 
 def dem_downloader(directory:str, key:str, resolution:int, boundary:gpd.GeoDataFrame, target_crs=None):
@@ -761,3 +841,122 @@ def write_forcing(directory:str, start:str, end:str, time_zone:str, interval:str
         return {"status": "completed", "message": "Weather forcing data saved successfully."}
     except Exception as e: functions.error('/write_forcing', e)
 
+def fill_point_gaps(df):
+    df = df.astype("float64")
+    if not df.isna().any().any(): return df
+    if {"ws", "wd"} <= set(df.columns):
+        wd = np.radians(df["wd"]); u, v = -df["ws"] * np.sin(wd), -df["ws"] * np.cos(wd)
+        u, v = u.interpolate(limit_direction="both"), v.interpolate(limit_direction="both")
+        df["ws"] = np.hypot(u, v)
+        df["wd"] = (np.degrees(np.arctan2(-u, -v)) + 360.0) % 360.0
+    return df.interpolate(limit_direction="both")
+
+def point_table(df, hours, lat, lon, columns, h_src, h_site, logger):
+    df = fill_point_gaps(df)
+    t_k = df["t_k"].astype(float)
+    rh = df["rh"].clip(1e-3, 1.0).astype(float)
+    if h_site is not None and h_src is not None:
+        t_c = t_k - 273.15
+        a = np.log(rh) + 17.67 * t_c / (t_c + 243.5)
+        td_k = 243.5 * a / (17.67 - a) + 273.15
+        corr = era5_function.apply_elevation_correction(
+            pd.DataFrame({"t2m": t_k, "d2m": td_k}, index=df.index), h_src, h_site, logger)
+        t_k = corr["t2m"]
+        es = weather_functions._magnus_es
+        rh = (es(corr["d2m"] - 273.15) / es(t_k - 273.15)).clip(0, 1)
+    out = pd.DataFrame(index=hours)
+    makers = {
+        "t2m": lambda: t_k - 273.15,
+        "tp": lambda: df["precip_mm"].clip(lower=0),
+        "wind_speed": lambda: df["ws"],
+        "wind_direction": lambda: df["wd"] % 360.0,
+        "ssrd": lambda: df["sw_wm2"].clip(lower=0),
+        "tisr": lambda: pd.Series(weather_functions.toa_hourly(
+            hours, np.array([[lat]]), np.array([[lon]]))[:, 0, 0] / 3600.0, index=hours),
+        "msl": lambda: df["msl_pa"] / 100.0,
+        "tcc": lambda: (df["cloud"] * 100.0).clip(0, 100),
+        "rh": lambda: rh * 100.0,
+    }
+    for c in columns: out[c] = makers[c]()
+    return out.round(4)
+
+def other_weather_downloader(source:str, key:str, directory:str, processes:dict, key_process:dict,
+    vars:dict, rh:bool, lat:float, lon:float, start:str, end:str, time_zone:str, log_file:str, 
+    elevation=None, auto_elevation=True, elevation_correction=True, workers=6, om_model=None):
+    log_dir = os.path.join(directory, "logs"); os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, os.path.basename(log_file))
+    try:
+        if os.path.exists(log_path): os.remove(log_path)
+    except OSError: pass
+    logger = flow_functions.setup_logger(f"point.{key_process}", log_path)
+    csv_path = os.path.normpath(os.path.join(directory, f"{key}.csv"))
+    tmp_csv, cache_dir, success = csv_path + ".part",  None, False
+    try:
+        era5_function.set_status(processes, key_process, "running", f"Point download started ({source}).")
+        era5_function.check_cancel(processes, key_process)
+        if source not in constants.POINT_SOURCES: 
+            raise era5_function.ERA5Error(f"Unknown source '{source}'. Use: {', '.join(constants.POINT_SOURCES)}")
+        lat, lon = float(lat), float(lon)
+        if not (-90 <= lat <= 90 and -180 <= lon <= 360): 
+            raise era5_function.ERA5Error(f"Invalid location: lat={lat}, lon={lon}")
+        start_time = pd.Timestamp(functions.local_to_utc(start, time_zone))
+        end_time = pd.Timestamp(functions.local_to_utc(end, time_zone))
+        start_time = start_time.tz_convert("UTC").tz_localize(None) if start_time.tzinfo else start_time
+        end_time = end_time.tz_convert("UTC").tz_localize(None) if end_time.tzinfo else end_time
+        weather_functions.validate_request(source, None, start_time.to_pydatetime(), end_time.to_pydatetime())
+        hours = weather_functions.hours(start_time, end_time)
+        if len(hours) == 0: raise era5_function.ERA5Error("No full hour in the requested time range.")
+        selected = [constants.POINT_ALIASES.get(v, v) for v in (vars or [])]
+        unknown = [v for v in selected if v not in constants.VARIABLES]
+        if unknown: logger.warning(f"Ignoring unknown variables: {unknown}")
+        columns = list(dict.fromkeys(constants.VARIABLES[v] for v in selected if v in constants.VARIABLES))
+        if not columns: raise era5_function.ERA5Error("Please select at least one variable.")
+        label = constants.SOURCES[source]["label"]
+        logger.info(f"Source: {label} | location lat={lat}, lon={lon}")
+        logger.info(f"Local: {start} -> {end} ({time_zone}) | UTC: {hours[0]} -> {hours[-1]} ({len(hours)} hours)")
+        logger.info(f"Variables: {', '.join(columns)}"); h_site = None
+        columns = list(dict.fromkeys(constants.VARIABLES[v] for v in selected if v in constants.VARIABLES))
+        if rh: columns = ["rh"] + [c for c in columns if c != "rh"]
+        if not columns: raise era5_function.ERA5Error("Please select at least one variable.")
+        if elevation_correction and {"t2m", "rh"} & set(columns):
+            h_site = era5_function.elevation_detector(["t2m"], lat, lon, elevation, auto_elevation, logger)
+        logger.info("=" * 100)
+        if source == "open-meteo":
+            df, h_src, cell = weather_functions.open_meteo_point(lat, lon, hours, logger, processes, key_process, model=om_model)
+            logger.info(f"Open-Meteo grid cell ({cell[0]}, {cell[1]}), terrain {h_src} m. Free use is non-commercial only.")
+        else:
+            cache_dir = os.path.join(directory, f"metpoint_cache_{weather_functions.short_hash([round(lat, 3), round(lon, 3)])}")
+            df, h_src, cell = weather_functions.met_nordic_point(lat, lon, hours, logger, processes, key_process, cache_dir, workers)
+        era5_function.check_cancel(processes, key_process)
+        era5_function.set_status(processes, key_process, "running", "Processing data...")
+        if df.isna().all().all(): raise era5_function.ERA5Error("No data in the requested time range.")
+        if h_site is not None and h_src is None:
+            logger.warning("Source terrain height unknown -> no elevation correction.")
+        out = point_table(df, hours, lat, lon, columns, h_src, h_site, logger)
+        out.index = functions.utc_to_local(out.index.tz_localize("UTC"), time_zone)
+        out.index.name = "Time"
+        era5_function.check_cancel(processes, key_process)
+        out.reset_index().to_csv(tmp_csv, index=False)
+        os.replace(tmp_csv, csv_path); success = True
+        logger.info(f"Final table: {out.shape[0]} rows x {out.shape[1]} columns")
+        logger.info(f"Saved CSV to: {csv_path}"); logger.info("=" * 70)
+        logger.info("Weather download completed successfully.")
+        era5_function.set_status(processes, key_process, "finished", f"Weather download completed successfully ({label}).\n\n")
+    except era5_function.DownloadCancelled:
+        logger.info("=" * 70); logger.info("Download cancelled by user. No data was saved.")
+        era5_function.set_status(processes, key_process, "failed", "Download cancelled by user.", cancelled=True)
+    except era5_function.ERA5Error as e:
+        logger.error(f"FAILED: {e}")
+        era5_function.set_status(processes, key_process, "failed", str(e))
+    except Exception as e:
+        logger.error("Point download failed:\n" + traceback.format_exc())
+        era5_function.set_status(processes, key_process, "failed", str(e))
+    finally:
+        if os.path.exists(tmp_csv):
+            try: os.remove(tmp_csv)
+            except OSError: pass
+        if success and cache_dir: shutil.rmtree(cache_dir, ignore_errors=True)
+        for h in logger.handlers[:]:
+            try: h.flush(); h.close()
+            except Exception: pass
+            logger.removeHandler(h)

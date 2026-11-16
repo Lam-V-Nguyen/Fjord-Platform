@@ -19,25 +19,26 @@ const WEATHER_SOURCES = {
         needsKey: false, minDate: '2012-09-01', label: 'MET Nordic analysis (MET Norway)',
         link: 'https://github.com/metno/NWPdocs/wiki/MET-Nordic-dataset',
         note: '1 km hourly analysis for the Nordic countries, 2012-09 → today, no API key, no queue. ' +
-            'Includes shortwave and longwave radiation. Long periods take a while (one file per hour).'
+            'One file per hour is read, so long periods take a while (an interrupted download resumes where it stopped).'
     },
     'era5-timeseries': {
         needsKey: true, minDate: '1940-01-01', label: 'ERA5 hourly time series (CDS)',
         link: 'https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries',
-        note: 'Same ERA5 data, optimised for point time series (centre of the catchment) – usually returns in seconds. ' +
+        note: 'Same ERA5 data, optimised for point time series (centre of the catchment) - usually returns in seconds. ' +
             'Uses the CDS API key.'
     },
     'open-meteo': {
         needsKey: false, minDate: '1940-01-01', label: 'Open-Meteo Historical Weather API',
         link: 'https://open-meteo.com/en/docs/historical-weather-api',
         note: 'Point time series (centre of the catchment), no API key. Free use is non-commercial only. ' +
-            'Longwave radiation is estimated from temperature, humidity and cloud cover.'
+            'Open-Meteo historical API (reanalysis), one request, usually a few seconds. Values of the nearest model ' +
+            'grid cell. Free use is non-commercial only. TOA radiation is computed astronomically.'
     },
     'era5': {
         needsKey: true, minDate: '1940-01-01', label: 'ERA5 - Hourly Data (CDS)',
         link: 'https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download',
-        note: 'Gridded ERA5 from the CDS request queue – may wait a long time when the CDS is busy. ' +
-            'Should use this option if all above options DO NOT work.'
+        note: 'Gridded ERA5 from the CDS request queue - may wait a long time when the CDS is busy. ' +
+            'Should use this option if all above options DO NOT work effectively.'
     },
 };
 
@@ -455,7 +456,8 @@ function soilManager() {
             const request = await jsonLoader('start_download_soil', content);
             if (request.status === 'error') { alert(request.message); return; }
             updateLog(currentProject, obj.soilLog, 2, key, async () => {
-                alert('Downloading soil data completed.'); obj.soilCheckbox.checked = true;
+                alert('Downloading soil data completed.'); 
+                obj.soilCheckbox.checked = true; obj.soilCheckerBtn.click();
             }, logFile);
         } catch (error) { alert(`Downloading soil data failed: ${error.message}`); }
     });
@@ -834,7 +836,7 @@ function weatherManager() {
         alert(response.message); if (response.status === "error") { return; }
     });
     obj.downloadWeatherBtn.addEventListener('click', async () => {
-        const name = obj.projectName.value.trim(), value = obj.weatherSelector.value, logFile = 'flow_weather_log.txt';
+        const name = obj.projectName.value.trim(), value = obj.weatherSelector.value, logFile = 'log_flow_weather.txt';
         if (name === '') { alert('Please select a scenario from first.'); return; }
         if (!value || value === '') { alert('Please select weather source data first.'); return; }
         const startTime = obj.weatherStart.value, endTime = obj.weatherEnd.value;

@@ -238,3 +238,5 @@ body {
   max-height: 200px; overflow-y: auto;
   overflow-x: hidden; padding-right: 8px;
 }
+
+.init-hint { display: none; font-size: 12px; opacity: .75; margin: -10px 0 -10px 0; }

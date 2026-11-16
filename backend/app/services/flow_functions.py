@@ -1,74 +1,24 @@
-import os, dotenv, rasterio, zipfile, rioxarray, sys, pyflwdir, rioxarray, stat
-import logging, gc, shutil, traceback, subprocess, threading, re, time, psutil
+import os, rasterio, zipfile, rioxarray, sys, pyflwdir, rioxarray, stat, json, \
+    logging, gc, shutil, traceback, subprocess, threading, re, time, psutil
 import geopandas as gpd, numpy as np, pandas as pd, xarray as xr
-from shapely.geometry import shape
+from shapely.geometry import shape, LineString
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt
 from rasterio.io import MemoryFile
 from rasterio.enums import Resampling
 from rasterio.features import rasterize, shapes
 from services import functions, flow_functions, \
-    wflow_config, era5_function, weather_functions
+    wflow_config, era5_function, weather_functions, constants
 from pyflwdir import dem
-from config import PROJECT_ROOT, WFLOW_PATH
+from config import PROJECT_ROOT, WFLOW_PATH, SOURCE_BACKEND
 from dask.distributed import get_client
 from dask import config
 from pyproj import CRS, Transformer
 
+if "bool" not in np.__dict__: np.bool = np.bool_
 
 try: HAS_DASK = True
 except ImportError: HAS_DASK = False
-
-
-dotenv.load_dotenv()
-MET_url, MET_client_id = os.getenv('MET_ProstAPI_URL'), os.getenv('MET_ProstAPI_CLIENT_ID')
-NVE_url, NVE_client_id = os.getenv('NVE_URL'), os.getenv('NVE_API_KEY')
-NODATA_DEM, NODATA_INT, NODATA_SOIL_THICKNESS, G = -9999.0, 0, -99999, 9.80665
-CHUNK_T, CHUNK_XY, CACHE_MAX_AGE_DAYS = 24, 128, 2
-LAPSE_T = 0.0065                       # K/m
-ISRIC_URL = "https://files.isric.org/soilgrids/former/2017-03-10/data/"
-DOWNLOAD_RETRIES, RETRY_WAIT_S = 3, (30, 120, 300)
-FORCING = {
-    "precip": ("mm",    lambda s: np.clip(s["tp"] * 1000.0, 0.0, None)),
-    "temp": ("degC",  lambda s: s["t2m"] - 273.15),
-    "kin": ("W/m^2", lambda s: np.clip(s["ssrd"] / 3600.0, 0.0, None)),
-    "kout": ("W/m^2", lambda s: np.clip(s["tisr"] / 3600.0, 0.0, None)),
-    "wind": ("m/s",   lambda s: np.hypot(s["u10"], s["v10"])),
-    "press_msl": ("hPa",   lambda s: s["msl"] / 100.0),
-}
-FORCING_SOURCES = {
-    "total_precipitation": "tp", # Precipitation
-    "2m_temperature": "t2m", # Temperature
-    "surface_solar_radiation_downwards": "ssrd", # Shortwave radiation
-    "toa_incident_solar_radiation": "tisr", # Top-of-atmosphere incident solar radiation
-    "10m_u_component_of_wind": "u10", # U-component of wind
-    "10m_v_component_of_wind": "v10", # V-component of wind
-    "mean_sea_level_pressure": "msl", # Mean sea level pressure
-}
-
-
-soils = [
-    ['Clay', 'Sand', 'Silt', 'Bulk density', 'Soil organic carbon', 'Soil pH'],
-    ['0', '5', '15', '30', '60', '100', '200']
-]
-soil_types = {
-    'bulk density': ['BLDFIE_M', 'bd', 1000, np.float32, -9999.0, "g/cm3"],
-    'clay': ['CLYPPT_M', 'clyppt', 1, np.float32, -9999.0, "%"], 
-    'sand': ['SNDPPT_M', 'sndppt', 1, np.float32, -9999.0, "%"],
-    'silt': ['SLTPPT_M', 'sltppt', 1, np.float32, -9999.0, "%"],  
-    'organic carbon': ['ORCDRC_M', 'oc', 10, np.float32, -9999.0, "%"], 
-    'pH': ['PHIHOX_M', 'ph', 10, np.float32, -9999.0, "-"]
-}
-soil_depths = {
-    '0cm': 'sl1', '5cm': 'sl2', '15cm': 'sl3', '30cm': 'sl4', 
-    '60cm': 'sl5', '100cm': 'sl6', '200cm': 'sl7'
-}
-soil_type_reverse = {
-    'clyppt': 'Clay', 'sndppt': 'Sand', 'sltppt': 'Silt', 
-    'bd': 'Bulk density', 'oc': 'Soil organic carbon', 'ph': 'Soil pH'
-}
-soil_depth_reverse = {v: k for k, v in soil_depths.items()}
-
 
 class StreamToLogger:
     PROGRESS_PATTERN = re.compile(r'\[\s*[#=]*\s*\]\s*\|\s*\d+%\s*Completed\s*\|')
@@ -132,7 +82,7 @@ class Regridder:
         self.y = np.asarray(y_coords, dtype="float64")
         self.crs = CRS.from_user_input(dem_crs)
         self.to_ll = Transformer.from_crs(self.crs, "EPSG:4326", always_xy=True)
-        self.z_src = None if z_src is None else np.asarray(z_src, dtype="float64").ravel() / G
+        self.z_src = None if z_src is None else np.asarray(z_src, dtype="float64").ravel() / constants.G
         nbytes = self.y.size * self.x.size * self.k * 8
         self.in_memory = cache_dir is None or nbytes <= cache_limit_mb * 1e6
         self.cache_dir = cache_dir
@@ -151,9 +101,7 @@ class Regridder:
         return f"{self.nlat}×{self.nlon} ERA5 points -> {self.method} interpolation (k={self.k})"
     @staticmethod
     def _axis(values, coords):
-        order = np.argsort(coords)
-        asc = coords[order]
-        n = asc.size
+        order = np.argsort(coords); asc = coords[order]; n = asc.size
         if n == 1:
             z = np.zeros(values.size, dtype=np.int64)
             return z, z, np.zeros(values.size)
@@ -219,7 +167,6 @@ class Regridder:
             out += src[:, idx[:, k]] * w[:, k]
         return out.reshape(t, rows, nx)
 
-
 def _interpolate_extrapolate(data, mask_nan, get_nearest=False, power=2, max_neighbors=8):
     h, w = data.shape; mask_valid = ~mask_nan
     y_valid, x_valid = np.where(mask_valid)
@@ -249,7 +196,7 @@ def _interpolate_extrapolate(data, mask_nan, get_nearest=False, power=2, max_nei
         result[y_fill, x_fill] = nearest_values
     return result
 
-def write_geotif(array, profile, output_path, nodata=NODATA_DEM, units=None):
+def write_geotif(array, profile, output_path, nodata=constants.NODATA_DEM, units=None):
     temp_path = output_path + ".tmp.tif"
     try:
         array[np.isnan(array)] = nodata
@@ -334,7 +281,7 @@ def weather_downloader(project_name, flow_name, processes, process_key,
     except OSError: pass
     flow_dir = os.path.normpath(os.path.join(project_dir, "flows", os.path.basename(flow_name)))
     logger = setup_logger(f"{process_key}:weather", log_path)
-    label = weather_functions.SOURCES.get(source, {}).get("label", source)
+    label = constants.SOURCES.get(source, {}).get("label", source)
     try:
         era5_function.set_status(processes, process_key, "running", f"Weather downloader started ({label}).")
         era5_function.check_cancel(processes, process_key)
@@ -445,34 +392,33 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
                 raise ValueError(f"No valid ISRIC data in area: {url}")
             return arr, valid
         if soil_source == "isric":
-            soil_depths = flow_functions.soil_depths
-            soil_types, depths = flow_functions.soil_types, list(soil_depths.values())
+            soil_depths = constants.SOIL_DEPTH; depths = list(soil_depths.values())
             # Get raster information
             result = rioxarray.open_rasterio(dtm_path)
             if isinstance(result, list): ref = result[0].squeeze()
             else: ref = result.squeeze()
             # Soil thickness
             logger.info("Creating soil thickness data...")
-            soil_thickness_url = f"{ISRIC_URL}BDRICM_M_250m_ll.tif"
+            soil_thickness_url = f"{constants.ISRIC_URL}BDRICM_M_250m_ll.tif"
             soil_thickness_array, mask_valid = read_isric(soil_thickness_url)
             # Interpolate data
             logger.info("Interpolating soil thickness data...")
             soil_thickness_values = _interpolate_extrapolate(soil_thickness_array, ~mask_valid, True)
-            soil_thickness_values = np.where(np.isfinite(soil_thickness_values), soil_thickness_values, NODATA_SOIL_THICKNESS)
+            soil_thickness_values = np.where(np.isfinite(soil_thickness_values), soil_thickness_values, constants.NODATA_SOIL_THICKNESS)
             soil_thickness_values = soil_thickness_values.astype(np.int32)
             # Clip to catchment & lake
-            soil_thickness_values[~mask_catchment] = NODATA_SOIL_THICKNESS
-            if mask_lake is not None: soil_thickness_values[mask_lake] = NODATA_SOIL_THICKNESS
+            soil_thickness_values[~mask_catchment] = constants.NODATA_SOIL_THICKNESS
+            if mask_lake is not None: soil_thickness_values[mask_lake] = constants.NODATA_SOIL_THICKNESS
             soil_thickness_path = os.path.normpath(os.path.join(soil_dir, 'soilthickness.tif'))
             profile_writer = profile.copy()
             profile_writer.update(dtype=np.int32)
-            write_geotif(soil_thickness_values, profile_writer, soil_thickness_path, NODATA_SOIL_THICKNESS, 'cm')
+            write_geotif(soil_thickness_values, profile_writer, soil_thickness_path, constants.NODATA_SOIL_THICKNESS, 'cm')
             logger.info(f"Saving soil thickness data to: {soil_thickness_path}")
             # Download soil data
-            for _, values in soil_types.items():
+            for _, values in constants.SOIL_TYPES.items():
                 file, name, scale, dtype, nodata_soil, unit = values[0], values[1], values[2], values[3], values[4], values[5]
                 for depth in depths:
-                    file_url = f'{ISRIC_URL}{file}_{depth}_250m_ll.tif'
+                    file_url = f'{constants.ISRIC_URL}{file}_{depth}_250m_ll.tif'
                     logger.info(f"Downloading: {file}_{depth}_250m_ll.tif...")
                     soil_array, mask_valid = read_isric(file_url)
                     # Interpolate data
@@ -505,87 +451,155 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
                 try: h.flush(); h.close()
                 finally: logger.removeHandler(h)
 
-def hydro_creator(directory:str, dem_path:str, area_km2:float, 
-    logger:logging.Logger, river_path:str, water_path:str | None):
+def _is_auto_river(path):
+    if not path or not os.path.isfile(path): return False
+    try:
+        gdf = gpd.read_file(path, columns=["source"])
+        return "source" in gdf.columns and (gdf["source"] == "auto").all()
+    except Exception: return False
+
+def _sample_midpoints(geoms, arr, transform):
+    inv, out = ~transform, []
+    for g in geoms:
+        p = g.interpolate(0.5, normalized=True)
+        c, r = inv * (p.x, p.y)
+        r = int(np.clip(r, 0, arr.shape[0] - 1)); c = int(np.clip(c, 0, arr.shape[1] - 1))
+        out.append(float(arr[r, c]))
+    return out
+
+def _river_from_streams(flw, stream_mask, rivwth, rivdph, crs, transform, outlet_idx):
+    feats = flw.streams(mask=stream_mask)
+    gdf = gpd.GeoDataFrame.from_features(feats, crs=crs) if feats else gpd.GeoDataFrame(geometry=[], crs=crs)
+    if not gdf.empty:
+        gdf = gdf[gdf.geometry.notna() & (gdf.geometry.length > 0)].reset_index(drop=True)
+    if gdf.empty:
+        r, c = outlet_idx; x0, y0 = transform * (c + 0.5, r + 0.5); half = abs(transform.a) / 2
+        gdf = gpd.GeoDataFrame(geometry=[LineString([(x0 - half, y0), (x0 + half, y0)])], crs=crs)
+    gdf["rivwth"] = _sample_midpoints(gdf.geometry, rivwth, transform)
+    gdf["rivdph"] = _sample_midpoints(gdf.geometry, rivdph, transform)
+    gdf["source"] = "auto"
+    return gdf[["rivwth", "rivdph", "source", "geometry"]]
+
+def hydro_creator(directory:str, dem_path:str, area_km2:float, logger:logging.Logger, river_path:str, 
+    water_path:str | None, min_rivwth:float=1.0, wth_a:float=1.5, wth_b:float=0.5, 
+    min_rivdph:float=0.3, dph_a:float=0.3, dph_b:float=0.3):
     with rasterio.open(dem_path) as src:
-        dem_array = src.read(1)
+        dem_array = src.read(1).astype(np.float32)
         crs, nodata = src.crs, src.nodata
         transform, profile = src.transform, src.profile
         height, width = src.height, src.width
-    nodata_f = float(nodata) if nodata is not None else -9999.0
-    dem_array[np.isnan(dem_array)] = nodata_f
+    if nodata is None: nodata = constants.NODATA_DEM
+    dem_array[np.isnan(dem_array)] = nodata
     mask_lake = None
     if water_path is not None:
         logger.info("Masking lake area...")
-        lake = gpd.read_file(water_path)
-        lake_reproj = lake.to_crs(crs)
-        lake_array = np.full((height, width), nodata_f, dtype=np.float32)
-        rasterize(
-            shapes=[geom for geom in lake_reproj.geometry],
-            out=lake_array, transform=transform,
-        )
-        mask_lake = (lake_array != nodata)
+        lake = gpd.read_file(water_path).to_crs(crs)
+        lake = lake[lake.geometry.notna() & ~lake.geometry.is_empty]
+        if not lake.empty:
+            mask_lake = rasterize([(g, 1) for g in lake.geometry], out_shape=(height, width),
+                transform=transform, fill=0, dtype=np.uint8) == 1
     logger.info("Filling depressions...")
-    filled_array, flwdir_array = dem.fill_depressions(elevtn=dem_array, max_depth=-1, nodata=nodata_f)
+    filled_array, _ = dem.fill_depressions(elevtn=dem_array, max_depth=-1, nodata=nodata)
     if mask_lake is not None: filled_array[mask_lake] = dem_array[mask_lake]
     logger.info("Creating flow directions...")
-    flw = pyflwdir.from_dem(filled_array, transform=transform, latlon=crs.is_geographic, nodata=nodata_f)
-    NODATA_FLWDR, NODATA_BASIN = 255, 0
+    flw = pyflwdir.from_dem(filled_array, transform=transform, latlon=crs.is_geographic, nodata=nodata)
+    flwdir_array = flw.to_array(ftype="d8").astype(np.uint8)
     # Create basins
     logger.info("Creating basins...")
     basins_array = flw.basins()
-    unique, counts = np.unique(basins_array, return_counts=True)
+    unique, counts = np.unique(basins_array[basins_array > 0], return_counts=True)
+    if unique.size == 0: raise ValueError("No basin could be derived from the DEM.")
     largest_basin_id = unique[np.argmax(counts)]
     basins_mask = (basins_array == largest_basin_id)
-    basins_array[basins_mask], basins_array[~basins_mask] = 1, NODATA_BASIN
-    logger.info("Creating elevation profile...")
-    elevtn_array = filled_array.copy()
+    basins_array[basins_mask], basins_array[~basins_mask] = 1, constants.NODATA_INT
     # Create slope
     logger.info("Creating slope...")
-    dx, dy = transform.a, abs(transform.e)
+    elevtn_array = filled_array.copy()
+    dx, dy = abs(transform.a), abs(transform.e)
     valid = filled_array != nodata
     if (~valid).any():
         idx = distance_transform_edt(~valid, return_distances=False, return_indices=True)
-        idx_arr = np.asarray(idx)
-        if idx_arr.ndim == 3: idx_arr = idx_arr.reshape(2, -1) 
-        grad_src = filled_array[tuple(idx_arr)]
+        grad_src = filled_array[tuple(idx)]
     else: grad_src = filled_array
-    # Gradient elevation
     gy, gx = np.gradient(grad_src, dy, dx)
     slope_array = np.sqrt(gx**2 + gy**2).astype(np.float32)
+    slope_array[valid] = np.maximum(slope_array[valid], 1e-4)
     slope_array[~valid] = nodata
-    # Create stream order
+    # Stream network
     logger.info("Creating stream order...")
     uparea_array = flw.upstream_area(unit='km2')
-    # Create stream mask and stream order
-    stream_mask = (uparea_array >= area_km2)
+    upa_in_basin = np.where(basins_mask, uparea_array, -np.inf)
+    upa_outlet = float(upa_in_basin.max())
+    cell_km2 = dx * dy / 1e6; river_upa = float(area_km2)
+    if upa_outlet < 2 * area_km2:
+        river_upa = max(0.1 * upa_outlet, 10 * cell_km2)
+        logger.warning(f"Catchment upstream area {upa_outlet:.3f} km² < 2×{area_km2} km² "
+            f"-> river threshold lowered to {river_upa:.3f} km².")
+    stream_mask = (uparea_array >= river_upa) & basins_mask
+    outlet_idx = np.unravel_index(np.argmax(upa_in_basin), upa_in_basin.shape)
+    stream_mask[outlet_idx] = True
+    logger.info(f"River cells: {int(stream_mask.sum())} (threshold {river_upa:.3f} km²)")
     strord_array = flw.stream_order(type='strahler', mask=stream_mask)
-    # Create upstream grid
+    strord_array = np.where(
+        valid & basins_mask & (strord_array != 255), strord_array, constants.NODATA_INT
+        ).astype(np.int16)
     logger.info("Creating upstream grid...")
     upstream_array = flw.upstream_area(unit='cell')
-    # Create river width
-    logger.info("Creating river width...")
-    river = gpd.read_file(river_path).to_crs(crs)
-    shape = ((geom, value) for geom, value in zip(river.geometry, river["rivwth"]))
-    rivwth_array = np.full((profile["height"], profile["width"]), nodata_f, dtype=np.float32)
-    rasterize(shapes=shape, out=rivwth_array, transform=transform)
+    uparea_out = np.where(valid & (uparea_array >= 0), uparea_array, nodata).astype(np.float32)
+    upstream_array = np.where(valid & (upstream_array >= 0), upstream_array, constants.NODATA_INT).astype(np.int32)
+    # River width & depth (power-law)
+    logger.info("Creating river width/depth...")
+    A = np.maximum(uparea_array, 1e-6)
+    pw = np.maximum(wth_a * np.power(A, wth_b), min_rivwth).astype(np.float32)
+    pdph = np.maximum(dph_a * np.power(A, dph_b), min_rivdph).astype(np.float32)
+    rivwth_array = np.full((height, width), nodata, dtype=np.float32)
+    rivwth_array[stream_mask] = pw[stream_mask]
+    user_river = bool(river_path) and os.path.isfile(river_path) and not _is_auto_river(river_path)
+    if user_river:
+        river = gpd.read_file(river_path).to_crs(crs)
+        river = river[river.geometry.notna() & ~river.geometry.is_empty].reset_index(drop=True)
+        for col, arr in (("rivwth", pw), ("rivdph", pdph)):
+            if col not in river.columns: river[col] = np.nan
+            miss = river[col].isna() | (river[col] <= 0)
+            if miss.any():
+                river.loc[miss, col] = _sample_midpoints(river.geometry[miss], arr, transform)
+                logger.warning(f"{int(miss.sum())} river segment(s) without '{col}' -> filled from power-law.")
+        if river.empty:
+            user_river = False
+            logger.warning("Uploaded river file has no valid geometry – generating river from DEM.")
+        else:
+            river.to_file(river_path, driver="GPKG")
+            vec = rasterize(((g, float(v)) for g, v in zip(river.geometry, river["rivwth"])),
+                out_shape=(height, width), transform=transform, fill=np.nan, dtype=np.float32)
+            m = stream_mask & np.isfinite(vec) & (vec > 0)
+            rivwth_array[m] = vec[m]
+            logger.info(f"Burned measured width into {int(m.sum())} river cells.")
+    if not user_river:
+        gdf_auto = _river_from_streams(flw, stream_mask, pw, pdph, crs, transform, outlet_idx)
+        os.makedirs(os.path.dirname(river_path), exist_ok=True)
+        if os.path.exists(river_path): os.remove(river_path)
+        gdf_auto.to_file(river_path, driver="GPKG")
+        logger.warning(f"No uploaded river – generated {len(gdf_auto)} river segment(s) from DEM: {river_path}")
     files_float = {
         'elevtn.tif': [elevtn_array, nodata, np.float32],
-        'flwdir.tif': [flwdir_array, NODATA_FLWDR, np.uint8],
+        'flwdir.tif': [flwdir_array, constants.NODATA_FLWDR, np.uint8],
         'lndslp.tif': [slope_array, nodata, np.float32],
-        'basins.tif': [basins_array, NODATA_BASIN, np.int32], 
-        'uparea.tif': [uparea_array, nodata, np.float32],
-        'strord.tif': [strord_array, NODATA_BASIN, np.int16],
-        'upgrid.tif': [upstream_array, NODATA_BASIN, np.int32],
+        'basins.tif': [basins_array, constants.NODATA_INT, np.int32],
+        'uparea.tif': [uparea_out, nodata, np.float32],
+        'strord.tif': [strord_array, constants.NODATA_INT, np.int16],
+        'upgrid.tif': [upstream_array, constants.NODATA_INT, np.int32],
         'rivwth.tif': [rivwth_array, nodata, np.float32]
     }
     profile_writer = profile.copy()
     for file, array in files_float.items():
         profile_writer.update({'dtype': array[2]})
         file_path = os.path.normpath(os.path.join(directory, file))
-        logger.info(f"Creating data: {file_path}")
         logger.info(f"Writing data to: {file_path}")
         write_geotif(array[0], profile_writer, file_path, array[1])
+    with open(os.path.join(directory, "river_meta.json"), "w") as f:
+        json.dump({"river_upa": river_upa, "upa_outlet": upa_outlet,
+            "has_river_vector": user_river}, f)
+    return river_upa
 
 def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str, log_file:str, area:float=10):
     project_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name))
@@ -594,80 +608,81 @@ def wflow_check(project_name:str, processes:dict, process_key:str, flow_name:str
     log_dir = os.path.join(project_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.normpath(os.path.join(log_dir, log_file))
-    if os.path.exists(log_path): os.remove(log_path)
-    logger = setup_logger("wflow", log_path)
+    logger = None
+    def fail(msg, log_msg=None):
+        logger.error(log_msg or msg)
+        processes[process_key] = {"status": "failed", "message": msg}
     try:
-        logger.info("Checking wflow inputs..."); logger.info("="*60)
+        if os.path.exists(log_path): os.remove(log_path)
+        logger = setup_logger("wflow", log_path)
+        logger.info("Checking wflow inputs..."); logger.info("=" * 60)
+        # Forcing
         logger.info("Checking weather forcing data...")
         forcing_path = os.path.normpath(os.path.join(model_dir, 'forcing', 'weather_forcing.nc'))
-        if not os.path.exists(forcing_path):
-            logger.info("Weather forcing data not found.")
-            processes[process_key] = {"status": "failed", "message": "Weather forcing data not found."}
-            return
-        logger.info(f"Found weather forcing data at: {forcing_path}"); logger.info("="*60)
+        if not os.path.isfile(forcing_path): return fail("Weather forcing data not found.")
+        logger.info(f"Found weather forcing data at: {forcing_path}"); logger.info("=" * 60)
+        # Terrain
         logger.info("Checking terrain data...")
         terrain_path = os.path.normpath(os.path.join(model_dir, 'raw', 'dtm_raw.tif'))
-        if not os.path.exists(terrain_path):
-            logger.info("Terrain data not found.")
-            processes[process_key] = {"status": "failed", "message": "Terrain data not found."}
-            return
-        logger.info(f"Found terrain data at: {terrain_path}"); logger.info("="*60)
+        if not os.path.isfile(terrain_path): return fail("Terrain data not found.")
+        logger.info(f"Found terrain data at: {terrain_path}"); logger.info("=" * 60)
+        logger.info("Checking landcover data...")
+        landcover_dir = os.path.normpath(os.path.join(model_dir, 'landcover'))
+        landcover_files = os.listdir(landcover_dir) if os.path.isdir(landcover_dir) else []
+        if len(landcover_files) != 3:
+            return fail("Please download landcover data.", "Number of landcover files is not equal to 3.")
+        logger.info(f"Found landcover data at: {landcover_dir}"); logger.info("=" * 60)
+        logger.info("Checking soil data...")
+        soil_dir = os.path.normpath(os.path.join(model_dir, 'soil'))
+        soil_files = [f for f in os.listdir(soil_dir) if f.endswith('.tif')] if os.path.isdir(soil_dir) else []
+        if len(soil_files) != 43:
+            return fail("Please download soil data.",
+                f"Number of soil files is {len(soil_files)}, expected 43. Please download soil data again.")
+        logger.info(f"Found soil data at: {soil_dir}"); logger.info("=" * 60)
+        # Water area
         logger.info("Checking water area data...")
         water_dir = os.path.join(model_dir, 'water_area')
-        water_files = [f for f in os.listdir(water_dir) if f.endswith(".geojson")] if os.path.isdir(water_dir) else []
-        if len(water_files) == 0:
-            logger.warning("Water area data not found. Water area will not be masked.")
-            water_path = None
-        else:
-            water_path = os.path.normpath(os.path.join(water_dir, water_files[0]))
-            logger.info(f"Found water area data at: {water_path}")
-        logger.info("="*60); logger.info("Checking river data...")
+        water_files = sorted(f for f in os.listdir(water_dir) if f.endswith(".geojson")) if os.path.isdir(water_dir) else []
+        water_path = os.path.normpath(os.path.join(water_dir, water_files[0])) if water_files else None
+        if water_path: logger.info(f"Found water area data at: {water_path}")
+        else: logger.warning("Water area data not found. Water area will not be masked.")
+        logger.info("=" * 60)
+        # River
+        logger.info("Checking river data...")
         river_dir = os.path.normpath(os.path.join(model_dir, 'river'))
-        river_files = [f for f in os.listdir(river_dir)]
-        if len(river_files) != 2:
-            logger.info("Number of river files is not equal to 2.")
-            processes[process_key] = {"status": "failed", "message": "Please upload river data."}
-            return
+        os.makedirs(river_dir, exist_ok=True)
         river_path = os.path.normpath(os.path.join(river_dir, 'river.gpkg'))
-        logger.info(f"Found river data at: {river_dir}"); logger.info("="*60)
-        logger.info("Checking template hydro data...")
-        # Prepare template raster dataset
+        if os.path.isfile(river_path) and not _is_auto_river(river_path):
+            logger.info(f"Found uploaded river data at: {river_path}")
+        else: logger.warning("No uploaded river data – river.gpkg will be generated from DEM.")
+        manning_path = os.path.join(river_dir, 'river_manning.csv')
+        if not os.path.isfile(manning_path):
+            shutil.copy(os.path.join(SOURCE_BACKEND, 'flow_samples', 'river_manning_mapping.csv'), manning_path)
+            logger.info(f"Default river Manning table copied to: {manning_path}")
+        logger.info("=" * 60)
+        # Hydro
+        logger.info("Creating template hydro data...")
         hydro_dir = os.path.normpath(os.path.join(model_dir, 'hydro'))
         if os.path.exists(hydro_dir):
             logger.info(f"Deleting hydro data at: {hydro_dir}")
             shutil.rmtree(hydro_dir)
         os.makedirs(hydro_dir, exist_ok=True)
-        logger.info(f"Creating template hydro data at: {hydro_dir}")
-        hydro_creator(hydro_dir, terrain_path, area, logger, river_path, water_path)
-        logger.info("Write hydro data completed."); logger.info("=" * 60)
-        logger.info("Checking landcover data...")
-        landcover_dir = os.path.normpath(os.path.join(model_dir, 'landcover'))
-        landcover_files = [f for f in os.listdir(landcover_dir)]
-        if len(landcover_files) != 3:
-            logger.info("Number of landcover files is not equal to 3.")
-            processes[process_key] = {"status": "failed", "message": "Please download landcover data."}
-            return
-        logger.info(f"Found landcover data at: {landcover_dir}"); logger.info("=" * 60)
-        logger.info("Checking soil data...")
-        soil_dir = os.path.normpath(os.path.join(model_dir, 'soil'))
-        soil_files = [f for f in os.listdir(soil_dir) if f.endswith('.tif')]
-        if len(soil_files) != 43:
-            message = """
-                *******************************************************************************
-                *  NUMBER OF SOIL FILES ARE NOT EQUAL TO 43. PLEASE DOWNLOAD SOIL DATA AGAIN  *
-                *******************************************************************************
-            """
-            logger.info(f"\n\n\n{message}\n")
-            processes[process_key] = {"status": "failed", "message": "Please download soil data."}
-            return
-        logger.info(f"Found soil data at: {soil_dir}"); logger.info("=" * 60); logger.handlers[0].flush()
+        river_upa = hydro_creator(hydro_dir, terrain_path, area, logger, river_path, water_path)
+        if not os.path.isfile(river_path):
+            return fail("River data could not be created.", f"river.gpkg missing after hydro creation: {river_path}")
+        logger.info(f"Write hydro data completed (river threshold {river_upa:.3f} km²)."); logger.info("=" * 60)
+        logger.handlers[0].flush()
         processes[process_key] = {"status": "finished", "message": "\nChecking Wflow inputs completed.\n\n"}
     except Exception as e:
-        logger.exception("Check of wflow failed.")
+        print('/wflow_check:\n==============')
+        traceback.print_exc()
+        if logger: logger.exception("Check of wflow failed.")
         processes[process_key] = {"status": "failed", "message": str(e)}
     finally:
-        for h in logger.handlers[:]:
-            h.close(); logger.removeHandler(h)
+        if logger:
+            for h in logger.handlers[:]:
+                try: h.flush(); h.close()
+                finally: logger.removeHandler(h)
 
 def _safe_rmtree(path, max_retries=5, delay=1.0, logger=None):
     if not os.path.exists(path): return True
@@ -806,7 +821,11 @@ def prepare_hydromt(project_name, flow_name, model_folder, start, end, step, tim
         model = wflow_config.model_basemap(model, region, resolution)
         # Setup rivers
         logger.info(f"Setup river configuration.")
-        model = wflow_config.model_river(model, uparea)
+        river_gpkg = os.path.join(model_dir, 'river', 'river.gpkg')
+        river_geom_fn = 'river_network' if os.path.isfile(river_gpkg) else None
+        if river_geom_fn is None:
+            logger.warning("river.gpkg not found – setup_rivers without river geometry.")
+        model = wflow_config.model_river(model, uparea, river_geom_fn)
         # Setup soil maps
         logger.info(f"Setup soil configuration.")
         model = wflow_config.model_soil(model, soil_layers)
@@ -852,8 +871,7 @@ def run_hydromt(project_name: str, flow_name:str, model_folder:str, log_path:str
     if logger is None: logger = setup_logger("hydromt", log_path)
     old_stdout, old_stderr = sys.stdout, sys.stderr
     stream_logger = StreamToLogger(logger, log_path=log_path)
-    sys.stdout, sys.stderr = stream_logger, stream_logger
-    error = None
+    sys.stdout, sys.stderr, error = stream_logger, stream_logger, None
     try:
         logger.info("Running HydroMT..."); logger.info("=" * 36)
         wflow_path = os.path.normpath(os.path.join(WFLOW_PATH, "wflow_cli", "bin", "wflow_cli.exe"))
@@ -872,8 +890,7 @@ def run_hydromt(project_name: str, flow_name:str, model_folder:str, log_path:str
             raise FileNotFoundError(message)
         cmd = [wflow_path, toml_path]
         process = subprocess.Popen(
-            cmd, cwd=model_dir, stdout=subprocess.PIPE, 
-            stderr=subprocess.STDOUT, text=True, bufsize=1
+            cmd, cwd=model_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
         )
         if process.stdout is None: 
             raise RuntimeError("stdout is not available; did you pass stdout=PIPE?")
@@ -926,12 +943,16 @@ def wflow_run(project_name:str, processes:dict, process_key:str, flow_name:str, 
             new_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
             new_handler.setLevel(logging.INFO)
             formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-            new_handler.setFormatter(formatter)
-            logger.addHandler(new_handler)
-            stream_logger.update_logger(logger)
-            logger.handlers[0].flush()
+            new_handler.setFormatter(formatter); logger.addHandler(new_handler)
+            stream_logger.update_logger(logger); logger.handlers[0].flush()
         except Exception: pass
     try:
+        # Load uparea if it is possible
+        meta_path = os.path.join(model_dir, 'hydro', 'river_meta.json')
+        if os.path.isfile(meta_path):
+            with open(meta_path) as f:
+                uparea = float(json.load(f).get("river_upa", uparea))
+            logger.info(f"Using river/outlet threshold uparea = {uparea:.3f} km²")
         for i, (_, row) in enumerate(df.iterrows()):
             temp_name, temp_lat, temp_lon = row['id'], row['lat'], row['lon']
             if i > 0: _reset_log_file()
@@ -983,9 +1004,7 @@ def wflow_run(project_name:str, processes:dict, process_key:str, flow_name:str, 
                 if not prepare_ok:
                     logger.error(f"Prepare data for hydromt failed - Skipping run_hydromt for candidate '{temp_name}'.")
                     logger.info("=" * 70); logger.info("")
-                _cleanup_after_failure(model_dir, model_folder, logger)
-                gc.collect()
-                continue
+                _cleanup_after_failure(model_dir, model_folder, logger); gc.collect(); continue
         if success_point is not None:
             processes[process_key] = { "status": "finished",
                 "message": f"\n\nProcess completed successfully with candidate '{success_point}'.\n"

@@ -4,12 +4,17 @@ import geopandas as gpd, numpy as np
 import xarray as xr, dask.array as da
 from shapely.geometry import Polygon, MultiPolygon
 from meshkernel import MeshKernel, GeometryList, OrthogonalizationParameters, ProjectToLandBoundaryOption
-from services import functions
+from services import functions, constants
 from pyproj import CRS
 from optuna.pruners import MedianPruner
 from functools import partial
+import multiprocessing as mp, queue, time
+
 warnings.filterwarnings("ignore")
 optuna.logging.set_verbosity(optuna.logging.ERROR)
+
+class GridError(ValueError):
+    """Grid error"""
 
 def lake_generation(folder, project_cache):
     lake_pkl_path = os.path.normpath(os.path.join(folder, 'lakes.pkl'))
@@ -86,6 +91,92 @@ def sort_face_ccw(nodes, x, y):
     cx, cy = xs.mean(), ys.mean()
     angles = np.arctan2(ys - cy, xs - cx)
     return nodes[np.argsort(angles)]
+
+def clean_ring(x, y, tol=1e-10):
+    x, y = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
+    if x.size != y.size or x.size < 3 or not (np.isfinite(x).all() and np.isfinite(y).all()):
+        raise GridError("Invalid polygon: need at least 3 vertices with valid coordinates.")
+    keep = np.ones(x.size, dtype=bool)
+    keep[1:] = (np.abs(np.diff(x)) > tol) | (np.abs(np.diff(y)) > tol)
+    x, y = x[keep], y[keep]
+    while x.size > 1 and abs(x[-1] - x[0]) <= tol and abs(y[-1] - y[0]) <= tol:
+        x, y = x[:-1], y[:-1]
+    if x.size < 3: raise GridError("Polygon must have at least 3 distinct vertices.")
+    poly = Polygon(np.column_stack([x, y]))
+    if poly.area <= 0: raise GridError("Polygon has zero area (all vertices lie on a line).")
+    if not poly.is_valid:
+        raise GridError("Polygon is self-intersecting. Move or delete the crossing vertexes and try again.")
+    return np.append(x, x[0]), np.append(y, y[0])
+
+def _mesh_worker(x, y, scale, q):
+    try:
+        mk = MeshKernel(); poly = GeometryList(x, y)
+        if scale is None: mk.mesh2d_make_triangular_mesh_from_polygon(poly)
+        else: mk.mesh2d_make_triangular_mesh_from_polygon(poly, scale_factor=float(scale))
+        q.put(("ok", mk.mesh2d_get()))
+    except BaseException as e:
+        q.put(("error", str(e)))
+
+def _friendly(msg: str) -> str:
+    for key, text in constants.FRIENDLY.items():
+        if key.lower() in msg.lower(): return f"{text}\n\n(MeshKernel: {msg})"
+    return msg
+
+def build_triangular_mesh(x, y, scale=None, timeout=120) -> MeshKernel:
+    ctx = mp.get_context("spawn"); q = ctx.Queue()
+    p = ctx.Process(target=_mesh_worker, args=(x, y, scale, q), daemon=True)
+    p.start(); deadline = time.monotonic() + timeout; result = None
+    try:
+        while result is None:
+            try: result = q.get(timeout=0.5)
+            except queue.Empty:
+                if not p.is_alive():
+                    raise GridError(f"Mesh generation crashed (exit code {p.exitcode}).\nCheck the polygon or try a bigger value of 'Level'.")
+                if time.monotonic() > deadline:
+                    raise GridError(f"Mesh generation did not finish within {timeout} s. "
+                        "Use a larger scale factor or fewer vertexes.")
+    finally:
+        if p.is_alive(): p.terminate()
+        p.join(5)
+    status, payload = result
+    if status == "error": raise GridError(_friendly(payload))
+    mk = MeshKernel(); mk.mesh2d_set(payload)
+    if mk.mesh2d_get().face_x.size == 0:
+        raise GridError("MeshKernel produced an empty grid. Use a smaller scale factor or check the polygon.")
+    return mk
+
+def netCDF_creator(mk: MeshKernel, depth: gpd.GeoDataFrame | None = None):
+    mesh = mk.mesh2d_get()
+    node_x, node_y = mesh.node_x, mesh.node_y
+    if depth is not None:
+        if depth.crs is None: depth = depth.set_crs("EPSG:4326")
+        crs_str = CRS.from_user_input(depth.crs).to_string()
+        temp_grid = gpd.GeoDataFrame(geometry=gpd.points_from_xy(node_x, node_y), crs=depth.crs)
+        node_z = functions.interpolation_Z(
+            temp_grid, np.asarray(depth["geometry"].x), np.asarray(depth["geometry"].y),
+            np.asarray(depth["depth"].values, dtype=float), n_neighbors=2, geo_type='point',
+        )
+    else:
+        crs_str = "EPSG:4326"
+        node_z = np.zeros(len(node_x))
+    # Convert to Ugrid
+    grid_uds = meshkernel_to_Ugrid(mk, crs_str)
+    grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(node_z.astype(np.float32)))    
+    grid_uds.attrs.update({ "institution": 'Private', "references": 'vanlnNTNU@gmail.com'})
+    return grid_uds
+
+def grid_creator_sync(points, level):
+    scale = None if level in ('', None) else float(level)
+    if scale is not None and not (np.isfinite(scale) and scale > 0):
+        raise GridError("Scale factor must be a positive number.")
+    x, y = clean_ring(points[:, 1], points[:, 0])
+    mk = build_triangular_mesh(x, y, scale)
+    grid_uds = netCDF_creator(mk)
+    grid = functions.unstructuredGridCreator(grid_uds)
+    nodes = functions.nodes_from_grid(grid)
+    nodes['Lat'], nodes['Lon'] = nodes.geometry.y, nodes.geometry.x
+    content = {'point': json.loads(nodes.to_json()), 'polygon': json.loads(grid.to_json())}
+    return mk, grid_uds, content
 
 def meshkernel_to_Ugrid(mk: MeshKernel, crs: str):
     mesh = mk.mesh2d_get()
@@ -178,26 +269,6 @@ def meshkernel_to_Ugrid(mk: MeshKernel, crs: str):
     ds = ds.set_coords(["mesh2d_node_x", "mesh2d_node_y"])
     return ds
 
-def netCDF_creator(mk: MeshKernel, depth: gpd.GeoDataFrame | None = None):
-    mesh = mk.mesh2d_get()
-    node_x, node_y = mesh.node_x, mesh.node_y
-    if depth is not None:
-        if depth.crs is None: depth = depth.set_crs("EPSG:4326")
-        crs_str = CRS.from_user_input(depth.crs).to_string()
-        temp_grid = gpd.GeoDataFrame(geometry=gpd.points_from_xy(node_x, node_y), crs=depth.crs)
-        node_z = functions.interpolation_Z(
-            temp_grid, np.asarray(depth["geometry"].x), np.asarray(depth["geometry"].y),
-            np.asarray(depth["depth"].values, dtype=float), n_neighbors=2, geo_type='point',
-        )
-    else:
-        crs_str = "EPSG:4326"
-        node_z = np.zeros(len(node_x))
-    # Convert to Ugrid
-    grid_uds = meshkernel_to_Ugrid(mk, crs_str)
-    grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(node_z.astype(np.float32)))    
-    grid_uds.attrs.update({ "institution": 'Private', "references": 'vanlnNTNU@gmail.com'})
-    return grid_uds
-
 def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=None):
     if stop_checker and stop_checker():
         trial.study.stop()
@@ -206,20 +277,16 @@ def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=N
         type_choice = trial.suggest_categorical("mode", space['mode'])
         level = trial.suggest_float("level", space['level'][0], space['level'][1])
         outer_iterations = trial.suggest_int(
-            "outer_iterations", space['outer_iterations'][0], 
-            space['outer_iterations'][1]
+            "outer_iterations", space['outer_iterations'][0], space['outer_iterations'][1]
         )
         boundary_iterations = trial.suggest_int(
-            "boundary_iterations", space['boundary_iterations'][0], 
-            space['boundary_iterations'][1]
+            "boundary_iterations", space['boundary_iterations'][0], space['boundary_iterations'][1]
         )
         inner_iterations = trial.suggest_int(
-            "inner_iterations", space['inner_iterations'][0], 
-            space['inner_iterations'][1]
+            "inner_iterations", space['inner_iterations'][0], space['inner_iterations'][1]
         )
         smoothing_factor = trial.suggest_float(
-            "smoothing_factor", space['smoothing_factor'][0], 
-            space['smoothing_factor'][1]
+            "smoothing_factor", space['smoothing_factor'][0], space['smoothing_factor'][1]
         )
         # Remove outliers
         if type_choice == 'custom' and level <= 0:
@@ -262,8 +329,7 @@ def optuna_callback(study: optuna.study.Study, trial: optuna.trial.FrozenTrial, 
     min_value = trial.user_attrs.get("min")
     mean_value = trial.user_attrs.get("mean")
     try:
-        best_trial = study.best_trial
-        best_ortho = best_trial.value
+        best_trial = study.best_trial; best_ortho = best_trial.value
         best_type = best_trial.params.get("mode", "")
         best_level = best_trial.params.get("level", 0.0)
     except ValueError:

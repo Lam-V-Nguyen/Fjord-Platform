@@ -1,16 +1,7 @@
 import glob, json, math, os, time, shapely
 import numpy as np, pandas as pd, xugrid as xu
 import geopandas as gpd, xarray as xr
-from services import functions
-
-NODATA, M_PER_DEG, FORMAT_VERSION = -32768, 111_320.0, 2
-UV_SCALE = 0.001     # 1 unit int16 = 1 mm/s
-DEPTH_SCALE = 0.01   # 1 unit = 1 cm
-U_NAMES, V_NAMES = ["mesh2d_ucx", "ucx"], ["mesh2d_ucy", "ucy"]
-U_NAMES_AVG, V_NAMES_AVG = ["mesh2d_ucxa", "ucxa"], ["mesh2d_ucya", "ucya"]
-DEPTH_NAMES = ["mesh2d_waterdepth", "waterdepth"]
-S1_NAMES = ["mesh2d_s1", "s1"]
-BED_NAMES = ["mesh2d_flowelem_bl", "flowelem_bl"]
+from services import functions, constants
 
 def needs_rebuild(meta_path, frame_path, mask_path, res, layer):
     for p in (meta_path, frame_path, mask_path):
@@ -73,14 +64,14 @@ def nice_ceil(x):
 
 def auto_resolution(grid, polygon, T, budget_gb=2.0, max_frame_mb=1.5, quantile=0.25, min_across=150):
     west, south, east, north = polygon.bounds
-    kx = M_PER_DEG * math.cos(math.radians(0.5 * (south + north)))
-    area_m2 = polygon.area * kx * M_PER_DEG
+    kx = constants.M_PER_DEG * math.cos(math.radians(0.5 * (south + north)))
+    area_m2 = polygon.area * kx * constants.M_PER_DEG
     inside = shapely.contains_xy(polygon, grid.face_x, grid.face_y)
-    cell = np.sqrt(grid.area[inside] * kx * M_PER_DEG) if inside.any() else np.array([50.0])
+    cell = np.sqrt(grid.area[inside] * kx * constants.M_PER_DEG) if inside.any() else np.array([50.0])
     r_detail = float(np.quantile(cell, quantile))
     r_storage = math.sqrt(area_m2 * T * 6 / (budget_gb * 1e9))
     r_frame = math.sqrt(area_m2 * 6 / (max_frame_mb * 1e6))
-    r_sparse = min((east - west) * kx, (north - south) * M_PER_DEG) / min_across
+    r_sparse = min((east - west) * kx, (north - south) * constants.M_PER_DEG) / min_across
     r_budget = max(r_storage, r_frame)
     r = max(r_detail, r_budget)
     if r > r_sparse and r_budget <= r_sparse: r = r_sparse
@@ -89,8 +80,7 @@ def auto_resolution(grid, polygon, T, budget_gb=2.0, max_frame_mb=1.5, quantile=
 
 def reduce_layers(da, face_dim, layer):
     for dim in [d for d in da.dims if d not in ("time", face_dim)]:
-        if layer == "mean":
-            da = da.mean(dim, skipna=True)
+        if layer == "mean": da = da.mean(dim, skipna=True)
         elif layer == "surface": da = da.isel({dim: -1})
         else: da = da.isel({dim: int(layer)})
     return da
@@ -102,24 +92,20 @@ def map_mtime(map_path):
 def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str, mask_path: str,
     res=None, layer: str = "mean", chunk: int = 24, dry_threshold: float = 0.05,
     budget_gb: float = 2.0, max_frame_mb: float = 1.5):
-    layer = layer or "mean"
-    uds = open_map(map_path)
+    layer = layer or "mean"; uds = open_map(map_path)
     if uds is None: return f"Cannot open: {map_path}"
     out, tmp_frames = None, frame_path + ".tmp.npy"
     try:
         if "time" not in uds.coords and "time" not in uds.dims: return "No time in data."
-        grid = uds.ugrid.grid
-        face_dim = grid.face_dimension
-        uvar = vvar = None
+        grid = uds.ugrid.grid; face_dim = grid.face_dimension; uvar = vvar = None
         if layer == "mean":
-            uvar, vvar = pick(uds, U_NAMES_AVG), pick(uds, V_NAMES_AVG)
+            uvar, vvar = pick(uds, constants.U_NAMES_AVG), pick(uds, constants.V_NAMES_AVG)
         if uvar is None or vvar is None:
-            uvar, vvar = pick(uds, U_NAMES), pick(uds, V_NAMES)
+            uvar, vvar = pick(uds, constants.U_NAMES), pick(uds, constants.V_NAMES)
         if uvar is None or vvar is None:
-            return f"Could not find velocity variables. ({U_NAMES + U_NAMES_AVG}). Found: {list(uds.data_vars)}"
-        dvar = pick(uds, DEPTH_NAMES)
-        s1var = pick(uds, S1_NAMES) if dvar is None else None
-        bedvar = pick(uds, BED_NAMES) if dvar is None else None
+            return f"Could not find velocity variables. ({constants.U_NAMES + constants.U_NAMES_AVG}). Found: {list(uds.data_vars)}"
+        dvar = pick(uds, constants.DEPTH_NAMES); s1var = pick(uds, constants.S1_NAMES) if dvar is None else None
+        bedvar = pick(uds, constants.BED_NAMES) if dvar is None else None
         times = pd.to_datetime(uds["time"].values)
         T = len(times)
         if T == 0: return "No time steps in data."
@@ -139,7 +125,7 @@ def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str,
         if res <= 0: return "Resolution must be > 0."
         west, south, east, north = polygon.bounds
         cos_lat = math.cos(math.radians(0.5 * (south + north)))
-        dlat, dlon = res / M_PER_DEG, res / (M_PER_DEG * cos_lat)
+        dlat, dlon = res / constants.M_PER_DEG, res / (constants.M_PER_DEG * cos_lat)
         nx, ny = int(math.ceil((east - west) / dlon)), int(math.ceil((north - south) / dlat))
         if nx <= 0 or ny <= 0: return "Invalid polygon area."
         if nx * ny > 60_000_000: return f"Grid {nx} x {ny} is too large for resolution {res:g} m. Please increase resolution (m)."
@@ -166,8 +152,7 @@ def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str,
                 arr = np.asarray(da.transpose(face_dim).values, dtype=np.float32)
                 arr = np.broadcast_to(arr[None, :], (len(tsel), arr.size))
             return arr[:, vface]
-        rng = np.random.default_rng(0)
-        speed_samples, depth_max = [], 0.0
+        rng = np.random.default_rng(0); speed_samples, depth_max = [], 0.0
         for k in range(0, T, chunk):
             tsel = np.arange(k, min(k + chunk, T))
             u, v = get(uvar, tsel), get(vvar, tsel)
@@ -176,24 +161,19 @@ def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str,
             else: d = np.full_like(u, 99.0)
             dry = ~np.isfinite(u) | ~np.isfinite(v) | ~np.isfinite(d) | (d <= dry_threshold)
             block = np.empty((len(tsel), 3, Nv), dtype="<i2")
-            for c, values, scale in ((0, u, UV_SCALE), (1, v, UV_SCALE), (2, d, DEPTH_SCALE)):
+            for c, values, scale in ((0, u, constants.UV_SCALE), (1, v, constants.UV_SCALE), (2, d, constants.DEPTH_SCALE)):
                 q = np.clip(np.round(np.nan_to_num(values, nan=0.0) / scale), -32767, 32767).astype("<i2")
-                q[dry] = NODATA
-                block[:, c] = q
-            out[k:k + len(tsel)] = block
-            wet = ~dry
+                q[dry] = constants.NODATA_DEM; block[:, c] = q
+            out[k:k + len(tsel)] = block; wet = ~dry
             if wet.any():
                 s = np.hypot(u, v)[wet]
                 speed_samples.append(rng.choice(s, min(s.size, 20_000), replace=False))
                 depth_max = max(depth_max, float(np.percentile(d[wet], 99)))
-        out.flush()
-        del out
-        out = None
-        os.replace(tmp_frames, frame_path)
+        out.flush(); del out; out = None; os.replace(tmp_frames, frame_path)
         np.save(mask_path, valid.reshape(ny, nx).astype(np.uint8))
         allspd = np.concatenate(speed_samples) if speed_samples else np.array([1.0])
         meta = {
-            "format": FORMAT_VERSION, "name": "Velocity",
+            "format": 2, "name": "Velocity",
             "version": f"{int(time.time())}-{res:g}-{layer}", "nx": nx, "ny": ny, "n_valid": int(Nv),
             "lon0": float(xc[0]), "lat0": float(yc[0]), "dlon": dlon, "dlat": dlat,
             "bounds": [[south, west], [south + ny * dlat, west + nx * dlon]],
@@ -201,8 +181,8 @@ def init_data(meta_path: str, polygon_path: str, map_path: str, frame_path: str,
             "layer": layer, "dry_threshold": dry_threshold, "velocity_vars": [uvar, vvar],
             "map_path": map_path, "map_mtime": map_mtime(map_path),
             "times": [t.isoformat() for t in times], "channels": ["u", "v", "depth"],
-            "scale": {"u": UV_SCALE, "v": UV_SCALE, "depth": DEPTH_SCALE}, "nodata": NODATA,
-            "speed_max": max(float(np.percentile(allspd, 99.5)), 0.01),
+            "scale": {"u": constants.UV_SCALE, "v": constants.UV_SCALE, "depth": constants.DEPTH_SCALE}, 
+            "nodata": constants.NODATA_DEM, "speed_max": max(float(np.percentile(allspd, 99.5)), 0.01),
             "depth_max": max(depth_max, 0.5), "polygon": polygon_geojson,
             "size_mb": round(T * 3 * Nv * 2 / 1e6, 1),
         }

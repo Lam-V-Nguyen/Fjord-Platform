@@ -1,4 +1,4 @@
-import os, traceback, shutil, json
+import os, shutil, json
 from fastapi import APIRouter, Request, Depends, Query
 from fastapi import UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -11,10 +11,14 @@ router, processes = APIRouter(), {}
 
 
 def _running_simulation(project_name: str):
-    """Key ('baseline' / 'calibration') of a simulation that is still running for this project, or None."""
+    """Key ('baseline' / 'calibration') of a simulation that is still running for this project, or None.
+    Checks this worker's memory AND the lock file on disk (a run started by another uvicorn worker,
+    or orphaned solvers after a server restart)."""
     for k in ('baseline', 'calibration'):
         info = processes.get(f"{project_name}:{k}")
         if info and info.get('status') == 'running': return k
+    other = calibration_functions.active_run(os.path.join(PROJECT_ROOT, project_name, "calibration"))
+    if other: return other.get('key') or 'calibration'
     return None
 
 @router.post("/calibration_project")
@@ -131,8 +135,11 @@ async def check_sim_status_calibration(request: Request, user=Depends(functions.
         return JSONResponse({"status": status, "progress": progress,
             "message": info.get("message", "Simulation failed.")
         })
+    running_ids = info.get("running") or []
     if key == 'baseline': complete = f'Baseline simulation: {progress}% completed.'
-    else: complete = f'Simulation ({current}/{total}): {progress}% completed.'
+    else:
+        complete = f'Simulation ({current}/{total} finished): {progress}% completed.'
+        if running_ids: complete += f" Running: {', '.join(map(str, running_ids))}."
     return JSONResponse({"status": status, "progress": progress, "message": complete})
 
 @router.post("/scenario_status_calibration")
@@ -178,11 +185,19 @@ async def start_sim_calibration(request: Request, background_tasks: BackgroundTa
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         key, start_id, end_id = body.get('key'), body.get('iterationStart'), body.get('iterationEnd')
         redis, process_key = request.app.state.redis, f"{project_name}:{key}"
-        running = _running_simulation(project_name)
-        if running and running != key:   # baseline and calibration runs must not overlap
-            return JSONResponse({"status": "error", "message":
-                f"The {running} simulation of '{project_name}' is still running. Please wait until it finishes."})
         calibration_dir = os.path.join(PROJECT_ROOT, project_name, "calibration")
+        # Never start a second batch: neither baseline/calibration overlap, nor the same batch twice
+        # (also when the first one runs in another uvicorn worker – checked via the lock file on disk).
+        info = processes.get(process_key)
+        if info and info.get("status") == "running":
+            return JSONResponse({"status": "running", "progress": info.get("progress", 0.0),
+                "message": f'Simulation {info.get("current", 0)} of {info.get("total", 0)}: {info.get("progress", 0.0)}% completed.'})
+        running = _running_simulation(project_name)
+        if running:
+            other = calibration_functions.active_run(calibration_dir) or {}
+            since = f" (started {other['started']})" if other.get('started') else ""
+            return JSONResponse({"status": "error", "message":
+                f"The {running} simulation of '{project_name}' is still running{since}. Please wait until it finishes."})
         sample_dir = os.path.join(calibration_dir, body.get("samplingName") or "")
         if not os.path.exists(os.path.join(sample_dir, "scenarios")):
             return JSONResponse({"status": "error", "message": f"Sampling directory not found. Please run resampling first."})
@@ -208,10 +223,11 @@ async def start_sim_calibration(request: Request, background_tasks: BackgroundTa
             list_sorted = [c for c in list_sorted if c not in done]
             if not list_sorted:
                 return JSONResponse({"status": "error", "message": "All scenarios in this range are already completed."})
-        # Remove old log
+        # Optional: how many scenarios side by side and OpenMP threads per scenario (defaults: physical cores / 4, 4)
+        parallel, threads = calibration_functions.default_parallel_config(
+            len(list_sorted), body.get("parallelRuns"), body.get("threadsPerRun"))
         log_dir = os.path.join(calibration_dir, "logs"); os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, body.get("logFile"))
-        if os.path.exists(log_path) and list_sorted[0] == all_ids[0]: os.remove(log_path)
+        log_path = os.path.join(log_dir, os.path.basename(body.get("logFile") or "log_calibration.txt"))
         lock = redis.lock(process_key, timeout=60, blocking_timeout=10)
         async with lock:
             info = processes.get(process_key)
@@ -219,13 +235,23 @@ async def start_sim_calibration(request: Request, background_tasks: BackgroundTa
             if info and info["status"] == "running":
                 complete = f'Simulation {info["current"]} of {info["total"]}: {info["progress"]}% completed.'
                 return JSONResponse({"status": "running", "progress": info["progress"], "message": complete})
-            processes[process_key] = {"progress": 0.0, "status": "running",
+            # Lock on disk – visible to every worker; released by run_calibration when the batch ends
+            lock_path, other = calibration_functions.acquire_run_lock(calibration_dir, key, list_sorted)
+            if lock_path is None:
+                return JSONResponse({"status": "error", "message":
+                    f"A {other.get('key', '')} simulation of '{project_name}' is still running "
+                    f"(started {other.get('started', '?')}). Please wait until it finishes."})
+            # Remove old log only once we are sure no other batch is writing to it
+            if os.path.exists(log_path) and list_sorted[0] == all_ids[0]: os.remove(log_path)
+            processes[process_key] = {"progress": 0.0, "status": "running", "running": [],
                 "message": "Preparing data for simulation...", "current": 0, "total": len(list_sorted),
             }
             background_tasks.add_task(
-                calibration_functions.run_calibration, processes, process_key, scenario_dir, list_sorted, log_path
+                calibration_functions.run_calibration, processes, process_key, scenario_dir, list_sorted, log_path,
+                parallel, threads, lock_path
             )
-        return JSONResponse({"status": "ok", "message": f"Simulation {project_name} started"})
+        return JSONResponse({"status": "ok", "message":
+            f"Simulation {project_name} started: {len(list_sorted)} scenarios, {parallel} at a time, {threads} threads each."})
     except Exception as e: functions.error("/start_sim_calibration", e)
 
 @router.get("/calibration_log_tail/{project_name}")
@@ -332,12 +358,6 @@ async def evaluate_baseline_calibration(request: Request, user=Depends(functions
         return JSONResponse({"status": "ok", "content": content})
     except Exception as e: functions.error("/evaluate_baseline_calibration", e)
 
-
-
-
-
-
-
 @router.post("/get_stations_calibration")
 async def get_stations_calibration(request: Request, user=Depends(functions.basic_auth)):
     try:
@@ -430,10 +450,7 @@ async def summarize_calibration(request: Request, user=Depends(functions.basic_a
         bias_txt = ", ".join(f"{d} m: {b:+.2f}" for d, b in bias.items() if np.isfinite(b))
         return JSONResponse({'status': 'ok', 'message': f'Calibration summary completed ({len(summary_df)} scenarios). '
             f'Mean bias (sim − obs, °C) — {bias_txt}'})
-    except Exception as e:
-        print('/summarize_calibration:\n==============')
-        traceback.print_exc()
-        return JSONResponse({"status": "error", "message": f"Error: {str(e)}"})
+    except Exception as e: functions.error("/summarize_calibration", e)
 
 @router.post("/correlation_calibration")
 async def correlation_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -448,7 +465,6 @@ async def correlation_calibration(request: Request, user=Depends(functions.basic
         columns = summary_df.columns.tolist()
         return JSONResponse({'content': summary_df.to_dict(orient='records'), 'key': columns[-1]})
     except Exception as e: functions.error("/correlation_calibration", e)
-
 
 @router.post("/check_optimization_status_calibration")
 async def check_optimization_status_calibration(request: Request, user=Depends(functions.basic_auth)):

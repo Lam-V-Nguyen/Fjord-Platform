@@ -6,7 +6,6 @@ from services import functions, wq_functions, calibration_functions
 import xarray as xr
 from datetime import datetime, timezone
 
-
 router, processes = APIRouter(), {}
 
 @router.post("/check_folder")
@@ -79,8 +78,7 @@ async def start_sim_hyd(request: Request, user=Depends(functions.basic_auth)):
         with open(mdu_path, 'r', encoding='utf-8', errors='ignore') as f:
             mdu_base = f.readlines()
         max_length = min(
-            len(line.split('=', 1)[1].split('#', 1)[0])
-            for line in mdu_base if '=' in line
+            len(line.split('=', 1)[1].split('#', 1)[0]) for line in mdu_base if '=' in line
         )
         mdu_base = calibration_functions.modify_mdu_key(mdu_base, 'OutputDir', 'DFM_OUTPUT', max_length)
         value = calibration_functions.get_values_from_mdu(mdu_base, 'WaqOutputDir')
@@ -314,9 +312,7 @@ async def run_waq_simulation(project_name, waq_name, log_file):
                 if stdout is None: raise RuntimeError("stdout is not available; did you pass stdout=PIPE?")
                 for line in stdout:
                     if not line: continue
-                    log_file.write(line)
-                    log_file.flush()
-                    clean_line = line.strip()
+                    log_file.write(line); log_file.flush(); clean_line = line.strip()
                     if not clean_line: continue
                     if "ERROR in GMRES" in line:
                         log_file.write("\nGMRES solver failed.\nConsider increasing the maximum number of iterations.\n")

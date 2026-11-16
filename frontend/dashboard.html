@@ -32,7 +32,7 @@
         </div>
 
         <div class="sidebar-scroll">
-          <!-- Điều hướng chính -->
+          <!-- Main Navigation -->
           <nav class="nav" id="nav-main">
             <button class="nav-item" data-view="overview" title="Overview">
               <span data-icon="overview"></span><span class="label">Overview</span>
@@ -46,17 +46,18 @@
             </button>
           </nav>
 
-          <!-- Công cụ mô hình (sinh từ toolRegistry.js) -->
+          <!-- Model Tools (from toolRegistry.js) -->
           <div class="nav-section-title">Modelling Tools</div>
           <nav class="nav" id="nav-tools"></nav>
 
-          <!-- Lớp bản đồ (sinh từ dashboardMap.js) -->
+          <!-- Map Layers (from dashboardMap.js) -->
           <div class="nav-section-title">
             <span>Map Layers</span>
             <button type="button" id="layers-toggle-all">Toggle all</button>
           </div>
           <div class="layer-list" id="layer-list"></div>
 
+          <!-- System Options -->
           <div class="nav-section-title">System</div>
           <nav class="nav" id="nav-system">
             <button class="nav-item" id="btn-settings" title="Settings">
@@ -71,7 +72,7 @@
           </nav>
         </div>
 
-        <!-- Chân sidebar: giữ nguyên class .project-note / .time-zone / .github-last-update -->
+        <!-- Footer -->
         <div class="sidebar-footer">
           <div class="sf-row">
             <span class="sf-label">Data Source</span>
@@ -244,7 +245,7 @@
             </div>
           </section>
 
-          <!-- ============================== WORKSPACE (công cụ cũ trên Gridstack) -->
+          <!-- WORKSPACE (công cụ cũ trên Gridstack) -->
           <section class="view" id="view-workspace">
             <div class="workspace-head">
               <div>
@@ -266,7 +267,7 @@
       </main>
     </div>
 
-    <!-- ================================================= POPOVERS / MODALS -->
+    <!-- POPOVERS / MODALS -->
     <div class="popover" id="filters-popover">
       <div class="pop-section">
         <h4>Alert severity</h4>
@@ -287,7 +288,6 @@
     <div class="popover" id="settings-popover" style="width: 300px">
       <div class="pop-section">
         <h4>Time zone</h4>
-        <!-- Giữ id cũ để tái sử dụng logic tìm múi giờ -->
         <input type="text" class="tz-search" id="tz-search" placeholder="Search... (Oslo, New York, UTC)" autocomplete="off">
         <div id="tz-results" class="tz-results"></div>
         <div style="font-size:11px; color: var(--muted); margin-top:6px">IANA names. Default comes from the browser.</div>
@@ -313,7 +313,7 @@
 
     <div class="toast" id="toast"></div>
 
-    <!-- Loading screen (dùng chung với các widget cũ: showOverlay / hideOverlay) -->
+    <!-- Loading screen (showOverlay / hideOverlay) -->
     <div class="loading-container">
       <div class="spinner"></div>
       <div class="loading-text">Processing Data. Please wait...</div>
