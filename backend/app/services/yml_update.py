@@ -3,43 +3,25 @@ import xarray as xr, numpy as np
 from pyproj import CRS
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
-
-TARGET_UNITS = {
-    "precip": "mm", "temp": "degC", "press_msl": "hPa", "kin": "W/m^2", "kout": "W/m^2",
-    "bd": "g/cm^3", "oc": "%", "ph": "-", "clyppt": "%", "sltppt": "%", "sndppt": "%", "soilthickness": "cm",
-}
-CONVERSIONS = {
-    ("m", "mm"): (1000, 0), ("kg/m-2", "mm"): (1, 0), ("K", "degC"): (1, -273.15),
-    ("Pa", "hPa"): (0.01, 0), ("kPa", "hPa"): (10, 0),
-    ("kg/m3", "g/cm3"): (0.001, 0), ("cg/cm3", "g/cm3"): (0.01, 0),
-    ("g/kg", "%"): (0.1, 0), ("dg/kg", "%"): (0.01, 0),
-    ("pHx10", "-"): (0.1, 0), ("mm", "cm"): (0.1, 0), ("m", "cm"): (100, 0),
-}
-_ALIASES = {"degc": "degC", "°c": "degC", "c": "degC", "celsius": "degC", "k": "K",
-    "w/m^2": "W/m^2", "w/m2": "W/m^2", "w m-2": "W/m^2", "j/m^2": "J/m^2", "j/m2": "J/m^2",
-    "j m-2": "J/m^2", "kg/m2": "kg/m^2", "kg m**2": "kg/m^2", "pa": "Pa", "hpa": "hPa",
-    "kg/m-2": "kg/m^-2", "kg m**-2": "kg/m^-2",
-    "kpa": "kPa", "kg/m3": "kg/m^3", "kg m-3": "kg/m3", "g/cm3": "g/cm^3", "ph": "-", "1": "-"
-}
+from services import constants
 
 def _norm_unit(u):
-    return _ALIASES.get(str(u).strip().lower(), str(u).strip()) if u is not None else None
+    return constants.ALIASES.get(str(u).strip().lower(), str(u).strip()) if u is not None else None
 
 def _target(var):
-    if var in TARGET_UNITS: return TARGET_UNITS[var]
-    return TARGET_UNITS.get(var.split("_")[0])
+    if var in constants.TARGET_UNITS: return constants.TARGET_UNITS[var]
+    return constants.TARGET_UNITS.get(var.split("_")[0])
  
 def _conversion(var, unit, dt=None):
     target, unit = _target(var), _norm_unit(unit)
     if target is None or unit is None: return None
     if unit == target: return (1, 0)
     if unit == "J m-2" and target == "W m-2" and dt: return (1 / dt, 0)
-    return CONVERSIONS.get((unit, target))
+    return constants.CONVERSIONS.get((unit, target))
 
 def _crs_value(crs):
     if crs is None: return None
-    crs = CRS.from_user_input(crs)
-    epsg = crs.to_epsg()
+    crs = CRS.from_user_input(crs); epsg = crs.to_epsg()
     return int(epsg) if epsg else crs.to_wkt()
 
 def _py(v):
@@ -69,8 +51,7 @@ def _resolve(root, uri):
 def _remove(container, key):
     if key not in container: return
     token = _trailing(container, key)
-    keys = list(container)
-    container.pop(key)
+    keys = list(container); container.pop(key)
     if token is not None and keys.index(key) == len(keys) - 1 and len(container):
         _attach(container, list(container)[-1], token)
 
@@ -88,8 +69,7 @@ def _attach(container, key, token):
 def _put(container, key, value, pos=None):
     value = CommentedMap(value) if isinstance(value, dict) and not isinstance(value, CommentedMap) else value
     if key in container:
-        token = _trailing(container, key)
-        container[key] = value
+        token = _trailing(container, key); container[key] = value
         _attach(container, key, token)
     else: container.insert(len(container) if pos is None else pos, key, value)
 
@@ -139,8 +119,7 @@ def _inspect_netcdf(files, _):
             nodata = ds[v].encoding.get("_FillValue")
             if nodata is None: nodata = ds[v].attrs.get("_FillValue")
             nodatas[v] = nodata
-        units = {v: ds[v].attrs.get("units") for v in data_vars}
-        dt = None
+        units, dt = {v: ds[v].attrs.get("units") for v in data_vars}, None
         if "time" in ds.coords and ds.sizes.get("time", 0) > 1:
             t = ds["time"].values
             dt = float((t[1] - t[0]) / np.timedelta64(1, "s"))
@@ -160,10 +139,10 @@ def _update_units(entry, units, dt, missing:list):
         conv = _conversion(var, unit, dt)
         if conv is None:
             if unit is not None: missing.append(f"- {var}: cannot convert '{unit}' -> '{_target(var)}'")
-            elif var not in mult and var not in add: assumed.add(var.split("_")[0] if var not in TARGET_UNITS else var)
+            elif var not in mult and var not in add: 
+                assumed.add(var.split("_")[0] if var not in constants.TARGET_UNITS else var)
             continue
-        m, a = conv
-        mult.pop(var, None); add.pop(var, None)
+        m, a = conv; mult.pop(var, None); add.pop(var, None)
         if m != 1: mult[var] = round(m, 10)
         if a != 0: add[var] = a
     for v in sorted(assumed):
@@ -183,9 +162,7 @@ def YML_updater(input_path:str, wflow_dir:str, out_path:str):
         "rasterio": _inspect_rasterio, "raster_xarray": _inspect_netcdf,
         "pyogrio": _inspect_vector, "vector": _inspect_vector
     }
-    yml = YAML()
-    yml.preserve_quotes = True
-    yml.width = 4096
+    yml = YAML(); yml.preserve_quotes = True; yml.width = 4096
     with open(input_path, encoding="utf-8") as f:
         catalog = yml.load(f)
     root = os.path.dirname(out_path)

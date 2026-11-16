@@ -10,6 +10,21 @@ const hoverTooltip = L.tooltip({
     permanent: false, direction: 'bottom',
     sticky: true, offset: [0, 10], className: 'custom-tooltip'
 });
+const OTHER_SOURCES = {
+    'met-nordic': {
+        needsKey: false, minDate: '2012-09-01', label: 'MET Nordic analysis (MET Norway)',
+        link: 'https://github.com/metno/NWPdocs/wiki/MET-Nordic-dataset',
+        note: '1 km hourly analysis for the Nordic countries, 2012-09 → today, no API key, no queue. ' +
+            'One file per hour is read, so long periods take a while (an interrupted download resumes where it stopped).'
+    },
+    'open-meteo': {
+        needsKey: false, minDate: '1940-01-01', label: 'Open-Meteo Historical Weather API',
+        link: 'https://open-meteo.com/en/docs/historical-weather-api',
+        note: 'Point time series (centre of the catchment), no API key. Free use is non-commercial only. ' +
+            'Open-Meteo historical API (reanalysis), one request, usually a few seconds. Values of the nearest model ' +
+            'grid cell. Free use is non-commercial only. TOA radiation is computed astronomically.'
+    },
+};
 
 window._uploadedGISFiles = {}; window._gisFileIdCounter = 0;
 
@@ -44,8 +59,6 @@ const obj = {
     clientIdRegnbyge: $("regnbyge-client-id"), clientSecretRegnbyge: $("regnbyge-client-secret"),
     clientRememberRegnbyge: $("regnbyge-remember-btn"), clientUserNameRegnbyge: $("regnbyge-client-username"),
     clientPasswordRegnbyge: $("regnbyge-client-password"),
-    // overFlowCheckbox: $("overflow-checkbox"), temperatureCheckbox: $("temperature-checkbox"),
-    // evaporationCheckbox: $("evaporation-checkbox"), weirCheckbox: $("weir-checkbox"),
     stationSelectedLabel: $("station-selected-label"), resertStationBtn: $("reset-station-btn"),
     downloadListContainer: $("download-list-container"), downloadListArea: $("download-list"),
     // ERA5 options
@@ -56,16 +69,25 @@ const obj = {
     era5Start: $("era5-start"), era5End: $("era5-end"), era5Table: $("era5-table"),
     era5LogContainer: $("era5-log-container"), era5LogText: $("era5-log-text"),
     era5DownloadBtn: $("era5-download-btn"), era5CancelBtn: $("era5-cancel-btn"), 
-    era5ClearQueueBtn: $("era5-clear-btn"), era5SaveBtn: $("era5-save-btn")
+    era5ClearQueueBtn: $("era5-clear-btn"), era5SaveBtn: $("era5-save-btn"),
+    // Other options
+    otherLocationBtn: $("other-location-btn"), otherLat: $("other-latitude"), 
+    otherLon: $("other-longitude"), otherStart: $("other-start"), otherEnd: $("other-end"), 
+    otherSource: $("other-weather-source"), otherTable: $("other-table"), 
+    otherLogContainer: $("other-log-container"), otherNote: $("weather-source-note"),
+    otherLogText: $("other-log-text"), otherDownloadBtn: $("other-download-btn"), 
+    otherCancelBtn: $("other-cancel-btn"), otherSaveBtn: $("other-save-btn")
 };
-const ERA5_KEY = 'era5';
+const ERA5_KEY = 'era5', OTHER_KEY = 'other', MET_KEY = 'met', NVE_KEY = 'nve';
 
 let plotChecked = true, waterFlowLayer = null, waterLevelLayer = null, 
     overFlowLayer = null, tempLayer = null, preLayer = null, weirLayer = null, 
-    evaLayer = null, currentProject = null, era5Checked = false,
+    evaLayer = null, currentProject = null, era5Checked = false, otherChecked = false,
     nameID = null, secret = null, userName = null, password = null, key = 'met',
     metLayer = null, metSelected = false, selectedMetLayer = null, nveLayer = null,
-    nveSelected = false, selectedNVELayer = null, era5ClearingQueue = false;
+    nveSelected = false, selectedNVELayer = null, era5ClearingQueue = false,
+    metFollowing = false, nveFollowing = false,
+    era5Following = false, otherFollowing = false;
 
 setupTabs(document); await getProject();
 const mapObj = await initMap('leaflet-map-data'); mapOptions(mapObj);
@@ -156,6 +178,7 @@ async function loadClient(key) {
     } else if (key === 'era5') { obj.apikeyEra5.value = nameID; }
 }
 
+
 function updateManager() {
     const now = new Date(); now.setHours(0, 0, 0, 0);
     const start = new Date(now); start.setDate(start.getDate() - 20);
@@ -168,6 +191,7 @@ function updateManager() {
     obj.plotStart.value = formatDate(start); obj.plotEnd.value = formatDate(end);
     obj.downloadStart.value = formatDate(start); obj.downloadEnd.value = formatDate(end);
     obj.era5Start.value = formatDate(start); obj.era5End.value = formatDate(end);
+    obj.otherStart.value = formatDate(start); obj.otherEnd.value = formatDate(end);
     obj.metStart.value = formatDate(start).split(' ')[0]; obj.metEnd.value = formatDate(end).split(' ')[0];
     obj.nveStart.value = formatDate(start).split(' ')[0]; obj.nveEnd.value = formatDate(end).split(' ')[0];
     obj.selectBox.addEventListener("click", () => { obj.checkboxList.style.display === 'block'; });
@@ -272,7 +296,7 @@ function updateManager() {
         });
     });
     obj.metDownloadBtn.addEventListener('click', async () => {
-        const apiKey = obj.clientIdMet.value, key = 'met', logFile = 'MET_log.txt';
+        const apiKey = obj.clientIdMet.value, logFile = 'MET_log.txt';
         if (!apiKey || apiKey === '') { alert('Please enter your MET API key.'); return; }
         const tableData = getDataFromTable(obj.metTable, true);
         if (tableData.rows.length === 0) {
@@ -291,22 +315,29 @@ function updateManager() {
             alert('Please select at least one variable to download.'); return;
         }
         try {
-            const statusRes = await jsonLoader('check_download_status', { projectName: currentProject, key: key });
-            if (statusRes.status === "running") { alert("Data download is running."); return; }
-            obj.metLogText.value = ''; obj.metLogContainer.style.display = 'flex';
+            const statusRes = await jsonLoader('check_download_status', { projectName: currentProject, key: MET_KEY });
+            if (statusRes.status === "running") { 
+                alert(statusRes.cancelling ? 'Previous download is being cancelled. Please wait a moment.'
+                    : 'Meteo download is running.');
+                followDownload(
+                    currentProject, logFile, metFollowing, MET_KEY, obj.metLogContainer, 
+                    obj.metLogText, obj.metTable, obj.metSaveBtn, null
+                ); return;
+            }
+            metFollowing = false; obj.metLogText.value = ''; obj.metLogContainer.style.display = 'flex';
             obj.metSaveBtn.style.display = 'none'; obj.metDownloadTable.style.display = 'none';
             const contents = {
-                projectName: currentProject, api_key: apiKey, ids: ids, key: key, logFile: logFile,
+                projectName: currentProject, api_key: apiKey, ids: ids, key: MET_KEY, logFile: logFile,
                 startTime: startTime, endTime: endTime, timeZone: getLastTimeZone(),
                 variables: selectedValues.map(v => v.value), columns: selectedValues.map(v => v.des)
             };
             const data = await jsonLoader('download_met', contents);
             if (data.status === 'error') { alert(data.message); return; }
-            updateLog(currentProject, obj.metLogText, 2, key, async () => {
+            updateLog(currentProject, obj.metLogText, 2, MET_KEY, async () => {
                 alert('Downloading data completed.');
-                const content_csv = { projectName: currentProject, fileName: `${key}.csv` };
+                const content_csv = { projectName: currentProject, fileName: `${MET_KEY}.csv` };
                 signalSender('showOverlay', 'Uploading weather data to table. Please wait...');
-                const csv = await jsonLoader('upload_weather_csv', content_csv);
+                const csv = await jsonLoader('upload_era5_csv', content_csv);
                 signalSender('hideOverlay');
                 if (csv.status === 'error') { alert(csv.message); return; }
                 addDataToTable(obj.metDownloadTable, csv.columns, csv.content);
@@ -332,8 +363,9 @@ function updateManager() {
             });
             if (response.ok) {
                 const blob = await response.blob();
-                await saveFileSmart(blob, `met_data.zip`, true);
-                alert('Save ZIP file completed.')
+                const result = await saveFileSmart(blob, `met_data.zip`, true);
+                if (result) { alert('Save ZIP file completed.'); }
+                else { alert('The user selected cancel. File is NOT saved.'); }
             }
         } catch (error) {
             alert(`Failed to save MET data:\n${error.message}`);
@@ -409,7 +441,7 @@ function updateManager() {
         });
     });
     obj.nveDownloadBtn.addEventListener('click', async () => {
-        const apiKey = obj.clientIdNVE.value, key = 'nve', logFile = 'NVE_log.txt';
+        const apiKey = obj.clientIdNVE.value, logFile = 'NVE_log.txt';
         if (!apiKey || apiKey === '') { alert('Please enter your NVE API key.'); return; }
         const tableData = getDataFromTable(obj.nveTable, true);
         if (tableData.rows.length === 0) {
@@ -430,27 +462,34 @@ function updateManager() {
             alert('Please select at least one variable to download.'); return;
         }
         try {
-            const statusRes = await jsonLoader('check_download_status', { projectName: currentProject, key: key });
-            if (statusRes.status === "running") { alert("Data download is running."); return; }
-            obj.nveLogText.value = ''; obj.nveLogContainer.style.display = 'flex';
+            const statusRes = await jsonLoader('check_download_status', { projectName: currentProject, key: NVE_KEY });
+            if (statusRes.status === "running") { 
+                alert(statusRes.cancelling ? 'Previous download is being cancelled. Please wait a moment.'
+                    : 'Meteo download is running.');
+                followDownload(
+                    currentProject, logFile, nveFollowing, NVE_KEY, obj.nveLogContainer, 
+                    obj.nveLogText, obj.nveTable, obj.nveSaveBtn, null
+                ); return;
+            }
+            nveFollowing = false; obj.nveLogText.value = ''; obj.nveLogContainer.style.display = 'flex';
             obj.nveSaveBtn.style.display = 'none'; obj.nveDownloadTable.style.display = 'none';
             const contents = {
-                projectName: currentProject, api_key: apiKey, ids: ids, interval: obj.nveInterval.value,
-                startTime: startTime, endTime: endTime, timeZone: getLastTimeZone(), key: key, logFile: logFile,
+                projectName: currentProject, apiKey: apiKey, ids: ids, interval: obj.nveInterval.value,
+                startTime: startTime, endTime: endTime, timeZone: getLastTimeZone(), key: NVE_KEY, logFile: logFile,
                 variables: selectedValues.map(v => v.value), columns: selectedValues.map(v => v.des)
             };
             const data = await jsonLoader('download_nve', contents);
             if (data.status === 'error') { alert(data.message); return; }
-            updateLog(currentProject, obj.nveLogText, 2, key, async () => {
+            updateLog(currentProject, obj.nveLogText, 2, NVE_KEY, async () => {
+                const res = await jsonLoader('check_download_status', { projectName: currentProject, key: NVE_KEY });
+                if (res.status !== 'finished') { alert(`NVE download failed: ${res.message}`); return; }
                 alert('Downloading data completed.');
-                const content_csv = { projectName: currentProject, fileName: `${key}.csv` };
+                const content_csv = { projectName: currentProject, fileName: `${NVE_KEY}.csv` };
                 signalSender('showOverlay', 'Uploading weather data to table. Please wait...');
-                const csv = await jsonLoader('upload_weather_csv', content_csv);
-                signalSender('hideOverlay');
+                const csv = await jsonLoader('upload_era5_csv', content_csv); signalSender('hideOverlay');
                 if (csv.status === 'error') { alert(csv.message); return; }
                 addDataToTable(obj.nveDownloadTable, csv.columns, csv.content);
-                obj.nveSaveBtn.style.display = 'block';
-                obj.nveLogContainer.style.display = 'none';
+                obj.nveSaveBtn.style.display = 'block'; obj.nveLogContainer.style.display = 'none';
                 obj.nveDownloadTable.style.display = 'table';
             }, logFile);
         } catch (error) {
@@ -567,12 +606,9 @@ function updateManager() {
                 } else {
                     const blob = new Blob([response.content], { type: 'text/csv;charset=utf-8;' });
                     const url = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.setAttribute('href', url);
-                    link.setAttribute('download', nameSaved);
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
+                    const link = document.createElement('a'); link.setAttribute('href', url);
+                    link.setAttribute('download', nameSaved); document.body.appendChild(link);
+                    link.click(); document.body.removeChild(link);
                 }
                 obj.downloadListArea.value += `Saved file: ${nameSaved}.\n`;
             }
@@ -635,15 +671,10 @@ function updateManager() {
             alert('Please select a valid location.'); return;
         }
         const startTime = obj.era5Start.value, endTime = obj.era5End.value;
-        if (startTime === '' || endTime === '') {
-            alert('Please select start and end time to download.'); return;
-        }
+        if (!startTime || !endTime) { alert('Please select start and end time to download.'); return; }
         if (new Date(startTime) >= new Date(endTime)) { alert('Start time must be before end time.'); return; }
         const selectedValues = [...document.querySelectorAll('#era5-variables-grid input[type="checkbox"]:checked'
-        )].map(checkbox => ({
-            value: checkbox.value, label: checkbox.getAttribute('data-label'),
-            des: checkbox.parentElement.textContent.trim()
-        }));
+        )].map(checkbox => checkbox.value);
         if (selectedValues.length === 0) {
             alert('Please select at least one variable to download.'); return;
         }
@@ -651,22 +682,25 @@ function updateManager() {
             const statusRes = await jsonLoader('check_download_status', { projectName: currentProject, key: ERA5_KEY });
             if (statusRes.status === "running") { 
                 alert(statusRes.cancelling ? 'Previous download is being cancelled. Please wait a moment.'
-                    : 'Weather download is running.');
+                    : 'Weather download is running.'); 
+                followDownload(
+                    currentProject, logFile, era5Following, ERA5_KEY, obj.era5LogContainer, obj.era5LogText,
+                    obj.era5Table, obj.era5SaveBtn, obj.era5CancelBtn, era5ClearingQueue
+                ); return;
             }
-            obj.era5LogText.value = ''; obj.era5LogContainer.style.display = 'flex';
+            era5Following = false; obj.era5LogText.value = ''; obj.era5LogContainer.style.display = 'flex';
             obj.era5SaveBtn.style.display = 'none'; obj.era5Table.style.display = 'none'; 
-            obj.era5CancelBtn.style.display = 'block';
             const contents = {
                 projectName: currentProject, lat: lat, lon: lon, api_key: apiKey,
                 startTime: startTime, endTime: endTime, key: ERA5_KEY, logFile: logFile,
-                timeZone: getLastTimeZone(), variables: selectedValues.map(v => v.value)
+                timeZone: getLastTimeZone(), variables: selectedValues
             };
             const data = await jsonLoader('download_era5', contents);
-            if (data.status === 'error') { alert(data.message); return; }
-            setEra5Running(true);
+            if (data.status !== 'ok') { alert(data.message); return; }
+            setRunning(true, ERA5_KEY);
             updateLog(currentProject, obj.era5LogText, 2, ERA5_KEY, async () => {
                 const res = await jsonLoader('check_download_status', { projectName: currentProject, key: ERA5_KEY });
-                setEra5Running(false);
+                setRunning(false, ERA5_KEY);
                 if (res.cancelled) {
                     if (!era5ClearingQueue) alert('Download cancelled. No data was saved.'); return;
                 }
@@ -681,8 +715,7 @@ function updateManager() {
                 obj.era5Table.style.display = 'table'; obj.era5CancelBtn.style.display = 'none';
             }, logFile);
         } catch (error) {
-            signalSender('hideOverlay'); setEra5Running(false);
-            alert(error.message || error); obj.era5SaveBtn.style.display = 'none'; return;
+            signalSender('hideOverlay'); setRunning(false, ERA5_KEY); alert(error.message || error);
         }
     });
     obj.era5CancelBtn.addEventListener('click', async () => {
@@ -690,7 +723,7 @@ function updateManager() {
         obj.era5CancelBtn.disabled = true; obj.era5CancelBtn.textContent = 'Cancelling...';
         try {
             const res = await jsonLoader('cancel_download_era5', { projectName: currentProject, key: ERA5_KEY });
-            if (res.status === 'idle') setEra5Running(false); 
+            if (res.status === 'idle') setRunning(false, ERA5_KEY); 
             obj.era5CancelBtn.style.display = 'none'; alert('ERA5 download cancelled.');
         } catch (error) {
             obj.era5CancelBtn.disabled = false; obj.era5CancelBtn.textContent = 'Cancel'; alert(error.message || error);
@@ -711,7 +744,7 @@ function updateManager() {
         signalSender('showOverlay', running ? 'Cancelling download and clearing CDS queue...' : 'Clearing CDS queue...');
         try {
             const res = await jsonLoader('cds_clear_queue', { projectName: currentProject, key: ERA5_KEY, api_key: apiKey });
-            if ((res.cancelled || []).includes(ERA5_KEY)) setEra5Running(false); alert(res.message);
+            if ((res.cancelled || []).includes(ERA5_KEY)) setRunning(false, ERA5_KEY); alert(res.message);
         } catch (error) { alert(error.message || error);
         } finally {
             signalSender('hideOverlay'); obj.era5ClearQueueBtn.disabled = false;
@@ -728,13 +761,128 @@ function updateManager() {
         }
         alert(response.message);
     });
+    // Work on others
+    obj.otherLocationBtn.addEventListener('click', () => { otherChecked = true; });
+    obj.otherSource.addEventListener('change', (e) => {
+        const src = OTHER_SOURCES[e.target.value];
+        if (e.target.value != '') {
+            obj.otherNote.style.display = 'flex'; 
+            obj.otherNote.textContent = src ? `Description: ${src.note}` : '';
+        } else { obj.otherNote.style.display = 'none'; }
+    });
+    obj.otherDownloadBtn.addEventListener('click', async () => {
+        const source = obj.otherSource.value, logFile = 'other_weather_log.txt';
+        const lat = parseFloat(obj.otherLat.value), lon = parseFloat(obj.otherLon.value);
+        if (Number.isNaN(lat) || Number.isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 360) {
+            alert('Please select a valid location.'); return;
+        }
+        const startTime = obj.otherStart.value, endTime = obj.otherEnd.value;
+        if (!startTime || !endTime) { alert('Please select start and end time to download.'); return; }
+        if (new Date(startTime) >= new Date(endTime)) { alert('Start time must be before end time.'); return; }
+        const variables = [...document.querySelectorAll('#other-variables-grid input[type="checkbox"]:checked')]
+        .map(cb => cb.value);
+        if (variables.length === 0) { alert('Please select at least one variable to download.'); return; }
+        try {
+            const statusRes = await jsonLoader('check_download_status', { projectName: currentProject, key: OTHER_KEY });
+            if (statusRes.status === "running") { 
+                alert(statusRes.cancelling ? 'Previous download is being cancelled. Please wait a moment.'
+                    : 'Weather download is running.'); 
+                followDownload(
+                    currentProject, logFile, otherFollowing, OTHER_KEY, obj.otherLogContainer, 
+                    obj.otherLogText, obj.otherTable, obj.otherSaveBtn, obj.otherCancelBtn
+                ); return;
+            }
+            otherFollowing = false; obj.otherLogText.value = ''; obj.otherLogContainer.style.display = 'flex';
+            obj.otherSaveBtn.style.display = 'none'; obj.otherTable.style.display = 'none'; 
+            const contents = {
+                projectName: currentProject, lat: lat, lon: lon, source: source,
+                startTime: startTime, endTime: endTime, key: OTHER_KEY, logFile: logFile,
+                timeZone: getLastTimeZone(), variables: variables
+            };
+            const data = await jsonLoader('download_point_weather', contents);
+            if (data.status !== 'ok') { alert(data.message); return; }
+            setRunning(true, OTHER_KEY);
+            updateLog(currentProject, obj.otherLogText, 2, OTHER_KEY, async () => {
+                const res = await jsonLoader('check_download_status', { projectName: currentProject, key: OTHER_KEY });
+                setRunning(false, OTHER_KEY);
+                if (res.cancelled) { alert('Download cancelled. No data was saved.'); return; }
+                if (res.status !== 'finished') { alert(`Weather download failed: ${res.message}`); return; }
+                signalSender('showOverlay', 'Uploading weather data to table. Please wait...');
+                let csv;
+                try { csv = await jsonLoader('upload_era5_csv', { projectName: currentProject, fileName: `${OTHER_KEY}.csv` }); }
+                finally { signalSender('hideOverlay'); }
+                if (csv.status === 'error') { alert(csv.message); return; }
+                addDataToTable(obj.otherTable, csv.columns, csv.content);
+                obj.otherSaveBtn.style.display = 'block'; obj.otherLogContainer.style.display = 'none';
+                obj.otherTable.style.display = 'table'; obj.otherCancelBtn.style.display = 'none';
+            }, logFile);
+        } catch (error) {
+            signalSender('hideOverlay'); setRunning(false, OTHER_KEY); alert(error.message || error);
+        }
+    });
+    obj.otherCancelBtn.addEventListener('click', async () => {
+        if (!confirm('Cancel the download?')) return;
+        obj.otherCancelBtn.disabled = true; obj.otherCancelBtn.textContent = 'Cancelling...';
+        try {
+            const res = await jsonLoader('cancel_download_era5', { projectName: currentProject, key: OTHER_KEY });
+            if (res.status === 'idle') setRunning(false, OTHER_KEY); 
+            obj.otherCancelBtn.style.display = 'none'; alert('Data download cancelled.');
+        } catch (error) {
+            obj.otherCancelBtn.disabled = false; obj.otherCancelBtn.textContent = 'Cancel'; alert(error.message || error);
+        }
+    });
+    obj.otherSaveBtn.addEventListener('click', async () => {
+        const data = getDataFromTable(obj.otherTable, true);
+        if (data.rows.length === 0) { alert('No data to save.'); return; }
+        const response = await jsonLoader('save_era5', { data: data });
+        const source = obj.otherSource.value || 'weather';
+        if (response.status === 'ok') {
+            await saveFileSmart(response.content, `${source}_${Date.now()}.csv`);
+        }
+        alert(response.message);
+    });
 }
 
-function setEra5Running(running) {
-    obj.era5DownloadBtn.disabled = running;
-    if (obj.era5CancelBtn) {
-        obj.era5CancelBtn.style.display = running ? 'inline-block' : 'none';
-        obj.era5CancelBtn.disabled = false; obj.era5CancelBtn.textContent = 'Cancel';
+function followDownload(currentProject, logFile, keyFollow, key, logContainer, logText, table,
+    saveBtn, cancelBtn=null, era5Queue=null, clearLog=false) {
+    if (keyFollow) { alert('Data is being downloaded.'); return; }
+    keyFollow = true;
+    if (clearLog) logText.value = '';
+    logContainer.style.display = 'flex'; saveBtn.style.display = 'none'; table.style.display = 'none';
+    setRunning(true, key);
+    updateLog(currentProject, logText, 2, key, async () => {
+        keyFollow = false;
+        const res = await jsonLoader('check_download_status', { projectName: currentProject, key: key });
+        setRunning(false, key);
+        if (res.cancelled) {
+            if (!era5Queue) alert('Download cancelled. No data was saved.');
+            return;
+        }
+        if (res.status !== 'finished') { alert(`Weather download failed: ${res.message}`); return; }
+        signalSender('showOverlay', 'Uploading weather data to table. Please wait...');
+        let csv;
+        try { csv = await jsonLoader('upload_era5_csv', { projectName: currentProject, fileName: `${key}.csv` }); }
+        finally { signalSender('hideOverlay'); }
+        if (csv.status === 'error') { alert(csv.message); return; }
+        addDataToTable(table, csv.columns, csv.content);
+        saveBtn.style.display = 'block'; logContainer.style.display = 'none';
+        table.style.display = 'table'; if (cancelBtn) cancelBtn.style.display = 'none';
+    }, logFile);
+}
+
+function setRunning(running, key) {
+    if (key === ERA5_KEY) {
+        obj.era5DownloadBtn.disabled = running;
+        if (obj.era5CancelBtn) {
+            obj.era5CancelBtn.style.display = running ? 'inline-block' : 'none';
+            obj.era5CancelBtn.disabled = false; obj.era5CancelBtn.textContent = 'Cancel';
+        }
+    } else if (key === OTHER_KEY) {
+        obj.otherDownloadBtn.disabled = running;
+        if (obj.otherCancelBtn) {
+            obj.otherCancelBtn.style.display = running ? 'inline-block' : 'none';
+            obj.otherCancelBtn.disabled = false; obj.otherCancelBtn.textContent = 'Cancel';
+        }
     }
 }
 
@@ -821,7 +969,7 @@ function mapOptions(map) {
             const html = `- Left-click to select station and add to the download list.<br>- Right-click to remove the last station.`;
             hoverTooltip.setLatLng(e.latlng).setContent(html);
             map.openTooltip(hoverTooltip);
-        } else if (era5Checked) {
+        } else if (era5Checked || otherChecked) {
             map.getContainer().style.cursor = "crosshair";
             const html = `Select average location.`;
             hoverTooltip.setLatLng(e.latlng).setContent(html);
@@ -833,6 +981,11 @@ function mapOptions(map) {
             const lat = e.latlng.lat.toFixed(1), lon = e.latlng.lng.toFixed(1);
             obj.era5Lat.value = lat; obj.era5Lon.value = lon;
             map.getContainer().style.cursor = ""; era5Checked = false;
+        }
+        if (otherChecked) {
+            const lat = e.latlng.lat.toFixed(1), lon = e.latlng.lng.toFixed(1);
+            obj.otherLat.value = lat; obj.otherLon.value = lon;
+            map.getContainer().style.cursor = ""; otherChecked = false;
         }
         if (selectedMetLayer) {
             selectedMetLayer.closeTooltip(); selectedMetLayer.unbindTooltip();

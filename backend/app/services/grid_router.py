@@ -1,6 +1,7 @@
-import traceback, os, json, tempfile
+import os, json, tempfile
 from fastapi import UploadFile, File, APIRouter, Request, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 from services import functions, grid_functions
 from config import PROJECT_ROOT
 from shapely.geometry import Point, Polygon
@@ -206,22 +207,19 @@ async def grid_creator(request: Request, user=Depends(functions.basic_auth)):
         body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         project_cache = request.app.state.project_cache.setdefault(project_name, {})
-        points, level = np.array(body.get('pointCollection')), body.get('levelValue')
-        gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(points[:, 1], points[:, 0]), crs="EPSG:4326")
-        x, y = np.array(gdf.geometry.x), np.array(gdf.geometry.y)
-        if x[0] != x[-1] or y[0] != y[-1]:
-            x, y = np.append(x, x[0]), np.append(y, y[0])
-        mk, polygon = MeshKernel(), GeometryList(x, y)
-        if level == '': mk.mesh2d_make_triangular_mesh_from_polygon(polygon)
-        else: mk.mesh2d_make_triangular_mesh_from_polygon(polygon, scale_factor=float(level))
-        grid_uds = grid_functions.netCDF_creator(mk)
-        project_cache['grid_uds'], project_cache['mk'] = grid_uds, mk
-        project_cache["mk_crs"] = "EPSG:4326"
-        grid = functions.unstructuredGridCreator(grid_uds)
-        points = functions.nodes_from_grid(grid)
-        points['Lat'], points['Lon'] = points.geometry.y, points.geometry.x
-        content = {'point': json.loads(points.to_json()), 'polygon': json.loads(grid.to_json())}
-        return JSONResponse({'content': content})
+        try: points = np.asarray(body.get('pointCollection') or [], dtype=float)
+        except (TypeError, ValueError):
+            return JSONResponse({"status": "error", "message": "Invalid vertex coordinates."})
+        if points.ndim != 2 or points.shape[1] != 2 or points.shape[0] < 3:
+            return JSONResponse({"status": "error", "message": "Polygon must have at least 3 vertexes."})
+        try:
+            mk, grid_uds, content = await run_in_threadpool(
+                grid_functions.grid_creator_sync, points, body.get('levelValue')
+            )
+        except grid_functions.GridError as e:
+            return JSONResponse({"status": "error", "message": str(e)})
+        project_cache['grid_uds'], project_cache['mk'], project_cache['mk_crs'] = grid_uds, mk, "EPSG:4326"
+        return JSONResponse({'status': 'ok', 'content': content})
     except Exception as e: functions.error('/grid_creator', e)
 
 @router.post("/grid_ortho")
@@ -303,6 +301,9 @@ async def start_grid_optimization(request: Request, background_tasks: Background
             gdf_proj = gdf.to_crs(utm_crs)
             x = np.array(gdf_proj.geometry.x.to_numpy(), dtype=np.float64, copy=True)
             y = np.array(gdf_proj.geometry.y.to_numpy(), dtype=np.float64, copy=True)
+            try: x, y = grid_functions.clean_ring(x, y)
+            except grid_functions.GridError as e:
+                return JSONResponse({"status": "error", "message": str(e)})
             polygon = GeometryList(x, y)
             params = {
                 "level": [level_from, level_to], 'mode': ['auto', 'custom'],

@@ -13,14 +13,13 @@ import { MovementLayer } from './dashboardMovement.js';
 import { WflowLayer } from './dashboardWflow.js';
 import { renderGauge, renderDonut, renderStationSeries, renderProfile, resizeCharts, showEmpty } from './dashboardCharts.js';
 
-const FILTER_KEY = 'dash-filters';
-const STATE_KEY = 'dash-state-v2';
+const FILTER_KEY = 'dash-filters', STATE_KEY = 'dash-state-v2';
 const PERIOD_LABEL = { '1d': '1 day', '7d': '7 days', '30d': '30 days', all: 'whole simulation' };
 const KPI_TONES = { surface_temperature: 'tone-pink', stratification: 'tone-blue', water_level: 'tone-violet', max_velocity: 'tone-amber', wqi: 'tone-green' };
 const SEV_ICON = { high: 'alert', medium: 'alert', low: 'check', info: 'info' };
 const STEP_ICONS = { data: 'clipboard', grid: 'grid', hyd: 'waves', waq: 'flask', calibration: 'sliders' };
 
-// ------------------------------------------------------------------ helpers
+// helpers
 async function api(path, body = {}) {
     const res = await fetch(`/dashboard/${path}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -101,9 +100,7 @@ export class Dashboard {
         }).init();
         this.map.registerExtra('movement', (on) => this.toggleExtra('movement', on), () => this.openLayerSettings('movement'));
         this.map.registerExtra('wflow', (on) => this.toggleExtra('wflow', on), () => this.openLayerSettings('wflow'));
-        this.renderSkeletons();
-        this.bindToolbar();
-        this.bindPanels();
+        this.renderSkeletons(); this.bindToolbar(); this.bindPanels();
         window.addEventListener('resize', () => this.resize());
         api('thresholds').then(t => { this.thresholds = t; }).catch(() => {});
         return this.refresh();
@@ -112,7 +109,8 @@ export class Dashboard {
     renderSkeletons() {
         $('kpi-row').innerHTML = Array.from({ length: 6 }, () =>
             `<div class="kpi-card skeleton"><div class="kpi-icon"></div><div class="kpi-body">
-                <div class="kpi-label">&nbsp;</div><div class="kpi-value">&nbsp;</div><div class="kpi-sub">&nbsp;</div></div></div>`).join('');
+                <div class="kpi-label">&nbsp;</div><div class="kpi-value">&nbsp;</div><div class="kpi-sub">&nbsp;</div></div></div>
+            `).join('');
     }
 
     saveState() {
@@ -124,7 +122,7 @@ export class Dashboard {
         return { projectName: this.getProject(), end: this.state.end, period: this.state.period, ...extra };
     }
 
-    // ------------------------------------------------------------ bindings
+    // bindings
     bindToolbar() {
         const seg = $('period-select');
         seg.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.period === this.state.period));
@@ -138,7 +136,6 @@ export class Dashboard {
         $('end-date').addEventListener('change', (e) => { this.state.end = e.target.value || null; this.state.tIndex = null; this.refresh(); });
         $('btn-refresh').addEventListener('click', () => this.refresh(true));
         $('btn-share').addEventListener('click', () => this.share());
-
         const pop = $('filters-popover');
         $('btn-filters').addEventListener('click', (e) => {
             e.stopPropagation(); this.renderFilterPopover();
@@ -195,7 +192,7 @@ export class Dashboard {
         });
     }
 
-    // ------------------------------------------------------------ data flow
+    // data flow
     async refresh(force = false) {
         if (this.loading) return;
         this.loading = true;
@@ -207,30 +204,23 @@ export class Dashboard {
             this.catalog = catalog;
             const [summary, alerts] = await Promise.all([api('summary', this.body()), api('alerts', this.body({ limit: 100 }))]);
             this.summary = summary; this.alerts = alerts.alerts || [];
-            this.loadContext();
-            this.updateExtras();
+            this.loadContext(); this.updateExtras();
             if (!catalog.has_results || summary.mode === 'empty') { this.renderEmpty(summary); return; }
             $('dash-overview').classList.remove('is-empty');
             if (changed) await this.setupSimulation();
-            this.syncDateInput(summary);
-            this.renderKpis(summary);
-            this.renderMonitor(summary);
-            this.renderStatus();
+            this.syncDateInput(summary); this.renderKpis(summary);
+            this.renderMonitor(summary); this.renderStatus();
             renderDonut('donut-chart', summary.risk_distribution);
             this.renderDonutLegend(summary.risk_distribution);
-            this.renderFooter(summary);
-            this.renderAlerts();
+            this.renderFooter(summary); this.renderAlerts();
             // Thời điểm bản đồ = cuối cửa sổ phân tích (trừ khi người dùng đã kéo thanh thời gian)
             if (this.state.tIndex === null || !changed) this.state.tIndex = this.indexOf(this.fieldSource(), summary.window?.end);
             this.syncSlider();
             await Promise.all([this.loadField(), this.loadSeries(), this.loadProfile()]);
             this.updateUrl();
             if (force) toast('Dashboard refreshed');
-        } catch (err) {
-            console.error(err); this.renderError(err);
-        } finally {
-            this.loading = false; btn.classList.remove('spinning');
-        }
+        } catch (err) { console.error(err); this.renderError(err);
+        } finally { this.loading = false; btn.classList.remove('spinning'); }
     }
 
     async loadContext() {
@@ -309,7 +299,7 @@ export class Dashboard {
         this.onFieldVarChanged(false);
     }
 
-    // ------------------------------------------------------------ field & time
+    // field & time
     fieldSource() { return (this.state.field || 'hyd|').split('|')[0]; }
 
     fieldMeta() {
@@ -355,7 +345,7 @@ export class Dashboard {
         this.extraTimeDebounced();
     }
 
-    // ------------------------------------------------------------ lớp bổ sung: movement & Wflow
+    // lớp bổ sung: movement & Wflow
     async updateExtras() {
         const project = this.getProject();
         if (this.extrasProject !== project) {          // đổi dự án -> huỷ lớp cũ
@@ -438,8 +428,7 @@ export class Dashboard {
         }, 1000);
         layer.renderSettings(panel.querySelector('.ls-body'), {
             refreshLegend: () => { if (layer.visible) this.map.setExtraLegend(key, layer.legend()); },
-            busy: (on) => this.map.setLoading(key, on),
-            toast,
+            busy: (on) => this.map.setLoading(key, on), toast,
             // Mở công cụ trong Workspace (mainManager bắt click trên [data-tool] ở document;
             // bảng nổi chặn lan truyền click nên phát một click riêng)
             openTool: (id) => {
@@ -451,7 +440,9 @@ export class Dashboard {
 
     closeLayerSettings(key = null) {
         const panel = $('layer-settings');
-        if (panel && (!key || panel.dataset.key === key)) { panel._ro?.disconnect(); clearInterval(panel._timer); panel.remove(); }
+        if (panel && (!key || panel.dataset.key === key)) { 
+            panel._ro?.disconnect(); clearInterval(panel._timer); panel.remove(); 
+        }
     }
 
     restorePanelRect(panel, key) {
@@ -465,7 +456,9 @@ export class Dashboard {
         this.clampPanel(panel);
         // Lưu kích thước khi người dùng kéo góc resize
         let t = 0;
-        panel._ro = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => this.savePanelRect(panel, key), 200); });
+        panel._ro = new ResizeObserver(() => { 
+            clearTimeout(t); t = setTimeout(() => this.savePanelRect(panel, key), 200); 
+        });
         panel._ro.observe(panel);
     }
 
@@ -600,7 +593,7 @@ export class Dashboard {
         if (!this.playing) this.loadProfile();   // dừng -> cập nhật profile tại thời điểm hiện tại
     }
 
-    // ------------------------------------------------------------ station / profile / series
+    // station / profile / series
     selectStation(name) {
         if (!name) return;
         this.state.station = name; this.saveState();
@@ -653,7 +646,7 @@ export class Dashboard {
         return hit ? subs[hit] : null;
     }
 
-    // ------------------------------------------------------------ render
+    // render
     syncDateInput(summary) {
         const input = $('end-date');
         if (summary.range?.start) input.min = summary.range.start.slice(0, 10);
@@ -861,19 +854,19 @@ export class Dashboard {
         const sim = summary.simulation || {};
         if (summary.mode !== 'empty' && sim.hyd) {
             const h = sim.hyd, w = sim.waq;
-            const parts = [`HYD ${h.scenario || '—'} (${fmtDate(h.start)} – ${fmtDate(h.end)}${h.step_minutes ? `, ${h.step_minutes / 60} h step` : ''}${h.n_layers ? `, ${h.n_layers} layers` : ''})`];
-            parts.push(w?.available ? `WAQ ${w.scenario} · ${w.model_type || ''}` : 'no WAQ');
+            const parts = [`HYD: ${h.scenario || '—'} (${fmtDate(h.start)} – ${fmtDate(h.end)}${h.step_minutes ? `, ${h.step_minutes / 60} h step` : ''}${h.n_layers ? `, ${h.n_layers} layers` : ''})`];
+            parts.push(w?.available ? `WAQ: ${w.scenario}` : 'no WAQ');
             $('page-subtitle').textContent = parts.join(' · ');
         }
     }
 
     renderError(err) {
         $('kpi-row').innerHTML = `<div class="kpi-card" style="grid-column:1/-1"><div class="kpi-icon" style="--tone:var(--sev-high)">${icon('alert', 20)}</div>
-             <div class="kpi-body"><div class="kpi-label">Could not load dashboard data</div>
-             <div class="kpi-sub error-state">${esc(err.message)}</div></div></div>`;
+            <div class="kpi-body"><div class="kpi-label">Could not load dashboard data</div>
+            <div class="kpi-sub error-state">${esc(err.message)}</div></div></div>`;
     }
 
-    // ------------------------------------------------------------ misc
+    // misc
     updateUrl() {
         const url = new URL(location.href);
         url.searchParams.set('period', this.state.period);

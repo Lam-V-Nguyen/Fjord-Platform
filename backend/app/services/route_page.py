@@ -1,4 +1,4 @@
-import os, traceback, msgpack, json
+import os, msgpack, json
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates

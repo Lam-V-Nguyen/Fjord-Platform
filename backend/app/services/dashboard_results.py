@@ -27,27 +27,6 @@ _LOCK = threading.Lock()
 _MESH_CACHE: dict[str, tuple[float, dict]] = {}
 _RANGE_CACHE: dict[str, tuple[float, list]] = {}
 
-# Map HYD variables on the Dashboard (name in map file -> lable, unit, color bar)
-HYD_MAP_VARS = {
-    "mesh2d_tem1": {"label": "Temperature", "unit": "°C", "palette": "thermal"},
-    "mesh2d_sa1": {"label": "Salinity", "unit": "ppt", "palette": "haline"},
-    "mesh2d_ucmag": {"label": "Current speed", "unit": "m/s", "palette": "speed"},
-    "mesh2d_s1": {"label": "Water level", "unit": "m", "palette": "level"},
-    "mesh2d_waterdepth": {"label": "Water depth", "unit": "m", "palette": "depth"},
-    "mesh2d_Contaminant": {"label": "Contaminant", "unit": "mg/m³", "palette": "quality"},
-}
-# HYD station variables (his)
-HYD_HIS_VARS = {
-    "temperature": {"label": "Temperature", "unit": "°C"},
-    "salinity": {"label": "Salinity", "unit": "ppt"},
-    "velocity_magnitude": {"label": "Current speed", "unit": "m/s"},
-    "waterlevel": {"label": "Water level", "unit": "m"},
-    "Contaminant": {"label": "Contaminant", "unit": "mg/m³"},
-}
-HIS_TO_MAP = {"temperature": "mesh2d_tem1", "salinity": "mesh2d_sa1", "velocity_magnitude": 
-    "mesh2d_ucmag", "waterlevel": "mesh2d_s1", "Contaminant": "mesh2d_Contaminant"}
-SKIP_WAQ = {"station_name", "station_x", "station_y", "station_z", "nTimesDlwqBnd", "mesh2d_layer_dlwq"}
-
 # Helpers
 def _r(v, n=3):
     try:
@@ -148,13 +127,12 @@ def select_layer(da, source: str, layer: str):
 
 def var_meta(source: str, name: str) -> dict:
     if source == "hyd":
-        meta = HYD_MAP_VARS.get(name) or HYD_HIS_VARS.get(name)
+        meta = constants.HYD_MAP_VARS.get(name) or constants.HYD_HIS_VARS.get(name)
         if meta: return dict(meta)
         label = constants.variablesNames.get(name, name)
         return {"label": label, "unit": ""}
     key = name.replace("mesh2d_2d_", "").replace("mesh2d_", "")
-    full = constants.units.get(key, key)
-    unit = ""
+    full, unit = constants.UNITS.get(key, key), ""
     if "(" in full and full.endswith(")"):
         unit = full[full.rfind("(") + 1:-1]
         full = full[:full.rfind("(")].strip()
@@ -171,7 +149,7 @@ class ProjectResults:
         self.paths: dict[str, str | None] = {"hyd_his": None, "hyd_map": None, "waq_his": None, "waq_map": None}
         self._locate(out)
     
-    # locate files
+    # Locate files
     def _locate(self, out):
         if os.path.isdir(self.hyd_dir):
             files = sorted(os.listdir(self.hyd_dir))
@@ -243,15 +221,6 @@ class ProjectResults:
 
     # Stations
     def stations(self, source: str) -> list[dict]:
-        """Trạm quan trắc (WGS84).
-        HYD: D-Flow FM ghi station_x_coordinate/station_y_coordinate + biến CRS -> đọc trực tiếp
-             (giống functions.hydCreator).
-        WAQ: wqPreparation chỉ đưa SỐ SEGMENT của điểm quan trắc vào DELWAQ; station_x/station_y
-             trong WAQ his do DELWAQ sinh ra, không có biến CRS -> không tin cậy. Toạ độ đúng là
-             bảng người dùng nhập, lưu trong output/WAQ/<waq>.json, khoá 'wq_obs' = [[tên, lat, lon], ...].
-             Thứ tự ưu tiên: wq_obs (khớp theo tên) -> station_x/y đã kiểm tra hợp lệ -> không có toạ độ.
-        Mỗi trạm có 'coord_source' ('his' | 'scenario' | 'his-checked' | None) để dễ kiểm tra.
-        """
         ds = self.ds(f"{source}_his")
         if ds is None or "station_name" not in ds.variables: return []
         names = _decode(ds["station_name"].values)
@@ -292,7 +261,6 @@ class ProjectResults:
         return out
 
     def _domain_bounds(self):
-        """[[lat_min, lon_min], [lat_max, lon_max]] of the grid (extend 2 km) to check coordinates."""
         try: mesh = self.mesh()
         except Exception: mesh = None
         if not mesh: return None
@@ -362,14 +330,14 @@ class ProjectResults:
         if ds is None: return []
         out = []
         if source == "hyd":
-            for name, meta in HYD_MAP_VARS.items():
+            for name, meta in constants.HYD_MAP_VARS.items():
                 if name in ds.data_vars:
                     da = ds[name]
                     out.append({"source": "hyd", "name": name, **meta, "layered": len(da.dims) >= 3})
             return out
         for var in ds.data_vars:
             name = str(var)
-            if name in SKIP_WAQ or "_2d_" in name: continue
+            if name in constants.SKIP_WAQ or "_2d_" in name: continue
             da = ds[name]
             if not (time_dim(da) and face_dim(da)): continue
             meta = var_meta("waq", name)
@@ -382,11 +350,11 @@ class ProjectResults:
         out = []
         for var in ds.data_vars:
             name = str(var)
-            if name in SKIP_WAQ or name.startswith(("source_sink", "cross_section", "water_balance", "station")): continue
+            if name in constants.SKIP_WAQ or name.startswith(("source_sink", "cross_section", "water_balance", "station")): continue
             da = ds[name]
             if not (time_dim(da) and station_dim(da)): continue
-            if source == "hyd" and name not in HYD_HIS_VARS: continue
-            meta = HYD_HIS_VARS.get(name, {}) if source == "hyd" else var_meta("waq", name) or {}
+            if source == "hyd" and name not in constants.HYD_HIS_VARS: continue
+            meta = constants.HYD_HIS_VARS.get(name, {}) if source == "hyd" else var_meta("waq", name) or {}
             out.append({"source": source, "name": name, **meta, "layered": len(da.dims) >= 3})
         return out
 
@@ -463,7 +431,6 @@ class ProjectResults:
         }
 
     def value_range(self, source, name, layer) -> list:
-        """Min/max (P2–P98) over maximum 24 time steps -> more stable for color bar while running animation."""
         path = self.paths.get(f"{source}_map")
         key = f"{path}|{name}|{layer}"
         if path is None: return [0, 1]
@@ -547,7 +514,7 @@ class ProjectResults:
     def map_name_for(self, source: str, his_name: str) -> str | None:
         ds = self.ds(f"{source}_map")
         if ds is None: return None
-        cands = [HIS_TO_MAP.get(his_name)] if source == "hyd" else []
+        cands = [constants.HIS_TO_MAP.get(his_name)] if source == "hyd" else []
         cands += [his_name, f"mesh2d_{his_name}"]
         return next((c for c in cands if c and c in ds.data_vars), None)
 
@@ -668,8 +635,7 @@ class ProjectResults:
         except Exception: return False
 
 def catalog(project_name: str) -> dict:
-    pr = ProjectResults(project_name)
-    info = pr.info()
+    pr = ProjectResults(project_name); info = pr.info()
     return {
         "project": project_name, "info": info, "has_results": pr.has_hyd or pr.has_waq,
         "map_variables": pr.map_variables("hyd") + pr.map_variables("waq"),

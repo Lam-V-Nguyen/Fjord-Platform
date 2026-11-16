@@ -1,10 +1,11 @@
-from config import DELFT_PATH, PROJECT_ROOT
-from services import functions
-import os, glob, shutil, subprocess, pickle
+import os, glob, shutil, subprocess, pickle, threading
 import warnings, logging, optuna, re, json
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np, pandas as pd, xarray as xr
+from config import DELFT_PATH, PROJECT_ROOT
+from services import functions, constants
 from scipy.stats import qmc
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
@@ -20,19 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-
-HIS_VARS_TO_KEEP = {"wrihis_temperature", "wrihis_waterlevel_s1", "wrihis_zcor"}
-SCENARIO_MDU, TARGET_METHODS = "FlowFM.mdu", ("RMSE", "R2")
-SURROGATE_MODELS, COMPLETED_FLAG = ("gaussian-process",), ".completed"
-FAILED_CASES_FILE, SCENARIO_OUTPUT_DIR = "failed_cases.json", "output"
-STALE_RESULTS = (
-    "scenarios", "summary", "model", "calibration_summary.csv",
-    FAILED_CASES_FILE, "optuna.csv", "optuna_importance.csv",
-)
-OVERRIDES_FILE, FEATURES_FILE, FACTOR_SUFFIX = "base_overrides.json", "features.json", "_factor"
-_ERROR_RE = re.compile(r"\*\*\s*error|forrtl:|^\s*error\s*:", re.IGNORECASE)
-_INDEXED = re.compile(r"^(?P<key>[A-Za-z0-9_]+)\[(?P<i>\d+)\]$")
-INTERVAL_KEYS = ("HisInterval", "MapInterval", "WaqInterval", "ClassMapInterval", "RstInterval")
+_LOCK_GUARD = threading.Lock()
 
 
 # MDU helpers
@@ -42,7 +31,7 @@ def find_mdu(input_dir: str) -> str:
     return os.path.join(input_dir, files[0])
 
 def load_overrides(calibration_dir: str) -> dict:
-    path = os.path.join(calibration_dir, OVERRIDES_FILE)
+    path = os.path.join(calibration_dir, constants.OVERRIDES_FILE)
     if not os.path.exists(path): return {}
     with open(path, encoding='utf-8') as f:
         data = json.load(f)
@@ -62,14 +51,14 @@ def modify_mdu_key(mdu_lines: list, key: str, value: str = '', max_length=None) 
         return mdu
 
 def _get_mdu_tokens(mdu_content: list, key: str) -> list:
-    return _get_values_from_mdu(mdu_content, key).split()
+    return get_values_from_mdu(mdu_content, key).split()
 
 def apply_overrides(mdu_lines: list, overrides: dict) -> list:
     lines = mdu_lines
     for key, value in overrides.items():
         lines = modify_mdu_key(lines, key, str(value))
     if any(k.lower() in ("tstart", "tstop") for k in overrides):
-        for k in INTERVAL_KEYS:
+        for k in constants.INTERVAL_KEYS:
             toks = _get_mdu_tokens(lines, k)
             if len(toks) > 1: lines = modify_mdu_key(lines, k, toks[0])
     return lines
@@ -77,7 +66,7 @@ def apply_overrides(mdu_lines: list, overrides: dict) -> list:
 def _mdu_number(token) -> float:
     return float(str(token).strip().lower().replace("d", "e"))
 
-def _get_values_from_mdu(mdu_content: list, key: str):
+def get_values_from_mdu(mdu_content: list, key: str):
     k = key.lower()
     for line in mdu_content:
         p = _split_line(line)
@@ -85,11 +74,11 @@ def _get_values_from_mdu(mdu_content: list, key: str):
     return ''
 
 def mdu_time_info(mdu_lines: list) -> dict:
-    ref = datetime.strptime(_get_values_from_mdu(mdu_lines, 'RefDate')[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
-    unit = (_get_values_from_mdu(mdu_lines, 'Tunit') or 'S').upper()[:1]
+    ref = datetime.strptime(get_values_from_mdu(mdu_lines, 'RefDate')[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
+    unit = (get_values_from_mdu(mdu_lines, 'Tunit') or 'S').upper()[:1]
     sec = {'S': 1, 'M': 60, 'H': 3600, 'D': 86400}.get(unit, 1)
-    start = ref + timedelta(seconds=_mdu_number(_get_values_from_mdu(mdu_lines, 'TStart')) * sec)
-    stop = ref + timedelta(seconds=_mdu_number(_get_values_from_mdu(mdu_lines, 'TStop')) * sec)
+    start = ref + timedelta(seconds=_mdu_number(get_values_from_mdu(mdu_lines, 'TStart')) * sec)
+    stop = ref + timedelta(seconds=_mdu_number(get_values_from_mdu(mdu_lines, 'TStop')) * sec)
     return {"ref": ref, "unit": unit, "unit_seconds": sec, "start": start, "stop": stop}
 
 def get_all_mdu_keys(mdu_lines: list, include_section: bool = False) -> list:
@@ -152,7 +141,7 @@ def _profile_mean(prof: pd.DataFrame) -> float:
     return float(np.sum((t[1:] + t[:-1]) / 2 * np.diff(d)) / (d[-1] - d[0]))
 
 def _load_overrides_display(calibration_dir: str) -> list:
-    path = os.path.join(calibration_dir, OVERRIDES_FILE)
+    path = os.path.join(calibration_dir, constants.OVERRIDES_FILE)
     if not os.path.exists(path): return []
     with open(path, encoding='utf-8') as f:
         data = json.load(f)
@@ -160,7 +149,7 @@ def _load_overrides_display(calibration_dir: str) -> list:
 
 def _read_obs_stations(input_dir: str, mdu_lines: list) -> list:
     out = []
-    for name in _get_values_from_mdu(mdu_lines, 'ObsFile').split():
+    for name in get_values_from_mdu(mdu_lines, 'ObsFile').split():
         path = os.path.join(input_dir, name)
         if not os.path.exists(path): continue
         with open(path, encoding='utf-8', errors='ignore') as f:
@@ -204,7 +193,7 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
     calibration_dir = os.path.join(project_dir, "calibration")
     lines = read_mdu(find_mdu(input_dir))
     info = mdu_time_info(lines)
-    g = lambda k: _get_values_from_mdu(lines, k)
+    g = lambda k: get_values_from_mdu(lines, k)
     def num(k, d=None):
         try: return _mdu_number(g(k).split()[0]) if g(k) else d
         except ValueError: return d
@@ -280,8 +269,7 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
             i = int(np.argmin(np.abs((sim.index - t0).total_seconds())))
             rows = []
             for (d, t_obs), dcol in zip(obs["profile"], depths):
-                s = sim.iloc[i][f"sim_{dcol}"]
-                ok = np.isfinite(s)
+                s = sim.iloc[i][f"sim_{dcol}"]; ok = np.isfinite(s)
                 rows.append([d, t_obs, round(float(s), 3) if ok else None, round(float(s) - t_obs, 3) if ok else None])
             existing = {"his": os.path.basename(his[0]),
                 "time": functions.utc_to_local(pd.Series([sim.index[i]]), time_zone)[0], "rows": rows}
@@ -327,7 +315,7 @@ def save_overrides(project_dir: str, rows: list, time_zone: str) -> dict:
         except Exception as e: errors.append(f"'{key}' = '{value}': {e}"); continue
         mdu[key] = mdu_value; display.append([key, value, note])
     if errors: return {"status": "error", "message": "; ".join(errors)}
-    with open(os.path.join(calibration_dir, OVERRIDES_FILE), "w", encoding="utf-8") as f:
+    with open(os.path.join(calibration_dir, constants.OVERRIDES_FILE), "w", encoding="utf-8") as f:
         json.dump({"mdu": mdu, "display": display}, f, indent=2, ensure_ascii=False)
     return {"status": "ok", "message": f"Saved {len(mdu)} override(s). They are applied to the baseline run, "
         "every calibration scenario and the final calibrated scenario."}
@@ -336,11 +324,11 @@ def scenario_run_status(scenario_dir: str) -> dict:
     """Which calibration scenarios finished (COMPLETED_FLAG) and which still have to be run."""
     ids = sorted(int(x) for x in os.listdir(scenario_dir)
         if x.isdigit() and os.path.isdir(os.path.join(scenario_dir, x))) if os.path.isdir(scenario_dir) else []
-    done = [i for i in ids if os.path.exists(os.path.join(scenario_dir, str(i), COMPLETED_FLAG))]
-    done_set = set(done)
-    pending = [i for i in ids if i not in done_set]
+    done = [i for i in ids if os.path.exists(os.path.join(scenario_dir, str(i), constants.COMPLETED_FLAG))]
+    done_set = set(done); pending = [i for i in ids if i not in done_set]
     return {"total": len(ids), "first": ids[0] if ids else None, "last": ids[-1] if ids else None,
-        "done": done, "pending": pending, "next": pending[0] if pending else None}
+        "done": done, "pending": pending, "next": pending[0] if pending else None
+    }
 
 def find_his(case_dir: str):
     for pat in ("output/*_his.nc", "DFM_OUTPUT*/*_his.nc", "*/*_his.nc"):
@@ -351,7 +339,7 @@ def find_his(case_dir: str):
 def calibration_data_status(project_dir: str) -> dict:
     calibration_dir = os.path.join(project_dir, "calibration")
     mtime = lambda p: datetime.fromtimestamp(os.path.getmtime(p)).strftime("%Y-%m-%d %H:%M")
-    ov_path = os.path.join(calibration_dir, OVERRIDES_FILE)
+    ov_path = os.path.join(calibration_dir, constants.OVERRIDES_FILE)
     overrides = load_overrides(calibration_dir) if os.path.exists(ov_path) else {}
     case_dir = os.path.join(calibration_dir, "baseline", "scenarios", "0")
     his = find_his(case_dir) if os.path.isdir(case_dir) else None
@@ -389,8 +377,8 @@ def _calibration_output_settings(mdu_lines: list, his_interval: str, write_map: 
 
 # Validation parameters
 def _param_target(name: str):
-    if name.endswith(FACTOR_SUFFIX): return name[:-len(FACTOR_SUFFIX)], "factor", None
-    m = _INDEXED.match(name)
+    if name.endswith(constants.FACTOR_SUFFIX): return name[:-len(constants.FACTOR_SUFFIX)], "factor", None
+    m = constants.INDEXED.match(name)
     if m: return m.group("key"), "index", int(m.group("i"))
     return name, "value", None
 
@@ -432,93 +420,266 @@ def create_baseline(directory: str) -> str:
         f.writelines(lines)
     return case_dir
 
-def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: list, log_path: str) -> None:
+# ----------------------------------------------------------------------------------------------
+# Cross-process run lock
+# ----------------------------------------------------------------------------------------------
+# `processes` is an in-memory dict: it is NOT shared between uvicorn workers and it is lost when
+# the server restarts. A second "Run" request that lands on another worker therefore does not see
+# the running batch and starts a second batch on the same scenario folders (this is what produced
+# the interleaved "[SCENARIO x/50]" and "[SCENARIO x/38]" blocks in the log). The lock file below
+# lives on disk in the calibration folder, so every worker sees it.
+
+def _pid_alive(pid) -> bool:
+    try: pid = int(pid)
+    except (TypeError, ValueError): return False
+    if pid <= 0: return False
     try:
-        fc = functions.append_log
-        bat_path = os.path.normpath(os.path.join(DELFT_PATH, "x64/dflowfm/scripts/run_dflowfm.bat"))
-        if not os.path.exists(bat_path):
-            processes[key]["status"], processes[key]["message"] = "error", "Executable file not found"
-            fc(log_path, f"[ERROR] Executable file not found: {bat_path}")
-            return
-        percent_re = re.compile(r'(?P<percent>\d{1,3}(?:\.\d+)?)\s*%')
-        correct_cases, error_cases, total_simulations = [], [], len(scenarios)
-        fc(log_path, ""); fc(log_path, "=" * 80)
-        fc(log_path, "[SIMULATION STARTED]"); fc(log_path, "=" * 80)
-        fc(log_path, f"[INFO] Total simulations: {total_simulations}"); fc(log_path, "")
-        for index, case_id in enumerate(scenarios, start=1):
-            if key not in processes:
-                fc(log_path, "[WARNING] Calibration process was removed."); return
-            processes[key]["current"], processes[key]["progress"] = index, 0.0
-            c_dir = os.path.join(scenario_dir, str(case_id))
-            mdus = sorted(f for f in os.listdir(c_dir) if f.lower().endswith(".mdu")) if os.path.isdir(c_dir) else []
-            mdu_path = os.path.join(c_dir, mdus[0] if mdus else "FlowFM.mdu")
-            fc(log_path, ""); fc(log_path, "=" * 80)
-            fc(log_path, f"[SCENARIO {index}/{total_simulations}] Starting scenario {case_id}")
-            fc(log_path, f"[STARTING] {mdu_path}"); fc(log_path, "=" * 80)
-            if not os.path.exists(mdu_path):
-                error_message = f"MDU file not found in scenario {case_id}"
-                processes[key]["message"] = error_message
-                fc(log_path, f"[ERROR] {error_message}")
-                error_cases.append(mdu_path); continue
-            flag = os.path.join(c_dir, COMPLETED_FLAG)
-            if os.path.exists(flag): os.remove(flag)
-            command = ["cmd.exe", "/c", bat_path, "--autostartstop", mdu_path]
-            process, error_detected = None, False
-            try:
-                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", bufsize=1, cwd=c_dir)
-                for line in process.stdout:
-                    if key not in processes:
-                        fc(log_path, "[WARNING] Calibration process was removed.")
-                        functions.kill_process(process); return
-                    line = line.strip()
-                    if not line: continue
-                    fc(log_path, line)
-                    if _ERROR_RE.search(line):
-                        error_detected = True
-                        processes[key]["message"] = f"Scenario {case_id} failed: {line}"
-                        fc(log_path, f"[ERROR] Scenario {case_id}: {line}")
-                        res = functions.kill_process(process)
-                        fc(log_path, res["message"])
-                        break
-                    match_pct = percent_re.search(line)
-                    if match_pct: processes[key]["progress"] = float(match_pct.group("percent"))
-                return_code = process.wait()
-            except Exception as e:
-                error_detected, return_code = True, -1
-                fc(log_path, f"[ERROR] Exception while running scenario {case_id}: {e}")
-                if process is not None:
-                    try:
-                        res = functions.kill_process(process)
-                        fc(log_path, res["message"])
-                    except Exception: pass
-            fc(log_path, "=" * 80)
-            if return_code == 0 and not error_detected:
-                correct_cases.append(mdu_path)
-                with open(flag, 'w', encoding='utf-8') as f:
-                    f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                fc(log_path, f"[COMPLETED] {mdu_path}")
-            else:
-                error_cases.append(mdu_path)
-                fc(log_path, f"[FAILED] {mdu_path}, exit code={return_code}")
-            fc(log_path, "=" * 80)
-        fc(log_path, "\n\n"); fc(log_path, "=" * 80)
-        fc(log_path, "[SIMULATION SUMMARY]"); fc(log_path, "=" * 80)
-        fc(log_path, f"[SUMMARY] Total simulations : {len(scenarios)}")
-        fc(log_path, f"[SUMMARY] Successful        : {len(correct_cases)}")
-        fc(log_path, f"[SUMMARY] Failed            : {len(error_cases)}")
-        if error_cases:
-            fc(log_path, "[SUMMARY] Failed scenarios:")
-            for case in error_cases:
-                fc(log_path, f"  - {case}")
-        fc(log_path, "=" * 80); fc(log_path, "[SIMULATION COMPLETED]")
-        fc(log_path, "=" * 80); fc(log_path, "\n\n")
-        processes[key]["status"], processes[key]["progress"] = "finished", 100.0
-        processes[key]["message"] = f"Simulations completed: {len(correct_cases)} ok, {len(error_cases)} failed."
+        import psutil
+        return psutil.pid_exists(pid)
+    except ImportError: pass
+    if os.name == "nt":       # os.kill(pid, 0) would send CTRL_C on Windows – use the Win32 API instead
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle: return False
+        code = ctypes.c_ulong()
+        ok = k32.GetExitCodeProcess(handle, ctypes.byref(code))
+        k32.CloseHandle(handle)
+        return bool(ok) and code.value == 259                  # STILL_ACTIVE
+
+def _read_lock(lock_path: str):
+    try:
+        with open(lock_path, encoding="utf-8") as f: return json.load(f)
+    except Exception: return None
+
+def active_run(calibration_dir: str):
+    """Info of a simulation batch that is still alive for this project (any worker), else None."""
+    lock_path = os.path.join(calibration_dir, constants.RUN_LOCK_FILE)
+    info = _read_lock(lock_path)
+    if not info: return None
+    if _pid_alive(info.get("pid")) or any(_pid_alive(p) for p in info.get("children", [])):
+        return info
+    try: os.remove(lock_path)       # stale: owner and all solvers are gone
+    except OSError: pass
+    return None
+
+def acquire_run_lock(calibration_dir: str, key: str, scenarios: list):
+    """Atomically create the lock file. Returns (lock_path, None) or (None, info_of_running_batch)."""
+    os.makedirs(calibration_dir, exist_ok=True)
+    lock_path = os.path.join(calibration_dir, constants.RUN_LOCK_FILE)
+    for _ in range(2):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            running = active_run(calibration_dir)    # removes the file if it is stale
+            if running: return None, running
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getpid(), "key": key, "children": [],
+                "started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "first": scenarios[0] if scenarios else None, 
+                "last": scenarios[-1] if scenarios else None}, f
+            )
+        return lock_path, None
+    return None, active_run(calibration_dir) or {"key": key}
+
+def _update_lock_children(lock_path: str, add: int = None, remove: int = None) -> None:
+    if not lock_path: return
+    with _LOCK_GUARD:
+        info = _read_lock(lock_path)
+        if not info or info.get("pid") != os.getpid(): return
+        children = set(info.get("children", []))
+        if add: children.add(add)
+        if remove: children.discard(remove)
+        info["children"] = sorted(children)
+        tmp = lock_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f: json.dump(info, f)
+        os.replace(tmp, lock_path)
+
+def release_run_lock(lock_path: str) -> None:
+    if not lock_path: return
+    with _LOCK_GUARD:
+        info = _read_lock(lock_path)
+        if info and info.get("pid") == os.getpid():
+            try: os.remove(lock_path)
+            except OSError: pass
+
+# ----------------------------------------------------------------------------------------------
+# Parallel scenario runner
+# ----------------------------------------------------------------------------------------------
+def _physical_cores() -> int:
+    try:
+        import psutil
+        n = psutil.cpu_count(logical=False)
+        if n: return int(n)
+    except ImportError: pass
+    return max(1, (os.cpu_count() or 2) // 2)     # assume hyper-threading
+
+def default_parallel_config(n_scenarios: int, parallel=None, threads=None) -> tuple:
+    """
+    Throughput-oriented defaults for many small/medium D-Flow FM runs on one machine:
+    a few OpenMP threads per run and several runs side by side, using the physical cores only.
+    (One run with all 48 logical threads scales poorly and two such runs oversubscribe the CPU.)
+    """
+    cores = _physical_cores()
+    threads = int(threads) if threads else (4 if cores >= 8 else max(1, cores // 2))
+    threads = max(1, min(threads, cores))
+    parallel = int(parallel) if parallel else max(1, cores // threads)
+    parallel = max(1, min(parallel, n_scenarios or 1))
+    return parallel, threads
+
+def _solver_command(mdu_path: str, threads: int):
+    """Call dflowfm-cli.exe directly (run_dflowfm.bat relies on 'wmic', removed from recent
+    Windows 11 builds, and then sets OMP_NUM_THREADS to the invalid value '-2')."""
+    env = os.environ.copy()
+    env["OMP_NUM_THREADS"] = str(threads)
+    root = os.path.normpath(os.path.join(DELFT_PATH, "x64"))
+    exe = os.path.join(root, "dflowfm", "bin", "dflowfm-cli.exe")
+    if os.path.exists(exe):
+        share = os.path.join(root, "share", "bin")
+        env["PATH"] = os.pathsep.join([os.path.dirname(exe), share, env.get("PATH", "")])
+        env["D3D_HOME"] = os.path.normpath(DELFT_PATH)
+        return [exe, "--nodisplay", "--autostartstop", mdu_path], env
+    bat = os.path.join(root, "dflowfm", "scripts", "run_dflowfm.bat")
+    if os.path.exists(bat):
+        return ["cmd.exe", "/c", bat, "--autostartstop", mdu_path], env
+    return None, env
+
+def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: list, log_path: str,
+    parallel: int = None, threads: int = None, lock_path: str = None) -> None:
+    """
+    Run the scenarios `parallel` at a time, each solver with `threads` OpenMP threads.
+    - Scenarios START in ascending order (1, 2, 3, ...); with parallel > 1 they may FINISH in another order.
+    - The full solver output of every scenario is written to `log_path` (one log file for the whole batch;
+      the baseline run has its own log because the router passes its own log file). Progress (% and
+      finished/total) is not written to the log, it is shown by the progress bar.
+    - With parallel > 1 the solver lines of the running scenarios interleave, so each line then starts
+      with "[S<id>]" to show which scenario it belongs to.
+    """
+    log_mutex = threading.Lock()
+    def fc(msg: str = ""):
+        with log_mutex: functions.append_log(log_path, msg)
+    state_mutex = threading.Lock()
+    scenarios = sorted(int(s) for s in scenarios)
+    total = len(scenarios)
+    percent_re = re.compile(r'(?P<percent>\d{1,3}(?:\.\d+)?)\s*%')
+    results, running, partial = {}, {}, {}           # case_id -> ok/failed ; case_id -> Popen ; case_id -> %
+    turn_cv, next_turn = threading.Condition(), [0]   # solvers are launched strictly in ascending order
+    def stopped(): return key not in processes
+    def pass_turn():
+        with turn_cv: next_turn[0] += 1; turn_cv.notify_all()
+    def update_progress():
+        with state_mutex:
+            info = processes.get(key)
+            if info is None: return
+            done = len(results)
+            frac = done + sum(partial.get(c, 0.0) for c in running) / 100.0
+            info["current"], info["total"] = done, total
+            info["progress"] = round(frac / total * 100.0, 1) if total else 100.0
+            info["running"] = sorted(running)
+    def run_one(case_id: int) -> None:
+        pos = scenarios.index(case_id)
+        with turn_cv: turn_cv.wait_for(lambda: next_turn[0] == pos)
+        try: return _run_one(case_id, pos + 1)
+        finally:
+            with turn_cv:                                   # no-op if the turn was already passed after launch
+                if next_turn[0] == pos: next_turn[0] += 1; turn_cv.notify_all()
+    def _run_one(case_id: int, index: int) -> None:
+        if stopped(): return
+        c_dir = os.path.join(scenario_dir, str(case_id))
+        mdus = sorted(f for f in os.listdir(c_dir) if f.lower().endswith(".mdu")) if os.path.isdir(c_dir) else []
+        mdu_path = os.path.join(c_dir, mdus[0] if mdus else "FlowFM.mdu")
+        tag = f"[S{case_id}] " if parallel > 1 else ""       # only needed when several solvers write at once
+        if not os.path.exists(mdu_path):
+            fc(f"[ERROR] Scenario {case_id}: MDU file not found ({mdu_path})")
+            results[case_id] = False; update_progress(); return
+        flag = os.path.join(c_dir, constants.COMPLETED_FLAG)
+        if os.path.exists(flag): os.remove(flag)
+        command, env = _solver_command(mdu_path, threads)
+        if command is None:
+            fc(f"[ERROR] Scenario {case_id}: D-Flow FM executable not found under {DELFT_PATH}")
+            results[case_id] = False; update_progress(); return
+        started = datetime.now()
+        fc(); fc("=" * 80)
+        fc(f"[SCENARIO {index}/{total}] Starting scenario {case_id} ({threads} threads)")
+        fc(f"[STARTING] {mdu_path}"); fc("=" * 80)
+        process, error_detected, return_code = None, False, -1
+        kwargs = {}
+        if os.name == "nt":   # keep the web server responsive while the solvers use the CPU
+            kwargs["creationflags"] = subprocess.BELOW_NORMAL_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", bufsize=1, cwd=c_dir, env=env, **kwargs)
+            with state_mutex: running[case_id] = process
+            _update_lock_children(lock_path, add=process.pid)
+            pass_turn()                                      # next scenario may start now
+            update_progress()
+            for line in process.stdout:
+                if stopped():
+                    fc(f"[WARNING] Scenario {case_id}: calibration process was removed – stopping solver.")
+                    functions.kill_process(process); error_detected = True; break
+                line = line.rstrip()
+                if not line: continue
+                fc(tag + line)
+                if constants.ERROR_RE.search(line):
+                    error_detected = True
+                    processes.get(key, {})["message"] = f"Scenario {case_id} failed: {line}"
+                    fc(f"[ERROR] Scenario {case_id}: {line}")
+                    fc(functions.kill_process(process)["message"])
+                    break
+                m = percent_re.search(line)
+                if m:
+                    partial[case_id] = float(m.group("percent"))
+                    update_progress()
+            return_code = process.wait()
+        except Exception as e:
+            error_detected = True
+            fc(f"[ERROR] Exception while running scenario {case_id}: {e}")
+            if process is not None:
+                try: fc(functions.kill_process(process)["message"])
+                except Exception: pass
+        finally:
+            with state_mutex:
+                running.pop(case_id, None); partial.pop(case_id, None)
+            if process is not None: _update_lock_children(lock_path, remove=process.pid)
+        hours = (datetime.now() - started).total_seconds() / 3600
+        ok = return_code == 0 and not error_detected
+        if ok:
+            with open(flag, 'w', encoding='utf-8') as f: f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            fc(f"[COMPLETED] Scenario {case_id} in {hours:.2f} h")
+        else:
+            fc(f"[FAILED] Scenario {case_id}: {mdu_path}, exit code={return_code}")
+        results[case_id] = ok
+        update_progress()
+    try:
+        parallel, threads = default_parallel_config(total, parallel, threads)
+        fc(); fc("=" * 80); fc("[SIMULATION STARTED]"); fc("=" * 80)
+        fc(f"[INFO] Scenarios         : {scenarios[0]} - {scenarios[-1]} ({total} runs, started in ascending order)")
+        fc(f"[INFO] Parallel runs     : {parallel}")
+        fc(f"[INFO] Threads per run   : {threads} (OMP_NUM_THREADS)")
+        fc(f"[INFO] Physical cores    : {_physical_cores()}, logical: {os.cpu_count()}"); fc()
+        if key in processes:
+            processes[key]["message"] = f"Running {total} scenarios, {parallel} at a time ({threads} threads each)."
+        with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="dflowfm") as pool:
+            futures = [pool.submit(run_one, c) for c in scenarios]   # FIFO queue: start order = 1, 2, 3, ...
+            for f in futures: f.result()
+        ok_ids = [c for c in scenarios if results.get(c)]
+        failed = [c for c in scenarios if c in results and not results[c]]
+        skipped = [c for c in scenarios if c not in results]
+        fc(); fc("=" * 80); fc("[SIMULATION SUMMARY]"); fc("=" * 80)
+        fc(f"[SUMMARY] Total simulations : {total}")
+        fc(f"[SUMMARY] Successful        : {len(ok_ids)}")
+        fc(f"[SUMMARY] Failed            : {len(failed)}" + (f" -> {failed}" if failed else ""))
+        if skipped: fc(f"[SUMMARY] Not run (stopped) : {skipped}")
+        fc("=" * 80); fc("[SIMULATION COMPLETED]"); fc("=" * 80); fc()
+        if key in processes:
+            processes[key]["status"], processes[key]["progress"] = "finished", 100.0
+            processes[key]["message"] = f"Simulations completed: {len(ok_ids)} ok, {len(failed)} failed."
     except Exception as e:
         if processes.get(key):
             processes[key]["status"], processes[key]["message"] = "failed", f"Internal error: {e}"
-        fc(log_path, f"[INTERNAL ERROR] {e}")
+        fc(f"[INTERNAL ERROR] {e}")
+    finally: release_run_lock(lock_path)
 
 def _set_state(processes: dict, key: str, message: str = None, 
     progress: float = None, status: str = None, history: bool = True) -> None:
@@ -566,7 +727,7 @@ def _validate_params(base_lines: list, names) -> list:
 
 def _clean_previous_results(calibration_dir: str) -> list:
     removed = []
-    for name in STALE_RESULTS:
+    for name in constants.STALE_RESULTS:
         path = os.path.join(calibration_dir, name)
         if os.path.isdir(path): shutil.rmtree(path); removed.append(name)
         elif os.path.isfile(path): os.remove(path); removed.append(name)
@@ -594,7 +755,7 @@ def _copy_input_tree(src_dir: str, dst_dir: str, exclude_mdu: bool = True) -> No
         skipped = set()
         for n in names:
             upper = n.upper()
-            if upper.startswith(('DFM_OUTPUT', 'DFM_DELWAQ')) or n.lower() == SCENARIO_OUTPUT_DIR: skipped.add(n)
+            if upper.startswith(('DFM_OUTPUT', 'DFM_DELWAQ')) or n.lower() == constants.OUTPUT_DIR: skipped.add(n)
             elif exclude_mdu and n.lower().endswith('.mdu'): skipped.add(n)
         return skipped
     shutil.copytree(src_dir, dst_dir, ignore=ignore, dirs_exist_ok=True)
@@ -651,7 +812,7 @@ def run_iteration(directory: str, processes: dict, key_process:str, n_samples:in
                 f.writelines(mdu_case)
             keys = dict.fromkeys(_param_target(k)[0] for k in params)
             _set_state(processes, key_process, f"Scenario {case_id} MDU: " +
-                ", ".join(f"{k} = {_get_values_from_mdu(mdu_case, k)}" for k in keys), progress=idx / n_samples * 100)
+                ", ".join(f"{k} = {get_values_from_mdu(mdu_case, k)}" for k in keys), progress=idx / n_samples * 100)
         _set_state(processes, key_process, f"\nSuccessfully created {n_samples} resamples.", 100.0, "finished")
     except Exception as e:
         logger.exception("run_iteration failed")
@@ -759,24 +920,11 @@ def match_diagnostics(df_sim: pd.DataFrame, obs_df: pd.DataFrame, depths: list, 
         parts.append(f"{d} m: {n_obs} obs / {n_sim} sim values")
     return "; ".join(parts)
 
-
-
-
-
-
-
-
-
-
-
-
-
 def _split_line(line: str):
     if '=' not in line or line.lstrip().startswith(('#', '[')): return None
     key_part, rest = line.split('=', 1)
     value_part, sep, comment = rest.partition('#')
     return key_part, value_part, bool(sep), comment
-
 
 def _first_profile(measured_utc: pd.DataFrame, after, window_hours: float = 12.0, time_col: str = "Time"):
     df = measured_utc.copy()
@@ -800,7 +948,6 @@ def get_station_from_his_file(his_path: str) -> list:
             for n in ds['station_name'].values
         ]
     return names
-
 
 def target_score(target_method: str, obs: pd.Series, sim: pd.Series) -> float:
     if target_method == "R2": return r2_score(obs, sim)
@@ -880,7 +1027,7 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
             for name, data in (('scaler_X', scaler_X), ('gpr_model', final_gpr)):
                 with open(os.path.join(model_dir, f'{name}.pkl'), "wb") as f:
                     pickle.dump(data, f)
-            with open(os.path.join(model_dir, FEATURES_FILE), "w", encoding="utf-8") as f:
+            with open(os.path.join(model_dir, constants.FEATURES_FILE), "w", encoding="utf-8") as f:
                 json.dump({"columns": list(X.columns), "log10": log_cols, "kernel": best_name,
                            "cv_rmse": cv_rmse, "cv_r2": cv_r2, "target": col_name}, f, indent=2)
             fc(log_path, f"Saved model: {model_dir}.")
@@ -927,7 +1074,7 @@ def run_optuna(processes: dict, key: str, direction: str,
             scaler = pickle.load(f)
         with open(model_path, "rb") as f:
             model = pickle.load(f)
-        features_path = os.path.join(os.path.dirname(model_path), FEATURES_FILE)
+        features_path = os.path.join(os.path.dirname(model_path), constants.FEATURES_FILE)
         log_cols = []
         if os.path.exists(features_path):
             with open(features_path, encoding="utf-8") as f:

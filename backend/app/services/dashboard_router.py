@@ -24,15 +24,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from services import dashboard_functions as dfn
 from services import dashboard_results as dres
 from services import dashboard_extras as dext
-from services import functions
+from services import functions, constants
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
-CACHE_TTL = 300  # seconds
-_memory_cache: dict[str, tuple[float, object]] = {}
-
-
-# helpers
+_MEMORY_CACHE: dict[str, tuple[float, object]] = {}
+# Helpers
 async def _body(request: Request) -> dict:
     try: return await request.json()
     except Exception: return {}
@@ -51,17 +48,17 @@ async def _cached(request: Request, key: str, builder, *args, use_redis=True):
             raw = await redis.get(full_key)
             if raw: return msgpack.unpackb(raw, raw=False)
         except Exception: redis = None
-    hit = _memory_cache.get(full_key)
-    if redis is None and hit and time.time() - hit[0] < CACHE_TTL: return hit[1]
+    hit = _MEMORY_CACHE.get(full_key)
+    if redis is None and hit and time.time() - hit[0] < constants.CACHE_TTL: return hit[1]
     result = await asyncio.to_thread(builder, *args)
     if redis is not None:
-        try: await redis.set(full_key, msgpack.packb(result, use_bin_type=True), ex=CACHE_TTL)
+        try: await redis.set(full_key, msgpack.packb(result, use_bin_type=True), ex=constants.CACHE_TTL)
         except Exception: traceback.print_exc()
     else:
-        _memory_cache[full_key] = (time.time(), result)
-        if len(_memory_cache) > 256:
-            for k in sorted(_memory_cache, key=lambda k: _memory_cache[k][0])[:64]:
-                _memory_cache.pop(k, None)
+        _MEMORY_CACHE[full_key] = (time.time(), result)
+        if len(_MEMORY_CACHE) > 256:
+            for k in sorted(_MEMORY_CACHE, key=lambda k: _MEMORY_CACHE[k][0])[:64]:
+                _MEMORY_CACHE.pop(k, None)
     return result
 
 def _version(project: str) -> str:
@@ -96,7 +93,6 @@ async def dashboard_summary(request: Request, user=Depends(functions.basic_auth)
         data = await _cached(request, key, dfn.summarize, project, end, period)
         return {"status": "ok", **data}
     except Exception as e: functions.error("/dashboard/summary", e)
-    
 
 @router.post("/alerts")
 async def dashboard_alerts(request: Request, user=Depends(functions.basic_auth)):
@@ -117,7 +113,6 @@ async def dashboard_alerts(request: Request, user=Depends(functions.basic_auth))
 async def dashboard_mesh(request: Request, user=Depends(functions.basic_auth)):
     try:
         project = _project(await _body(request), user)
-        # Lưới có thể lớn: chỉ cache trong ProjectResults (bộ nhớ), không đẩy vào Redis
         mesh = await asyncio.to_thread(lambda: dres.ProjectResults(project).mesh())
         if mesh is None:
             return JSONResponse({"status": "error", "message": "No map file with a mesh in this project."}, status_code=404)
@@ -159,7 +154,6 @@ async def dashboard_profile(request: Request, user=Depends(functions.basic_auth)
         data = await asyncio.to_thread(pr.profile, body.get("source", "hyd"), 
             body.get("name", "temperature"), body.get("station"), body.get("time"))
         if data.get("empty"):
-            # Không có dữ liệu profile không phải là lỗi -> 200 + status "empty" (tránh 404 trong console)
             return {"status": "empty", "message": data["reason"], "station": data.get("station")}
         return {"status": "ok", **data}
     except Exception as e: functions.error("/dashboard/profile", e)
@@ -179,7 +173,7 @@ async def dashboard_thresholds(request: Request, user=Depends(functions.basic_au
     try:
         body = await _body(request)
         if body.get("reload"):
-            _memory_cache.clear()
+            _MEMORY_CACHE.clear()
             redis = getattr(request.app.state, "redis", None)
             if redis is not None:
                 try:
@@ -191,10 +185,9 @@ async def dashboard_thresholds(request: Request, user=Depends(functions.basic_au
         return {"status": "ok", **json.loads(json.dumps(data))}
     except Exception as e: functions.error("/dashboard/thresholds", e)
 
-# lớp bổ sung: Movement & Wflow
+# Movement & Wflow
 @router.post("/extras")
 async def dashboard_extras_status(request: Request, user=Depends(functions.basic_auth)):
-    """Trạng thái dữ liệu cho 2 lớp bổ sung (không cache: chỉ kiểm tra file)."""
     try:
         project = _project(await _body(request), user)
         data = await asyncio.to_thread(dext.extras_status, project)
@@ -203,11 +196,9 @@ async def dashboard_extras_status(request: Request, user=Depends(functions.basic
 
 @router.post("/movement/init")
 async def dashboard_movement_init(request: Request, user=Depends(functions.basic_auth)):
-    """Dựng/nạp cache movement từ HYD map của dự án. Khung hình đọc qua GET /mask_movement, /frame/{i}."""
     try:
         body = await _body(request)
         project = _project(body, user)
-        # Khoá riêng của dashboard (cache output/movement_dashboard)
         async with dext.movement_lock(project):
             data = await asyncio.to_thread(dext.movement_init, 
                 project, body.get("res"), body.get("layer"), bool(body.get("rebuild")))
@@ -238,9 +229,9 @@ def _wflow_ctx(project_name: str, flow: str, user):
 async def dashboard_wflow_mask(request: Request, project_name: str = Query(alias="projectName"),
     flow: str = Query(alias="flowName"), user=Depends(functions.basic_auth)):
     try:
-        model, meta, fc = await asyncio.to_thread(_wflow_ctx, project_name, flow, user)
+        model, _, fc = await asyncio.to_thread(_wflow_ctx, project_name, flow, user)
         import numpy as np
-        m = np.load(os.path.join(fc.model_paths(model, dext.DASH_VIEW_DIR)["cache"], "mask.npy"))
+        m = np.load(os.path.join(fc.model_paths(model, constants.DASH_VIEW_DIR)["cache"], "mask.npy"))
         return fc.get_bin(request, np.ascontiguousarray(m, dtype=np.uint8).tobytes())
     except Exception as e: functions.error("/dashboard/wflow/mask", e, 404)
 
@@ -248,8 +239,8 @@ async def dashboard_wflow_mask(request: Request, project_name: str = Query(alias
 async def dashboard_wflow_rivers(project_name: str = Query(alias="projectName"),
     flow: str = Query(alias="flowName"), user=Depends(functions.basic_auth)):
     try:
-        model, meta, fc = await asyncio.to_thread(_wflow_ctx, project_name, flow, user)
-        path = os.path.join(fc.model_paths(model, dext.DASH_VIEW_DIR)["cache"], "rivers.geojson")
+        model, _, fc = await asyncio.to_thread(_wflow_ctx, project_name, flow, user)
+        path = os.path.join(fc.model_paths(model, constants.DASH_VIEW_DIR)["cache"], "rivers.geojson")
         if not os.path.exists(path):
             return JSONResponse({"type": "FeatureCollection", "features": []})
         return FileResponse(path, media_type="application/geo+json")
@@ -258,7 +249,6 @@ async def dashboard_wflow_rivers(project_name: str = Query(alias="projectName"),
 @router.get("/wflow/geometry/{kind}")
 async def dashboard_wflow_geometry(kind: str, project_name: str = Query(alias="projectName"),
     flow: str = Query(alias="flowName"), user=Depends(functions.basic_auth)):
-    """kind = basins | water (GeoJSON WGS84) – dùng để cắt/xoá hạt giống Flow Estimation."""
     if kind not in ("basins", "water"):
         return JSONResponse({"status": "error", "message": "kind must be basins or water"}, status_code=400)
     try:
@@ -275,12 +265,11 @@ async def dashboard_wflow_frame(var: str, i: int, request: Request, project_name
             return JSONResponse({"status": "error", "message": f"Unknown variable {var}"}, status_code=404)
         if not 0 <= i < len(meta.get("times", [])):
             return JSONResponse({"status": "error", "message": f"Frame {i} out of range"}, status_code=404)
-        data = await asyncio.to_thread(fc.frame_bytes, model, meta, var, i, dext.DASH_VIEW_DIR)
+        data = await asyncio.to_thread(fc.frame_bytes, model, meta, var, i, constants.DASH_VIEW_DIR)
         return fc.get_bin(request, data)
     except Exception as e: functions.error("/dashboard/wflow/frame", e, 404)
 
 def _bin(request: Request, data: bytes, headers: Optional[dict] = None):
-    """Nhị phân, nén gzip khi trình duyệt hỗ trợ; URL có ?v=<version> nên được cache lâu."""
     headers = {"Cache-Control": "private, max-age=86400", **(headers or {})}
     if "gzip" in request.headers.get("accept-encoding", "") and len(data) > 2048:
         data = gzip.compress(data, compresslevel=1, mtime=0)
@@ -290,7 +279,6 @@ def _bin(request: Request, data: bytes, headers: Optional[dict] = None):
 @router.get("/movement/mask")
 async def dashboard_movement_mask(request: Request, 
     project_name: str = Query(alias="projectName"), user=Depends(functions.basic_auth)):
-    """mask.npy (ny, nx) của cache movement, uint8, hàng 0 = phía nam."""
     try:
         project = _project({"projectName": project_name}, user)
         return _bin(request, await asyncio.to_thread(dext.movement_mask_bytes, project))
@@ -317,18 +305,17 @@ async def dashboard_wflow_velocity(i: int, request: Request, project_name: str =
                 "(needs overland_flow / river_discharge on the grid)."}, status_code=404)
         if not 0 <= i < len(meta.get("times", [])):
             return JSONResponse({"status": "error", "message": f"Frame {i} out of range"}, status_code=404)
-        data = await asyncio.to_thread(fc.velocity_bytes, model, meta, i, dext.DASH_VIEW_DIR)
+        data = await asyncio.to_thread(fc.velocity_bytes, model, meta, i, constants.DASH_VIEW_DIR)
         return fc.get_bin(request, data)
     except Exception as e: functions.error("/dashboard/wflow/velocity", e, 404)
 
 @router.get("/wflow/stat/{var}/{stat}")
 async def dashboard_wflow_stat(var: str, stat: str, request: Request, project_name: str = Query(alias="projectName"),
     flow: str = Query(alias="flowName"), threshold: float = Query(None), user=Depends(functions.basic_auth)):
-    """Thống kê cả kỳ chạy theo ô (float32) – header X-Stat-Min / X-Stat-Max cho thang màu."""
     try:
         project = _project({"projectName": project_name}, user)
         data, lo, hi = await asyncio.to_thread(dext.wflow_stat, project, flow, var, stat, threshold)
-        model, meta, fc = await asyncio.to_thread(dext.wflow_context, project, flow)
+        _, _, fc = await asyncio.to_thread(dext.wflow_context, project, flow)
         return fc.get_bin(request, data, {"X-Stat-Min": f"{lo:g}", "X-Stat-Max": f"{hi:g}",
             "Access-Control-Expose-Headers": "X-Stat-Min, X-Stat-Max"})
     except (ValueError, KeyError, FileNotFoundError) as e:

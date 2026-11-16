@@ -23,7 +23,7 @@ const VIEW_KEY = 'ui-view', SIDEBAR_KEY = 'ui-sidebar-collapsed';
 const VIEW_TITLES = {
     overview: 'HydroAI Water Intelligence Dashboard',
     map: 'Map View', workspace: 'Modelling Workspace',
-    subtitle: 'Catchment, lake and fjord modelling – hydrodynamics, water quality and calibration'
+    subtitle: 'Catchment, lake and fjord modelling - Hydrodynamics, water quality and calibration'
 };
 let userName = null, prevSource = null, currentTimeZone = null, selectedTimeZone = null;
 let dashboard = null, currentView = 'overview';
@@ -179,7 +179,6 @@ function bindShell() {
     });
     // Đổi dự án (dùng modal sẵn có của projectManager)
     document.getElementById('project-chip').addEventListener('click', () => projectModifier(userName));
-
     // Settings popover
     const settings = document.getElementById('settings-popover');
     document.getElementById('btn-settings').addEventListener('click', async (e) => {
@@ -210,7 +209,6 @@ function bindShell() {
     document.getElementById('ws-close-all').addEventListener('click', () => {
         if (confirm('Close all open tools?')) closeAllWidgets();
     });
-
     // Đóng popover khi bấm ra ngoài / Esc
     document.addEventListener('click', () => {
         document.querySelectorAll('.popover.show').forEach(p => p.classList.remove('show'));
@@ -229,7 +227,6 @@ function initWorkspace() {
     loadWidget();
     grid.on('added removed', () => setTimeout(updateWorkspaceState, 0));
     setTimeout(updateWorkspaceState, 150);
-
     // Đóng widget & sửa tiêu đề (giống bản cũ)
     document.addEventListener('click', (e) => {
         if (e.target.classList.contains('remove-btn')) {
@@ -287,7 +284,7 @@ function openTool(id) {
 }
 
 // =====================================================================
-// 5. Bus postMessage với các iframe (giữ nguyên hành vi bản cũ)
+// 5. Bus postMessage với các iframe 
 // =====================================================================
 function updateComponent() {
     clearPendingRequest();
@@ -300,7 +297,9 @@ function updateComponent() {
             event.source.postMessage({ type: 'USER', content: content }, origin);
         } else if (msg.type === 'addMapWidget') { // Add map
             const id = msg.content.id;
-            if (!hasWidget(id)) { addWidget(12, 5, msg.content.title, id); setTimeout(updateWorkspaceState, 50); }
+            if (!hasWidget(id)) { 
+                addWidget(12, 5, msg.content.title, id); setTimeout(updateWorkspaceState, 50); 
+            }
         } else if (msg.id === 'hyd-waq') {
             const req = {
                 source: event.source, lineType: msg.lineType,
@@ -340,7 +339,6 @@ function updateComponent() {
                 prevSource.postMessage({ type: 'updateUIDelay', content: msg.content }, origin);
             }
         } else if (msg.type === 'refreshDashboard') {
-            // Mới: iframe có thể yêu cầu làm mới dashboard sau khi chạy xong mô phỏng
             dashboard?.refresh(true);
         }
     });
@@ -398,9 +396,9 @@ function getOffsetLabel(tzName) {
     } catch (e) { return ''; }
 }
 
-// =====================================================================
-// 7. GitHub last update (cache 30 phút, không còn alert() khi lỗi)
-// =====================================================================
+// ======================
+// 7. GitHub last update
+// =====================
 async function showGitHubLastUpdate(username, repo, branch = 'main', duration = 30 * 60 * 1000) {
     const url = `https://api.github.com/repos/${username}/${repo}/commits?sha=${branch}&per_page=1`;
     const key = `${username}/${repo}/${branch}`;

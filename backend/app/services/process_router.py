@@ -1,8 +1,8 @@
-import os, shutil, zipfile, traceback, json, msgpack, math, asyncio
+import os, shutil, zipfile, json, msgpack, math, asyncio
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Request
 from fastapi.responses import JSONResponse
 from config import PROJECT_ROOT
-from services import functions
+from services import functions, constants
 import geopandas as gpd, numpy as np, pandas as pd, xarray as xr
 from shapely.geometry import mapping
 
@@ -86,8 +86,7 @@ async def process_internal(query: str, key: str, redis, project_cache, project_n
     elif key == '_in-situ':
         name, station_id, typ = query.split('*')
         temp = functions.selectInsitu(
-            project_cache.get("hyd_his"), project_cache.get("hyd_map"), 
-            name, station_id, typ, time_zone
+            project_cache.get("hyd_his"), project_cache.get("hyd_map"), name, station_id, typ, time_zone
         )
         data = { 'columns': temp.columns.tolist(), 'rows': temp.values.tolist() }
     elif key == 'substance_check':
@@ -191,7 +190,7 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
         dynamic_cache_key = f"{project_name}:general_cache:{dataset_type}"
         data_ds = hyd_map if is_hyd else waq_map
         time_column = 'time' if is_hyd else 'nTimesDlwq'
-        name = functions.variablesNames.get(key, key) if is_hyd else temp[0]
+        name = constants.VARIABLES_NAME.get(key, key) if is_hyd else temp[0]
         if name is None: return JSONResponse({"status": "error", "message": f"Unknown variable: {key!r}"})
         values = data_ds[name].values
         # Load dynamic cache from Redis
@@ -297,13 +296,12 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
         if not project_cache: return JSONResponse({"status": "error", "message": "Project is not available in memory"})
         hyd_map, waq_map = project_cache.get("hyd_map"), project_cache.get("waq_map")
         lock = redis.lock(f"{project_name}:select_meshes", timeout=20)
-        is_hyd = key == 'hyd'
-        dataset_type = "hyd" if is_hyd else "waq"
+        is_hyd = key == 'hyd'; dataset_type = "hyd" if is_hyd else "waq"
         mesh_cache_key = f"{project_name}:mesh_cache:{dataset_type}"
         async with lock:
             if '_waq_multi_dynamic' in query: query = 'mesh2d_' + query[:-len('_waq_multi_dynamic')]
             data_ds = hyd_map if is_hyd else waq_map
-            name = functions.variablesNames.get(query, query)
+            name = constants.VARIABLES_NAME.get(query, query)
             values, fnm = data_ds[name].values, functions.numberFormatter
             # Initiate data for the first load
             if idx == 'load':
@@ -406,7 +404,7 @@ async def select_thermocline(request: Request, user=Depends(functions.basic_auth
             is_hyd = key == 'thermocline_hyd'
             data_ds = hyd_map if is_hyd else waq_map
             col_idx = 2 if is_hyd else 1
-            name, data = functions.variablesNames.get(query, query), []
+            name, data = constants.VARIABLES_NAME.get(query, query), []
             # Initiate data for the first load
             if typ == 'thermocline_grid':
                 temp_grid, arr = project_cache.get("grid"), data_ds[name].values

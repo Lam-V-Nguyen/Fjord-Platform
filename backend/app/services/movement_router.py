@@ -7,8 +7,8 @@ from config import PROJECT_ROOT
 import numpy as np
 
 router = APIRouter()
-MOVEMENT_CACHE, CACHE, _CACHE_LOCKS = {}, {"Cache-Control": "public, max-age=86400"}, {}
 
+MOVEMENT_CACHE, CACHE, _CACHE_LOCKS = {}, {"Cache-Control": "public, max-age=86400"}, {}
 
 def _cache_lock_for(project_name):
     return _CACHE_LOCKS.setdefault(project_name, asyncio.Lock())
@@ -49,10 +49,8 @@ def _n_layers(map_path):
     """Số lớp sigma của HYD map (chiều nLayers / laydim), như dashboard."""
     import xarray as xr
     ds = xr.open_zarr(map_path) if map_path.lower().endswith(".zarr") or os.path.isdir(map_path) else xr.open_dataset(map_path)
-    try:
-        return next((int(n) for d, n in ds.sizes.items() if "nLayers" in d or d == "laydim"), 1)
-    finally:
-        ds.close()
+    try: return next((int(n) for d, n in ds.sizes.items() if "nLayers" in d or d == "laydim"), 1)
+    finally: ds.close()
 
 def _layer_for_file(layer, map_path):
     """Khoá lớp của menu (layers_hyd.json: "-1" = Average, k = thứ tự TỪ MẶT XUỐNG) -> giá trị cho
@@ -90,24 +88,19 @@ def _load_movement_cache(project_name, paths):
         if frames.ndim != 3:
             raise ValueError(f"frames.npy must have shape (T, 3, Nv); got {frames.shape}")
         T, C, NV = frames.shape
-        if C != 3:
-            raise ValueError(f"Expected 3 channels (u, v, depth); got {C}")
-        if mask.ndim != 2:
-            raise ValueError(f"mask.npy must be 2D; got shape {mask.shape}")
+        if C != 3: raise ValueError(f"Expected 3 channels (u, v, depth); got {C}")
+        if mask.ndim != 2: raise ValueError(f"mask.npy must be 2D; got shape {mask.shape}")
         NY, NX = mask.shape
         flat = np.flatnonzero(mask.ravel())
-        if flat.size != NV:
-            raise ValueError("mask.npy and frames.npy mismatch. Rebuild data.")
+        if flat.size != NV: raise ValueError("mask.npy and frames.npy mismatch. Rebuild data.")
         if T != len(meta.get("times", [])):
             raise ValueError("Frame count and meta.json times do not match. Rebuild data.")
-        idx_map = np.full(NY * NX, -1, dtype=np.int64)
-        idx_map[flat] = np.arange(NV)
+        idx_map = np.full(NY * NX, -1, dtype=np.int64); idx_map[flat] = np.arange(NV)
         cache = {
             "FRAMES": frames, "MASK": mask, "IDX": idx_map, "T": T, "C": C,
             "NV": NV, "NY": NY, "NX": NX, "NODATA": meta.get("nodata"), "META": meta,
         }
-        MOVEMENT_CACHE[project_name] = cache
-        frames = None
+        MOVEMENT_CACHE[project_name] = cache; frames = None
         return cache
     finally:
         if frames is not None:
@@ -121,10 +114,7 @@ async def close_movement(request: Request, user=Depends(functions.basic_auth)):
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         _close_movement_cache(project_name)
         return JSONResponse({'status': 'ok'})
-    except Exception as e:
-        print('/close_movement:\n==============')
-        traceback.print_exc()
-        return JSONResponse({'status': 'error', 'message': f"Error: {e}"})
+    except Exception as e: functions.error('/close_movement', e)
 
 @router.post("/init_movement")
 async def init_movement(request: Request, user=Depends(functions.basic_auth)):
@@ -132,12 +122,9 @@ async def init_movement(request: Request, user=Depends(functions.basic_auth)):
     try:
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         paths = _movement_paths(project_name, body)
-        meta_path = paths["meta_path"]
-        polygon_path = paths["polygon_path"]
-        frame_path = paths["frame_path"]
-        mask_path = paths["mask_path"]
-        resolution = paths["resolution"]
-        force = paths["force"]
+        meta_path, polygon_path = paths["meta_path"], paths["polygon_path"]
+        frame_path, mask_path = paths["frame_path"], paths["mask_path"]
+        resolution, force = paths["resolution"], paths["force"]
         map_path = await run_in_threadpool(_hyd_map_path, project_name, body)
         layer = await run_in_threadpool(_layer_for_file, paths["layer"], map_path)
         async with _cache_lock_for(project_name):
@@ -194,8 +181,7 @@ async def point_movement(project_name: str = Query(alias="projectName"),
             pdata = MOVEMENT_CACHE.get(project_name)
             if pdata is None: 
                 return JSONResponse(status_code=404, content={"status": "error", "message": f"Movement data not initialized for project: {project_name}"})
-            meta, nodata = pdata["META"], pdata["NODATA"]
-            nx, ny = pdata["NX"], pdata["NY"]
+            meta, nodata = pdata["META"], pdata["NODATA"]; nx, ny = pdata["NX"], pdata["NY"]
             if not math.isfinite(lat) or not math.isfinite(lon):
                 return JSONResponse(status_code=200, content={ "status": "error", "message": "Coordinates are invalid."})
             ix = int(math.floor((lon - meta["lon0"]) / meta["dlon"] + 0.5))
@@ -205,8 +191,7 @@ async def point_movement(project_name: str = Query(alias="projectName"),
             j = int(pdata["IDX"][iy * nx + ix])
             if j < 0: return JSONResponse(content={"status": "error", "message": "Point is outside of the area. Select another point inside the boundary."})
             cell = np.asarray(pdata["FRAMES"][:, :, j], dtype=np.float32)
-            dry = cell[:, 0] == nodata
-            scale = meta["scale"]
+            dry = cell[:, 0] == nodata; scale = meta["scale"]
             u, v = cell[:, 0] * scale["u"], cell[:, 1] * scale["v"]
             speed, depth = np.hypot(u, v), cell[:, 2] * scale["depth"]
             direction = (np.degrees(np.arctan2(u, v)) + 360) % 360

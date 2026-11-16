@@ -89,8 +89,8 @@
                                     <label for="hyd-source-terrain-resolution">Resolution:</label>
                                     <select id="hyd-source-terrain-resolution">
                                         <option value="1">1 m</option>
-                                        <option value="5" selected>5 m</option>
-                                        <option value="10">10 m</option>
+                                        <option value="5">5 m</option>
+                                        <option value="10" selected>10 m</option>
                                         <option value="20">20 m</option>
                                         <option value="50">50 m</option>
                                         <option value="100">100 m</option>
@@ -172,10 +172,12 @@
                                 <div class="field-inline" id="hyd-meteo-station-container">
                                     <label for="hyd-meteo-station">Source:</label>
                                     <select id="hyd-meteo-station" style="width: 100%;">
-                                        <option value="era5" selected>Climate Data Store - ERA5</option>
+                                        <option value="" selected>--- Please select---</option>
+                                        <option value="open-meteo">Open-Meteo - Historical API (non-commercial)</option>
+                                        <option value="era5">Climate Data Store - ERA5</option>
                                     </select>
                                 </div>
-                                <div class="field-row">
+                                <div class="field-row" id="era5-meteo-container" style="display: none;">
                                     <label for="era5-meteo-id">ERA5 API Key:</label>
                                     <div class="input-with-icon">
                                         <input type="password" id="era5-meteo-id">
@@ -198,24 +200,21 @@
                         </div>
                         <div class="tile" style="grid-column: span 6;">
                             <div class="row"><h3 style="margin-top: 0;">Attribute Table</h3>
-                                <button type="button" id="meteo-save-btn" style="margin-top: -20px; max-width: 200px;">Save Meteo Data</button>
-                                <table class="attributes-table" id="meteo-table" style="margin-top: -15px; display: none;">
+                                <button type="button" id="meteo-save-btn" style="margin-top: -20px; max-width: 200px; display: none;">Save Meteo Data</button>
+                                <table class="attributes-table" id="meteo-table" style="margin-top: -15px;">
                                     <thead><tr>
-                                        <th>Time</th><th>Humidity (%)</th><th>Air Temperature (°C)</th>
-                                        <th>Cloud Coverage (%)</th><th>Solar Radiation (W/m²)</th>
+                                        <th>Time</th><th>Relative Humidity (%)</th><th>Air Temperature (°C)</th><th>Cloud Coverage (%)</th>
                                     </tr></thead>
                                     <tbody><tr>
                                         <td><input type="text" placeholder="YYYY-MM-DD HH:MM:SS"></td>
-                                        <td><input type="text" placeholder="Humidity"></td>
+                                        <td><input type="text" placeholder="Relative humidity"></td>
                                         <td><input type="text" placeholder="Air temperature"></td>
                                         <td><input type="text" placeholder="Cloud coverage"></td>
-                                        <td><input type="text" placeholder="Solar radiation"></td>
                                     </tr></tbody>
                                 </table>
-                                <div class="log-container" id="meteo-log-container" style="height: 260px; margin-top: -20px;">
+                                <div class="log-container" id="meteo-log-container" style="height: 260px; margin-top: -20px; display: none;">
                                     <textarea wrap="off" class="log-text" id="meteo-log-text" placeholder="Logs..." readonly></textarea>
                                 </div>
-
                             </div>
                         </div>
                     </div>
@@ -233,11 +232,13 @@
                                 <div class="field-inline">
                                     <label for="hyd-weather-station">Source:</label>
                                     <select id="hyd-weather-station" style="width: 100%;">
-                                        <option value="nve-gts" selected>GridTimeSeries - NVE</option>
+                                        <option value="" selected>--- Please select---</option>
+                                        <option value="open-meteo">Open-Meteo - Historical API (non-commercial)</option>
+                                        <option value="nve-gts">GridTimeSeries - NVE</option>
                                         <option value="era5">Climate Data Store - ERA5</option>
                                     </select>
                                 </div>
-                                <div class="field-row" id="gts-container">
+                                <div class="field-row" id="gts-container" style="display: none;">
                                     <label for="gts-weather-id">NVE API Key:</label>
                                     <div class="input-with-icon">
                                         <input type="password" id="gts-weather-id">
@@ -262,8 +263,7 @@
                                     <a class="data-link" href="https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download"
                                         target="_blank">ERA5,
                                     </a>
-                                    <a class="data-link" href="https://api.nve.no/doc/gridtimeseries-data-gts/#gridtimeseries"
-                                        target="_blank">GridTimeSeries
+                                    <a class="data-link" href="https://api.nve.no/doc/gridtimeseries-data-gts/#gridtimeseries" target="_blank">GridTimeSeries
                                     </a>
                                 </div>
                             </div>
@@ -274,7 +274,7 @@
                         <div class="tile" style="grid-column: span 3;">
                             <div class="row"><h3>Attribute Table</h3>
                                 <button type="button" id="weather-save-btn"
-                                    style="margin-top: -20px; max-width: 180px;">Save Weather Data</button>
+                                    style="margin-top: -20px; max-width: 180px; display: none;">Save Weather Data</button>
                             </div>
                             <table class="attributes-table" id="weather-table">
                                 <thead><tr><th>Time</th><th>Wind Speed (m/s)</th><th>Wind Direction (°)</th></tr></thead>

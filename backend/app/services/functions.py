@@ -19,12 +19,12 @@ from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Sequence, overload
 
-
 _SKIP_PREFIXES = ("posix/", "right/", "SystemV/", "US/", "Etc/")
 _SKIP_EXACT = {
     "Factory", "localtime", "GMT", "GMT+0", "GMT-0", "GMT0",
     "Greenwich", "Universal", "UCT", "Zulu",
 }
+
 @lru_cache(maxsize=1)
 def _all_timezones() -> list[str]:
     return [
@@ -33,7 +33,7 @@ def _all_timezones() -> list[str]:
     ]
 _ALL_TZ = sorted(_all_timezones())
 
-variablesNames, units = constants.variablesNames, constants.units
+variablesNames, units = constants.VARIABLES_NAME, constants.UNITS
 
 def error(where: str, e: Exception, code: int = 500):
     print(f"{where}:\n==============")

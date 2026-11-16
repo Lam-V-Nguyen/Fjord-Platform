@@ -1,4 +1,4 @@
-import os, json, re, traceback, asyncio, shutil
+import os, json, re, asyncio, shutil
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from services import functions, wq_functions
@@ -176,8 +176,7 @@ async def wq_time(request: Request):
             gr_substance = [x[0][0] for x in group.groupby(['substance'])]
             subs = ' '.join(f"'{x}'" for x in gr_substance)
             temp = ["DATA_ITEM", name[0], "CONCENTRATIONS",
-                f"INCLUDE 'includes_deltashell\\load_data_tables\\{folder}.usefors'",
-                "TIME LINEAR DATA", subs]
+                f"INCLUDE 'includes_deltashell\\load_data_tables\\{folder}.usefors'", "TIME LINEAR DATA", subs]
             # Assign data
             temp_df = pd.DataFrame()
             for item in gr_substance:
@@ -194,10 +193,8 @@ async def wq_time(request: Request):
             else: idx = idx.tz_convert('UTC')
             temp_df.index = idx.strftime('%Y/%m/%d-%H:%M:%S')
             temp_df.reset_index(inplace=True)
-            lst = temp_df.astype(str).values.tolist() # Convert to string
-            lst = [' '.join(x) for x in lst]
-            temp += lst
-            result.append('\n'.join(temp))
+            lst = temp_df.astype(str).values.tolist()
+            lst = [' '.join(x) for x in lst]; temp += lst; result.append('\n'.join(temp))
         return JSONResponse({"status": 'ok',"content": '\n\n\n'.join(result), "tos": gr_substance})
     except Exception as e: functions.error('/wq_time_to_waq', e)
 

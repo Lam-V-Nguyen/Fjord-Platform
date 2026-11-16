@@ -100,6 +100,10 @@
                             <label class="checkbox-item">
                                 <input type="checkbox" id="delete-checkbox"><span>Delete Vertices</span>
                             </label>
+                        </div>
+                    </div>
+                    <div class="tabpanel main-panel" data-panel="grid-generation-tab">
+                        <div class="single-line">
                             <div class="checkbox-item">
                                 <label for="scale-factor">Mode (and Level)</label>
                                 <select id="scale-factor">
@@ -107,12 +111,8 @@
                                     <option value="custom">Custom</option>
                                 </select>
                                 <input type="number" style="width: 100px; text-align: center; margin-left: 10px;"
-                                    id="custom-scale-factor" placeholder="Scale" step="0.1" value="1.0" hidden>
+                                    id="custom-scale-factor" placeholder="Scale" step="0.1" value="10.0" hidden>
                             </div>
-                        </div>
-                    </div>
-                    <div class="tabpanel main-panel" data-panel="grid-generation-tab">
-                        <div class="single-line">
                             <button class="button-grid" id="generate-grid">Generate Grid</button>
                             <label class="checkbox-item">
                                 <input type="checkbox" id="orthogonality-checkbox"><span>Orthogonality</span>

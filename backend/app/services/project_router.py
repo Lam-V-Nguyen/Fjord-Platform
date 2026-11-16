@@ -5,9 +5,7 @@ from config import PROJECT_ROOT
 from services import functions, grid_functions
 import numpy as np, xarray as xr
 
-
 router = APIRouter()
-
 
 @router.post("/auth_check")
 async def auth_check(user=Depends(functions.basic_auth)):
@@ -34,9 +32,9 @@ async def reset_config(request: Request, user=Depends(functions.basic_auth)):
             if not os.path.exists(folder): return JSONResponse({"message": "Project folder doesn't exist."})
             config_dir = os.path.normpath(os.path.join(folder, "output", "config"))
             if not os.path.exists(config_dir): return JSONResponse({"message": "Configuration folder doesn't exist."})
-            shutil.rmtree(config_dir, onerror=functions.remove_readonly)
+            shutil.rmtree(config_dir, onexc=functions.remove_readonly)
             movement_dir = os.path.normpath(os.path.join(folder, "output", "movement"))
-            if os.path.exists(movement_dir): shutil.rmtree(movement_dir, onerror=functions.remove_readonly)
+            if os.path.exists(movement_dir): shutil.rmtree(movement_dir, onexc=functions.remove_readonly)
             # Delete config in Redis
             await redis.hdel(project_name, "config", "layer_reverse_hyd", "layer_reverse_waq")
             return JSONResponse({"status": "ok", "message": "Configuration reset successfully!"})
@@ -327,8 +325,7 @@ async def get_config_files(request: Request):
     original_project, warning = project, None
     try: result = functions.project_reader(user_name, project)
     except:
-        project = 'demo'
-        traceback.print_exc()
+        project = 'demo'; traceback.print_exc()
         # Store warning for frontend
         warning = (
             f"Project '{original_project}' does not contain enough HYD configuration files." + 

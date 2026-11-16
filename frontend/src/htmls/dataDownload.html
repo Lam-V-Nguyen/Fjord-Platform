@@ -18,6 +18,7 @@
                     <button class="tab-btn" data-tab="nve-tab">NVE</button>
                     <button class="tab-btn" data-tab="regnbyge-tab">Regnbyge.no</button>
                     <button class="tab-btn" data-tab="era5-tab">Climate Data Store (ERA5)</button>
+                    <button class="tab-btn" data-tab="other-tab">Other Sources - No API</button>
                 </div>
             </div>
             <div class="tabs-content">
@@ -164,7 +165,7 @@
                         </div>
                         <div class="tabpanel" data-panel="met-tab-4">
                             <div class="grid">
-                                <div class="tile" style="grid-column: span 12;">
+                                <div class="tile" style="grid-column: span 8;">
                                     <div class="row">
                                         <div class="field-inline">
                                             <button type="button" id="met-download-btn"
@@ -172,7 +173,7 @@
                                             <button type="button" id="met-save-btn"
                                                 style="max-width: 150px; display: none;">Save</button>
                                         </div>
-                                        <table class="attributes-table" id="met-table" style="display: none;">
+                                        <table class="attributes-table" id="met-table" style="display: none; margin-top: -10px;">
                                             <thead></thead><tbody></tbody>
                                         </table>
                                         <div class="log-container" id="met-log-container">
@@ -243,7 +244,11 @@
                                         <a style="margin-top: 0; font-size: 14px;">References:</a>
                                         <a class="data-link" style="font-size: 14px; color: aqua;"
                                             href="https://api.nve.no/doc/hydrologiske-data/"
-                                            target="_blank">Hydrologiske data
+                                            target="_blank">Hydrologiske data,
+                                        </a>
+                                        <a class="data-link" style="font-size: 14px; color: aqua;"
+                                            href="https://hydapi.nve.no/UserDocumentation"
+                                            target="_blank">NVE HydAPI – API documentation
                                         </a>
                                     </div>
                                 </div>
@@ -286,7 +291,7 @@
                                             <label for="nve-download-interval">Interval:</label>
                                             <select id="nve-download-interval">
                                                 <option value="0">Raw Data</option>
-                                                <option value="60">Hourly Data</option>
+                                                <option value="60" selected>Hourly Data</option>
                                                 <option value="1440">Daily Data</option>
                                             </select>
                                         </div>
@@ -347,7 +352,7 @@
                                             <button type="button" id="nve-download-btn" style="max-width: 150px;">Download</button>
                                             <button type="button" id="nve-save-btn" style="max-width: 150px; display: none;">Save</button>
                                         </div>
-                                        <table class="attributes-table" id="nve-table" style="display: none;">
+                                        <table class="attributes-table" id="nve-table" style="display: none; margin-top: -10px;">
                                             <thead></thead><tbody></tbody>
                                         </table>
                                         <div class="log-container" id="nve-log-container">
@@ -552,13 +557,13 @@
                 </div>
                 <!-- ERA5 -->
                 <div class="tabpanel main-panel" data-panel="era5-tab">
+                    <h3 style="text-align: center;">
+                        The data is sourced through the official
+                        <a href="https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=overview"
+                            target="_blank" rel="noopener noreferrer" style="color: aqua;">Climate Data Store</a> website
+                    </h3>
                     <!-- Sub Tabs -->
                     <div class="main-tab sub-tab">
-                        <h3 style="text-align: center;">
-                            The data is sourced through the official
-                            <a href="https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=overview"
-                                target="_blank" rel="noopener noreferrer" style="color: aqua;">Climate Data Store</a> website
-                        </h3>
                         <div class="tab-header">
                             <div class="tabs-list">
                                 <button class="tab-btn" data-tab="era5-tab-1">Login</button>
@@ -569,7 +574,7 @@
                         <div class="tabs-content">
                             <div class="tabpanel" data-panel="era5-tab-1">
                                 <div class="grid">
-                                    <div class="tile" style="grid-column: span 2;"><h3>Registration</h3>
+                                    <div class="tile" style="grid-column: span 3;"><h3>Registration</h3>
                                         <div class="row">
                                             <div class="field-inline" style="flex-direction: column;">
                                                 <div class="field-row">
@@ -636,7 +641,7 @@
                                             </label>
                                             <label class="checkbox-right">
                                                 <input type="checkbox" value="mean_sea_level_pressure"
-                                                    data-label="Mean Sea Level Pressure (Pa)" checked>Mean Sea Level Pressure (Pa)
+                                                    data-label="Mean Sea Level Pressure (hPa)" checked>Mean Sea Level Pressure (hPa)
                                             </label>
                                             <label class="checkbox-right">
                                                 <input type="checkbox" value="total_cloud_cover"
@@ -644,7 +649,7 @@
                                             </label>
                                             <label class="checkbox-right" style="color: yellow; font-weight: bold;">
                                                 <input type="checkbox" value="wind_speed" id="wind-speed-checkbox"
-                                                    data-label="Total Wind" checked>Compute Wind Speed (m/s) & Direction (°)
+                                                    data-label="Total Wind" checked>Compute Wind Speed (m/s) & Wind Direction (°)
                                             </label>
                                         </div>
                                     </div>
@@ -673,6 +678,108 @@
                             </div>
                         </div>
                     </div>
+                </div>
+                <!-- Other -->
+                <div class="tabpanel main-panel" data-panel="other-tab">
+                    <!-- Sub Tabs -->
+                    <div class="main-tab sub-tab">
+                        <div class="tab-header">
+                            <div class="tabs-list">
+                                <button class="tab-btn" data-tab="other-tab-1">Download Settings</button>
+                                <button class="tab-btn" data-tab="other-tab-2">Download Data</button>
+                            </div>
+                        </div>
+                        <div class="tabs-content">
+                            <div class="tabpanel" data-panel="other-tab-1">
+                                <div class="grid">
+                                    <div class="tile" style="grid-column: span 3;"><h3>Location & Period</h3>
+                                        <div class="row">
+                                            <div class="field-inline">
+                                                <input type="text" id="other-latitude" placeholder="Avg. Latitude (°)">
+                                                <input type="text" id="other-longitude" placeholder="Avg. Longitude (°)">
+                                                <button type="button" id="other-location-btn">Pick</button>
+                                            </div>
+                                            <div class="field-inline">
+                                                <label for="other-weather-source">Source:</label>
+                                                <select id="other-weather-source" style="width: 100%;">
+                                                    <option value="" selected>--- Please select---</option>
+                                                    <option value="met-nordic">MET Norway - MET Nordic (1 km, Nordic countries)</option>
+                                                    <option value="open-meteo">Open-Meteo - Historical API (non-commercial)</option>
+                                                </select>
+                                            </div>
+                                            <p class="init-hint" id="weather-source-note" style="display: none;"></p>
+                                            <div class="field-inline">
+                                                <label for="other-start">Start:</label>
+                                                <input type="text" class="datetime" id="other-start" placeholder="YYYY-mm-dd HH:mm:ss">
+                                                <label for="other-end">End:</label>
+                                                <input type="text" class="datetime" id="other-end" placeholder="YYYY-mm-dd HH:mm:ss">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="tile" style="grid-column: span 5;"><h3>Variables</h3>
+                                        <div class="variables-grid" id="other-variables-grid">
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="2m_temperature"
+                                                    data-label="Temperature (at 2m) (°C)" checked>Air Temperature (at 2m) (°C)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="total_precipitation"
+                                                    data-label="Total Precipitation (mm)" checked>Total Precipitation (mm)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="wind_speed_10m"
+                                                    data-label="Wind Speed (at 10m) (m/s)" checked>Wind Speed (at 10m) (m/s)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="wind_direction_10m"
+                                                    data-label="Wind Direction (at 10m) (°)" checked>Wind Direction (at 10m) (°)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="surface_solar_radiation_downwards"
+                                                    data-label="Surface Solar Radiation Downwards (W/m²)" checked>Surface Solar Radiation Downwards (W/m²)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="toa_incident_solar_radiation"
+                                                    data-label="TOA Incident Solar Radiation (W/m²)" checked>Top of Atmosphere (TOA) Incident Solar Radiation (W/m²)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="mean_sea_level_pressure"
+                                                    data-label="Mean Sea Level Pressure (hPa)" checked>Mean Sea Level Pressure (hPa)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="total_cloud_cover"
+                                                    data-label="Total Cloud Cover (%)" checked>Total Cloud Cover (%)
+                                            </label>
+                                            <label class="checkbox-right">
+                                                <input type="checkbox" value="relative_humidity_2m"
+                                                    data-label="Relative Humidity (%)" checked>Relative Humidity (at 2m) (%)
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tabpanel" data-panel="other-tab-2">
+                                <div class="grid">
+                                    <div class="tile" style="grid-column: span 12;">
+                                        <div class="row">
+                                            <div class="field-inline" style="margin-top: -10px;">
+                                                <button type="button" id="other-download-btn" style="max-width: 150px;">Download</button>
+                                                <button type="button" id="other-cancel-btn" style="max-width: 150px; display: none;">Cancel</button>
+                                                <button type="button" id="other-save-btn" style="max-width: 150px; display: none;">Save</button>
+                                            </div>
+                                            <table class="attributes-table" id="other-table" style="display: none; margin-top: -10px;">
+                                                <thead></thead><tbody></tbody>
+                                            </table>
+                                            <div class="log-container" id="other-log-container">
+                                                <textarea wrap="off" class="log-text" id="other-log-text" placeholder="Logs..." readonly></textarea>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </div>
         </section>

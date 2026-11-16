@@ -13,13 +13,13 @@ from shapely.ops import linemerge
 from shapely import force_2d
 from pyflwdir import dem
 from skimage.morphology import skeletonize
-from services import functions, flow_functions, data_functions, flow_connection
+from services import functions, flow_functions, data_functions, flow_connection, constants
 from contextlib import suppress
 
 router, process_lock = APIRouter(), threading.Lock()
+
 _META, _LOCKS = {}, {}
 NO_STORE = {"Cache-Control": "no-cache"}
-
 
 @router.post("/flow_project")
 async def flow_project(request: Request, user=Depends(functions.basic_auth)):
@@ -46,13 +46,13 @@ async def flow_project(request: Request, user=Depends(functions.basic_auth)):
                 for soil in soils:
                     soil_type, soil_depth = soil.split('.')[0].split('_')
                     temp = [
-                        flow_functions.soil_type_reverse[soil_type], flow_functions.soil_depth_reverse[soil_depth]
+                        constants.SOIL_REVERSE[soil_type], constants.SOIL_DEPTH_REVERSE[soil_depth]
                     ]
                     soil_dict.append({'value': soil.removesuffix('.tif'), 'label': (' - ').join(temp)})
                 soil_dict.append({'value': 'soilthickness', 'label': 'soilthickness'})
                 content['soil'] = soil_dict
         else: content['soil'] = []
-        forcing_path = os.path.normpath(os.path.join(flow_dir, 'forcing', 'forcing.json'))
+        forcing_path = os.path.normpath(os.path.join(flow_dir, 'forcing', 'weather_forcing.json'))
         try:
             with open(forcing_path) as f:
                 forcing = json.load(f)
@@ -75,7 +75,7 @@ async def delete_project_flow(request: Request, user=Depends(functions.basic_aut
             extend_task = asyncio.create_task(functions.auto_extend(lock))
             if not os.path.exists(flow_dir): 
                 return JSONResponse({"status": 'error', "message": f"Project '{project_name}' does not exist."})
-            shutil.rmtree(flow_dir, onerror=functions.remove_readonly)
+            shutil.rmtree(flow_dir, onexc=functions.remove_readonly)
             if hasattr(request.app.state, "project_cache"): request.app.state.project_cache.pop(project_name, None)
             return JSONResponse({"status": "ok", "message": f"Project '{flow_name}' was deleted successfully."})
     except Exception as e: functions.error('/delete_project_flow', e)
@@ -216,7 +216,7 @@ async def data_upload(request: Request, user=Depends(functions.basic_auth)):
         body = await request.json()
         status, key, content = 'ok', body.get('key'), None
         if key == "soil":
-            soil_type, soil_depth, content = flow_functions.soils[0], flow_functions.soils[1], []
+            soil_type, soil_depth, content = constants.SOILS[0], constants.SOILS[1], []
             for soil in soil_type:
                 for depth in soil_depth:
                     content.append([soil, depth, 'cm'])
@@ -334,10 +334,7 @@ async def check_soil(request: Request, user=Depends(functions.basic_auth)):
         files = [f for f in os.listdir(directory) if f.endswith('.tif') and f != 'soilthickness.tif']
         for file in files:
             soil_type, soil_depth = file.split('.')[0].split('_')
-            temp = [
-                flow_functions.soil_type_reverse[soil_type],
-                flow_functions.soil_depth_reverse[soil_depth]
-            ]
+            temp = [constants.SOIL_REVERSE[soil_type], constants.SOIL_DEPTH_REVERSE[soil_depth]]
             content.append({'value': file.removesuffix('.tif'), 'label': (' - ').join(temp)})
         content.append({'value': 'soilthickness', 'label': 'soilthickness'})
         if len(content) != 43: 
@@ -351,19 +348,26 @@ async def soil_upload(request: Request, user=Depends(functions.basic_auth)):
         body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name, layer = body.get('flowName'), body.get('layerName')
+        if not flow_name or not layer:
+            return JSONResponse({'status': 'error', 'message': 'Missing scenario or layer name.'})
         file_name = f"flows/{flow_name}/soil/{layer}.tif"
-        soil_path = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, file_name))
-        with xr.open_dataset(soil_path, engine="rasterio") as ds:
-            var_name = list(ds.data_vars)[0]
-            soil = ds[var_name].squeeze(drop=True)
-            nodata = ds.rio.nodata
-            valid = soil.where(soil != nodata)
-            min, max = int(valid.min()), int(valid.max())
+        project_root = os.path.abspath(os.path.join(PROJECT_ROOT, project_name))
+        soil_path = os.path.normpath(os.path.join(project_root, file_name))
+        if os.path.commonpath([project_root, soil_path]) != project_root:
+            return JSONResponse({'status': 'error', 'message': 'Invalid layer path.'})
+        if not os.path.exists(soil_path):
+            return JSONResponse({'status': 'error', 'message': f"Soil layer '{layer}' not found. Download soil data first."})
         with rasterio.open(soil_path) as src:
+            data = src.read(1, masked=True)
+            values = data.compressed()
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                return JSONResponse({'status': 'error', 'message': f"Soil layer '{layer}' has no valid values."})
+            vmin, vmax = float(values.min()), float(values.max())
             west, south, east, north = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
         bounds = [[south, west], [north, east]]
         tile_url = f"/{project_name}/{file_name}/{{z}}/{{x}}/{{y}}.png"
-        contents = {"tile_url": tile_url, "bounds": bounds, "min_max": [min, max]}
+        contents = {"tile_url": tile_url, "bounds": bounds, "min_max": [vmin, vmax]}
         return JSONResponse({'status': 'ok', 'content': contents})
     except Exception as e: functions.error('/soil_upload', e)
 
@@ -417,7 +421,7 @@ async def river_upload(file: UploadFile = File(...), key: str = Form(...), thres
             width_col, depth_col = columns['width'], columns['depth']
             gdf = gdf.rename(columns={width_col: 'Width', depth_col: 'Depth'})
             gdf = gdf[['Width', 'Depth', 'geometry']]
-        # functions.safe_remove(river_path)
+        functions.safe_remove(river_path)
         if gdf is None: return JSONResponse({'status': 'error', 'message': 'Unsupported file format.'}, status_code=400)
         if gdf.empty: 
             message = "No river is detected.\nPlease check the input vector."
@@ -572,8 +576,7 @@ def wflow_water(project_name: str = Query(alias="projectName"), flow_name: str =
     if path is None:
         return JSONResponse(status_code=404, content={"status": "error", "message": "No water area in this scenario."})
     try:
-        gdf = gpd.read_file(path)
-        gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
+        gdf = gpd.read_file(path); gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
         gdf = gdf.set_crs(4326) if gdf.crs is None else gdf.to_crs(4326)
         (south, west), (north, east) = meta["grid"]["bounds"]
         gdf = gpd.clip(gdf[["geometry"]], box(west, south, east, north))

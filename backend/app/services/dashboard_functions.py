@@ -22,12 +22,11 @@ from functools import lru_cache
 import numpy as np, pandas as pd
 from config import PROJECT_ROOT, SOURCE_BACKEND
 from services.dashboard_results import ProjectResults, select_layer, time_dim, station_dim, _decode
+from services import constants
 
 SAMPLE_DIR = os.path.normpath(os.path.join(SOURCE_BACKEND, "samples"))
 FLOW_SAMPLE_DIR = os.path.normpath(os.path.join(SOURCE_BACKEND, "flow_samples"))
 THRESHOLD_PATH = os.path.normpath(os.path.join(SOURCE_BACKEND, "dashboard_thresholds.json"))
-SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
-PERIODS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90, "all": None}
 
 # Helpers
 def _layer_values(da, source, layer):
@@ -100,7 +99,7 @@ def resolve_window(times: pd.DatetimeIndex, end: str | None, period: str | None)
     except Exception: end_ts = t1
     if len(str(end or "")) == 10: end_ts = end_ts + pd.Timedelta(hours=23, minutes=59)
     end_ts = min(max(end_ts, t0), t1)
-    days = PERIODS.get(period or "7d", 7)
+    days = constants.PERIODS.get(period or "7d", 7)
     start_ts = t0 - pd.Timedelta(seconds=1) if days is None else max(t0 - pd.Timedelta(seconds=1), end_ts - pd.Timedelta(days=days))
     span = (end_ts - start_ts).total_seconds() / 86400
     return start_ts, end_ts, round(span, 1)
@@ -134,12 +133,13 @@ def project_inventory(project_name: str) -> dict:
     grid_files = glob.glob(os.path.join(pdir, "**", "*_net.nc"), recursive=True)
     stamps = [t for t in (_mtime(os.path.join(hyd_dir, f)) for f in hyd_his + hyd_map) if t]
     stamps += [t for t in (_mtime(os.path.join(waq_dir, f)) for f in waq_his) if t]
+    calibration_checked = os.path.isdir(os.path.join(out, "calibration"))
     pipeline = [
         {"key": "data", "label": "Input data", "done": n_inputs > 0, "tool": "preparation-hyd"},
         {"key": "grid", "label": "Grid", "done": len(grid_files) > 0 or len(hyd_map) > 0, "tool": "grid-generation"},
         {"key": "hyd", "label": "HYD run", "done": len(hyd_his) > 0, "tool": "run-hyd"},
         {"key": "waq", "label": "WAQ run", "done": len(waq_his) > 0, "tool": "run-waq"},
-        {"key": "calibration", "label": "Calibration", "done": os.path.isdir(os.path.join(out, "calibration")), "tool": "calibration"},
+        {"key": "calibration", "label": "Calibration", "done": calibration_checked, "tool": "calibration"},
     ]
     return {
         "exists": os.path.isdir(pdir),
@@ -281,7 +281,7 @@ def water_quality_index(checks: list[dict]) -> dict:
     worst: dict[str, dict] = {}
     for c in checks:
         if c["severity"] not in factor or not c.get("weight"): continue
-        if c["key"] not in worst or SEVERITY_ORDER[c["severity"]] < SEVERITY_ORDER[worst[c["key"]]["severity"]]:
+        if c["key"] not in worst or constants.SEVERITY_ORDER[c["severity"]] < constants.SEVERITY_ORDER[worst[c["key"]]["severity"]]:
             worst[c["key"]] = c
     if not worst: return {"score": None, "label": "No WAQ data"}
     total_w = sum(c["weight"] for c in worst.values()) or 1
@@ -350,7 +350,7 @@ def summarize(project_name: str, end: str | None, period: str | None) -> dict:
          "severity": "high" if risk["level"] == "High" else "medium" if "Moderate" in risk["level"] else "low"},
     ]
     quality = sorted([c for c in checks if c.get("ratio") is not None],
-        key=lambda c: (SEVERITY_ORDER[c["severity"]], -(c["ratio"] or 0))
+        key=lambda c: (constants.SEVERITY_ORDER[c["severity"]], -(c["ratio"] or 0))
     )
     critical = [c for c in quality if c["source"] == "waq"][:2]
     gauges = {
@@ -364,12 +364,12 @@ def summarize(project_name: str, end: str | None, period: str | None) -> dict:
     waq_label = info["waq"]["scenario"] or "no WAQ"
     return {
         **base, "mode": "simulation",
-        "data_source": f"HYD {hyd_label} · WAQ {waq_label}" + (" (synthetic)" if info["waq"].get("synthetic") else ""),
+        "data_source": f"HYD: {hyd_label} · WAQ: {waq_label}" + (" (synthetic)" if info["waq"].get("synthetic") else ""),
         "window": {"start": _iso(start), "end": _iso(end_ts), "days": days, "period": period or "7d"},
         "range": {"start": _iso(times[0]) if len(times) else None, "end": _iso(times[-1]) if len(times) else None},
         "kpis": kpis, "gauges": gauges, "stats": stats,
         "contributions": pr.source_discharge(start, end_ts) if pr.has_hyd else [], "quality": quality,
-        "checks": sorted(checks, key=lambda c: (SEVERITY_ORDER.get(c["severity"], 9), c["label"])),
+        "checks": sorted(checks, key=lambda c: (constants.SEVERITY_ORDER.get(c["severity"], 9), c["label"])),
         "risk_distribution": {sev: sum(c["severity"] == sev for c in checks) for sev in ("high", "medium", "low")},
     }
 
@@ -383,7 +383,7 @@ def alerts_from_checks(checks: list[dict], limit: int = 20) -> list[dict]:
             "category": c["category"], "location": c.get("location"), "time": c.get("time"),
             "detail": c.get("detail"), "scenario": c.get("scenario"), "key": c["key"], "source": c["source"],
         })
-    alerts.sort(key=lambda a: (SEVERITY_ORDER[a["severity"]], -(pd.Timestamp(a["time"]).value if a["time"] else 0)))
+    alerts.sort(key=lambda a: (constants.SEVERITY_ORDER[a["severity"]], -(pd.Timestamp(a["time"]).value if a["time"] else 0)))
     return alerts[:limit]
 
 # Context map layers (boundary, catchment, river, sample depth, project GIS)

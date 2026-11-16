@@ -147,7 +147,7 @@ function modelManager() {
             const params_out = Object.fromEntries(outputs.map(o => [o.id, o.checked]));
             const content = { 
                 projectName: currentProject, flowName: name, key: 'run', 
-                start: start, end: end, timeZone: getLastTimeZone(), 
+                start: start, end: end, timeZone: getLastTimeZone(), logFile: logFile,
                 keyChecker: keyChecker, step: obj.modelInterval.value, lat: lat, lon: lon, 
                 params_input: params_in, params_output: params_out
             };
