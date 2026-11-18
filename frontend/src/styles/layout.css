@@ -10,7 +10,7 @@
 /* ------------------------------------------------------------ Sidebar */
 .sidebar {
     background: linear-gradient(180deg, #0a1322 0%, #08101d 100%);
-    border-right: 1px solid var(--border);
+    border-right: 1px solid var(--border); position: relative;
     display: flex; flex-direction: column; min-height: 0; overflow: hidden;
 }
 .brand {
@@ -112,14 +112,11 @@
 .sidebar-footer .github-last-update { color: var(--faint); font-size: 10.5px; }
 
 /* Sidebar thu gọn */
-.app.sidebar-collapsed .brand-text,
-.app.sidebar-collapsed .nav-item .label,
-.app.sidebar-collapsed .nav-item .badge,
-.app.sidebar-collapsed .nav-item .chev,
-.app.sidebar-collapsed .nav-section-title,
-.app.sidebar-collapsed .layer-list,
-.app.sidebar-collapsed .nav-sub,
-.app.sidebar-collapsed .sidebar-footer { display: none !important; }
+.app.sidebar-collapsed .brand-text, .app.sidebar-collapsed .nav-item .label,
+.app.sidebar-collapsed .nav-item .badge, .app.sidebar-collapsed .nav-item .chev,
+.app.sidebar-collapsed .nav-section-title, .app.sidebar-collapsed .layer-list,
+.app.sidebar-collapsed .nav-sub, .app.sidebar-collapsed .sidebar-footer, 
+.app.sidebar-collapsed .sidebar-sash { display: none !important; }
 .app.sidebar-collapsed .nav-item { justify-content: center; padding: 10px; }
 .app.sidebar-collapsed .brand { justify-content: center; padding: 16px 8px; }
 
@@ -254,7 +251,11 @@
     }
     .app.sidebar-open .sidebar { transform: none; }
     .app.sidebar-collapsed { grid-template-columns: 1fr; }
-    .topbar { gap: 8px; padding: 0 10px; height: auto; min-height: var(--topbar-h); flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; }
+    .sidebar-sash { display: none; }
+    .topbar { 
+        gap: 8px; padding: 0 10px; height: auto; min-height: var(--topbar-h); 
+        flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; 
+    }
     .toolbar { flex-wrap: wrap; }
 }
 
@@ -309,3 +310,29 @@
 .pm-modal .button-grid:hover { background: var(--panel-hover); color: var(--text); }
 .pm-modal #okBtn { background: var(--accent-soft); color: var(--accent); border-color: rgba(52, 211, 153, 0.45); }
 .pm-modal #okBtn:hover { background: rgba(52, 211, 153, 0.24); }
+
+/* Sidebar resize (sash kiểu VS Code) */
+.sidebar-sash {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 6px; z-index: 20;
+    cursor: col-resize; touch-action: none; outline: none;
+}
+/* Vạch sáng ở mép khi rê chuột / đang kéo / focus bàn phím */
+.sidebar-sash::before {
+    content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px;
+    background: var(--accent-2); opacity: 0; transition: opacity .15s ease .1s;
+}
+.sidebar-sash:hover::before, .sidebar-sash.active::before, .sidebar-sash:focus-visible::before { opacity: .9; }
+/* Tay nắm 3 chấm xếp dọc ở giữa chiều cao */
+.sash-grip {
+    position: absolute; top: 50%; right: 0; transform: translateY(-50%);
+    width: 6px; height: 34px; border-radius: 4px 0 0 4px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    background: var(--panel-2); border: 1px solid var(--border-strong); border-right: none;
+    opacity: .45; transition: opacity .15s ease, width .15s ease;
+}
+.sash-grip i { width: 3px; height: 3px; border-radius: 50%; background: var(--text-2); }
+.sidebar-sash:hover .sash-grip, .sidebar-sash.active .sash-grip, .sidebar-sash:focus-visible .sash-grip { opacity: 1; width: 8px; }
+.sidebar-sash.active .sash-grip i, .sidebar-sash:hover .sash-grip i { background: var(--accent-2); }
+/* Trong lúc kéo: con trỏ ↔ toàn trang, không bôi đen chữ, iframe/bản đồ không "nuốt" chuột */
+body.sash-dragging { cursor: col-resize !important; user-select: none; }
+body.sash-dragging iframe, body.sash-dragging .leaflet-container { pointer-events: none; }

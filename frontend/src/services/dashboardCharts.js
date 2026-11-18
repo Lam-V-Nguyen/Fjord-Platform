@@ -29,8 +29,7 @@ function baseLayout(extra = {}) {
         xaxis: { gridcolor: grid, zeroline: false, linecolor: grid, tickfont: { size: 10.5 }, tickformat: '%d %b' },
         yaxis: { gridcolor: grid, zeroline: false, linecolor: grid, tickfont: { size: 10.5 } },
         legend: { orientation: 'h', x: 0, y: 1.14, font: { size: 10.5, color: cssVar('--text-2') }, bgcolor: 'rgba(0,0,0,0)' },
-        showlegend: false,
-        ...extra,
+        showlegend: false, ...extra,
     };
 }
 
@@ -50,11 +49,11 @@ function clearEmpty(node) {
     if (empty) empty.remove();
 }
 
-// ------------------------------------------------------------------ Gauge
+// Gauge
 export function renderGauge(id, value, { min = 0, max = 100, label = '' } = {}) {
     const node = el(id);
     if (!node) return;
-    if (value === null || value === undefined) { showEmpty(node, '—'); return; }
+    if (value === null || value === undefined) { showEmpty(node, '-'); return; }
     clearEmpty(node);
     const sev = SEV_COLORS();
     const color = value >= 65 ? sev.low : value >= 45 ? sev.medium : sev.high;
@@ -72,7 +71,7 @@ export function renderGauge(id, value, { min = 0, max = 100, label = '' } = {}) 
     return { color, label };
 }
 
-// ------------------------------------------------------------------ Donut
+// Donut
 export function renderDonut(id, distribution) {
     const node = el(id);
     if (!node) return;
@@ -118,8 +117,7 @@ export function renderStationSeries(id, payload, opts = {}) {
             hovertemplate: `${s.name}: %{y:.3g}${unit}<extra></extra>`,
         };
     });
-    const shapes = [], annotations = [];
-    const th = opts.threshold;
+    const shapes = [], annotations = [], th = opts.threshold;
     if (th) {
         [['medium', cssVar('--sev-medium')], ['high', cssVar('--sev-high')]].forEach(([k, c]) => {
             if (th[k] === undefined || th[k] === null) return;
@@ -136,7 +134,7 @@ export function renderStationSeries(id, payload, opts = {}) {
     Plotly.react(node, traces, layout, CONFIG);
 }
 
-// ------------------------------------------------------------------ Vertical profile
+// Vertical profile
 // prof: {depth:[], values:[], label, unit, depth_unit, station, time}; compare: profile khác (tuỳ chọn)
 export function renderProfile(id, prof, opts = {}) {
     const node = el(id);

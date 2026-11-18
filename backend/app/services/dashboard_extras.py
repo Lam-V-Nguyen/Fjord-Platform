@@ -25,6 +25,7 @@ import numpy as np, geopandas as gpd
 from config import PROJECT_ROOT
 from shapely.geometry import box
 from services.dashboard_results import ProjectResults, _crs_of
+from services.dashboard_pollution import pollution_status
 from services import constants
 
 
@@ -292,7 +293,7 @@ def wflow_geometry(project: str, flow: str, kind: str) -> dict:
 
 def extras_status(project: str) -> dict[str, Any]:
     out = {}
-    for key, fn in (("movement", movement_status), ("wflow", wflow_status)):
+    for key, fn in (("movement", movement_status), ("wflow", wflow_status), ("pollution", pollution_status)):
         try: out[key] = fn(project)
         except Exception as e:
             traceback.print_exc()

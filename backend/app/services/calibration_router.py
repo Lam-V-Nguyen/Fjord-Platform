@@ -21,6 +21,37 @@ def _running_simulation(project_name: str):
     if other: return other.get('key') or 'calibration'
     return None
 
+def _progress_message(key: str, info: dict) -> str:
+    progress, current, total = info.get("progress", 0.0), info.get("current", 0), info.get("total", 0)
+    if key == 'baseline': return f'Baseline simulation: {progress}% completed.'
+    msg = f'Simulation ({current}/{total} finished): {progress}% completed.'
+    running_ids = info.get("running") or []
+    return msg + (f" Running: {', '.join(map(str, running_ids))}." if running_ids else "")
+
+def _disk_status(project_name: str, key: str):
+    """Status of a batch this worker does not hold in `processes` (other worker / after a restart)."""
+    cal_dir = os.path.join(PROJECT_ROOT, project_name, "calibration")
+    st = calibration_functions.run_state(cal_dir)
+    if st and st.get("key") == key:
+        s = st.get("state") or {}
+        if st["owner_alive"]:
+            return {"status": "running", "progress": s.get("progress", 0.0), "attached": True,
+                "logFile": s.get("log_file"), "message": _progress_message(key, s) if s else
+                f"The {key} simulation started {st.get('started')} is running in another server process."
+            }
+        pids = ', '.join(map(str, st["solvers"]))
+        return {"status": "orphaned", "progress": s.get("progress", 0.0), "solvers": st["solvers"], "message":
+            f"The server process that started the {key} simulation ({st.get('started')}) is no longer running, "
+            f"but {len(st['solvers'])} D-Flow FM process(es) are still active (PID {pids}). "
+            "Their output is no longer read, so they cannot be completed: stop them and resume."
+        }
+    s = calibration_functions.read_run_status(cal_dir, key)
+    if s and s.get("status") in ("finished", "stopped", "failed"):
+        return {"status": s["status"], "progress": 100.0 if s["status"] == "finished" else s.get("progress", 0.0),
+            "message": s.get("message", "")
+        }
+    return None
+
 @router.post("/calibration_project")
 async def calibration_project(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
@@ -124,8 +155,12 @@ async def check_sim_status_calibration(request: Request, user=Depends(functions.
     key = body.get('key'); process_key = f"{project_name}:{key}"
     info = processes.get(process_key)
     if not info:
+        disk = _disk_status(project_name, key)
+        if disk: return JSONResponse(disk)
         return JSONResponse({"status": "not_started", "progress": 0, "message": 'No simulation running'})
     status, progress = info.get("status"), info.get("progress", 0.0)
+    if status == "stopped":
+        return JSONResponse({"status": "stopped", "progress": progress, "message": info.get("message", "Simulation stopped.")})
     current, total = info.get("current", 0), info.get("total", 0)
     if status == "finished":
         return JSONResponse({"status": "finished", "progress": 100.0,
@@ -140,7 +175,21 @@ async def check_sim_status_calibration(request: Request, user=Depends(functions.
     else:
         complete = f'Simulation ({current}/{total} finished): {progress}% completed.'
         if running_ids: complete += f" Running: {', '.join(map(str, running_ids))}."
-    return JSONResponse({"status": status, "progress": progress, "message": complete})
+    return JSONResponse({"status": status, "progress": progress, "message": _progress_message(key, info)})
+
+@router.post("/stop_sim_calibration")
+async def stop_sim_calibration(request: Request, user=Depends(functions.basic_auth)):
+    try:
+        body = await request.json()
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        key = body.get('key'); process_key = f"{project_name}:{key}"
+        info = processes.get(process_key)
+        if info and info.get("status") == "running":
+            processes.pop(process_key, None)        # run_calibration of this worker stops its solvers
+            return JSONResponse({"status": "stopping", "message": "Stop requested - the running solvers are being stopped."})
+        cal_dir = os.path.join(PROJECT_ROOT, project_name, "calibration")
+        return JSONResponse(calibration_functions.stop_run(cal_dir, key))
+    except Exception as e: functions.error("/stop_sim_calibration", e)
 
 @router.post("/scenario_status_calibration")
 async def scenario_status_calibration(request: Request, user=Depends(functions.basic_auth)):
@@ -193,6 +242,9 @@ async def start_sim_calibration(request: Request, background_tasks: BackgroundTa
             return JSONResponse({"status": "running", "progress": info.get("progress", 0.0),
                 "message": f'Simulation {info.get("current", 0)} of {info.get("total", 0)}: {info.get("progress", 0.0)}% completed.'})
         running = _running_simulation(project_name)
+        if running == key:                         # same batch in another worker / orphaned -> let the client attach
+            disk = _disk_status(project_name, key)
+            if disk and disk["status"] in ("running", "orphaned"): return JSONResponse(disk)
         if running:
             other = calibration_functions.active_run(calibration_dir) or {}
             since = f" (started {other['started']})" if other.get('started') else ""
@@ -225,7 +277,8 @@ async def start_sim_calibration(request: Request, background_tasks: BackgroundTa
                 return JSONResponse({"status": "error", "message": "All scenarios in this range are already completed."})
         # Optional: how many scenarios side by side and OpenMP threads per scenario (defaults: physical cores / 4, 4)
         parallel, threads = calibration_functions.default_parallel_config(
-            len(list_sorted), body.get("parallelRuns"), body.get("threadsPerRun"))
+            len(list_sorted), body.get("parallelRuns"), body.get("threadsPerRun")
+        )
         log_dir = os.path.join(calibration_dir, "logs"); os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, os.path.basename(body.get("logFile") or "log_calibration.txt"))
         lock = redis.lock(process_key, timeout=60, blocking_timeout=10)
@@ -247,8 +300,8 @@ async def start_sim_calibration(request: Request, background_tasks: BackgroundTa
                 "message": "Preparing data for simulation...", "current": 0, "total": len(list_sorted),
             }
             background_tasks.add_task(
-                calibration_functions.run_calibration, processes, process_key, scenario_dir, list_sorted, log_path,
-                parallel, threads, lock_path
+                calibration_functions.run_calibration, processes, process_key, scenario_dir, 
+                list_sorted, log_path, parallel, threads, lock_path
             )
         return JSONResponse({"status": "ok", "message":
             f"Simulation {project_name} started: {len(list_sorted)} scenarios, {parallel} at a time, {threads} threads each."})
@@ -262,11 +315,14 @@ async def calibration_log_tail(project_name: str, offset: int = Query(0),
     log_path = os.path.normpath(os.path.join(log_dir, os.path.basename(log_file)))
     if not os.path.exists(log_path): return {"lines": [], "offset": 0}
     size = os.path.getsize(log_path)
+    skip_partial = offset < 0                  # offset = -N: only the last N bytes (attach to a long running log)
+    if offset < 0: offset = max(0, size + offset)
     if offset > size: offset = 0
     with open(log_path, "rb") as f:
         f.seek(offset)
         data = f.read()
         new_offset = f.tell()
+    if skip_partial and offset > 0 and b"\n" in data: data = data[data.index(b"\n") + 1:]   # drop the cut line
     text = data.decode("utf-8", errors="replace")
     return {"lines": text.splitlines(), "offset": new_offset}
 

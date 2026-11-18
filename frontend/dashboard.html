@@ -127,6 +127,40 @@
           <!-- OVERVIEW / MAP VIEW -->
           <section class="view" id="view-overview">
             <div class="overview" id="dash-overview">
+
+              <!-- Live weather data panel -->
+              <div class="weather-row">
+                <div class="panel panel-weather" id="panel-weather">
+                  <div class="panel-head">
+                    <div>
+                      <div class="panel-title">Weather Conditions</div>
+                      <div class="panel-sub" id="weather-sub">Live data at the model area</div>
+                    </div>
+                    <div class="mini-selects">
+                      <select id="weather-var" title="Meteorological variable"></select>
+                      <div class="w-sources">
+                        <button type="button" class="w-src-btn" id="weather-source-btn" title="Data sources">Sources</button>
+                        <div class="w-src-pop" id="weather-source-pop"></div>
+                      </div>
+                      <select id="weather-interval" title="Automatic update interval">
+                        <option value="0">Auto-update: off</option>
+                        <option value="10">Every 10 min</option>
+                        <option value="15">Every 15 min</option>
+                        <option value="30">Every 30 min</option>
+                        <option value="60">Every 1 h</option>
+                        <option value="180">Every 3 h</option>
+                      </select>
+                      <button class="btn icon-only small" id="weather-refresh" title="Update now"><span data-icon="refresh"></span></button>
+                    </div>
+                  </div>
+                  <div class="panel-body weather-body">
+                    <div class="weather-now" id="weather-now"></div>
+                    <div class="weather-chart-wrap"><div id="weather-chart"></div></div>
+                  </div>
+                  <div class="weather-note" id="weather-note"></div>
+                </div>
+              </div>
+              
               <div class="kpi-row" id="kpi-row"></div>
               <div class="dash-grid">
                 <div class="panel panel-map" id="panel-map">

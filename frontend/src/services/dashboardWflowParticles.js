@@ -79,10 +79,16 @@ export class WflowParticles {
         if (this.S.curve === 'log') return Math.log1p(LOG_K * x) / Math.log1p(LOG_K);
         return Math.sqrt(x);
     }
+    // Inverse of curveF: the value whose colour sits at fraction y of the colour bar (for the legend)
+    curveInv(y) {
+        if (this.S.curve === 'linear') return y;
+        if (this.S.curve === 'log') return Math.expm1(y * Math.log1p(LOG_K)) / LOG_K;
+        return y * y;
+    }
 
     get stopInWater() { return this.hasWater && this.S.water !== false; }
 
-    // ------------------------------------------------------------ thời gian & dữ liệu
+    // thời gian & dữ liệu
     // Thời điểm của thanh thời gian -> chỉ số thực (vd. 12.4 = giữa bước 12 và 13)
     setTime(iso) {
         const T = this.tms.length;
@@ -133,7 +139,7 @@ export class WflowParticles {
         return p;
     }
 
-    // ------------------------------------------------------------ view
+    // view
     show() {
         if (this.visible) return;
         this.visible = true;
@@ -208,7 +214,7 @@ export class WflowParticles {
     gx2x(gx) { return this.P.ax * (this.g.lon0 + gx * this.g.dlon) + this.P.bx; }
     gy2y(gy) { return this.P.ay * merc(this.g.lat0 + gy * this.g.dlat) + this.P.by; }
 
-    // ------------------------------------------------------------ thuật toán (giống flowRunner.js)
+    // thuật toán (giống flowRunner.js)
     blocked(k) { return this.cellOf[k] < 0 || (this.stopInWater && this.mask[k] === 2); }
 
     sampleVel(fa, fb, w, gx, gy) {

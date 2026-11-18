@@ -295,7 +295,7 @@ export class WflowLayer {
         const when = this.statMode ? `${MODE_LABEL[this.S.mode]} over run` : this.info.times[this.frameIndex].slice(0, 10);
         L.popup({ closeButton: false }).setLatLng(latlng).setContent(
             `<div class="popup-title">${m.description || p.var}</div>
-             <div class="popup-kv"><span>Value</span><span>${Number.isFinite(v) ? fmtVal(v) : '—'} ${this.unitsFor(p.var)}</span>
+             <div class="popup-kv"><span>Value</span><span>${Number.isFinite(v) ? fmtVal(v) : '-'} ${this.unitsFor(p.var)}</span>
              <span>Time</span><span>${when}</span>
              <span>Scenario</span><span>${this.info.flow}</span></div>`).openOn(this.map);
     }
@@ -307,12 +307,16 @@ export class WflowLayer {
         const out = ['river', 'grid'].map(kind => this.parts[kind]).filter(p => p.var && p.range).map(p => {
             const m = this.vars[p.var], u = this.unitsFor(p.var);
             return { title: `Wflow · ${m.description || p.var}${u ? ` (${u})` : ''}${this.useLog(p) ? ' · log' : ''}`,
-                     palette: 'flow', min: p.range[0], max: p.range[1], note };
+                palette: 'flow', min: p.range[0], max: p.range[1], note 
+            };
         });
         if (this.hasVelocity && this.PS.on && this.PS.pcolor === 'speed') {
             const when = this.info.times[this.particles.index]?.slice(0, 10) || '';
-            out.push({ title: 'Wflow · surface flow speed (m/s)', palette: 'wflow_particle', min: 0,
-                       max: this.info.velocity.speed_max, note: `particles · ${when}${this.outsidePeriod() ? ' (nearest Wflow step)' : ''}` });
+            const vmax = this.info.velocity.speed_max, curve = this.PS.curve;
+            out.push({ title: `Wflow · surface flow speed (m/s)${curve !== 'linear' ? ` · ${curve} scale` : ''}`,
+                palette: 'wflow_particle', min: 0, max: vmax, mid: this.particles.curveInv(0.5) * vmax, 
+                maxPrefix: '≥ ', note: `particles · ${when}${this.outsidePeriod() ? ' (nearest Wflow step)' : ''}` 
+            });
         }
         return out;
     }
@@ -321,12 +325,12 @@ export class WflowLayer {
     hide() { if (this.visible) { this.map.removeLayer(this.group); this.visible = false; } this.particles.hide(); }
     destroy() { this.hide(); this.group.clearLayers(); this.frames.clear(); this.stats.clear(); this.particles.destroy(); }
 
-    // ------------------------------------------------------------ bảng cài đặt
+    // bảng cài đặt
     renderSettings(el, ctx) {
         if (el._bound) { const n = el.cloneNode(false); n.classList.remove('busy'); el.replaceWith(n); el = n; }   // vẽ lại -> bỏ listener cũ
         el._bound = true;
         const S = this.S, info = this.info, g = info.grid || {};
-        const opts = (kind) => [['', '— none —'], ...Object.entries(this.vars).filter(([, v]) => v.kind === kind)
+        const opts = (kind) => [['', '- none -'], ...Object.entries(this.vars).filter(([, v]) => v.kind === kind)
             .map(([k, v]) => [k, `${v.description || k}${v.units ? ` (${v.units})` : ''}`])];
         const scen = (info.scenarios || []).map(s => typeof s === 'string' ? s : s.name);
         el.innerHTML =
@@ -350,7 +354,7 @@ export class WflowLayer {
                     ui.row('Show', ui.seg('p.on', [['1', 'On'], ['0', 'Off']], this.PS.on ? '1' : '0')) +
                     ui.row('Opacity', ui.range('p.opacity', 0.1, 1, 0.05, this.PS.opacity, (v) => v.toFixed(2))) +
                     ui.row('Count', ui.range('p.count', 500, 20000, 500, this.PS.count)) +
-                    ui.row('Speed ×', ui.range('p.pspeed', 0.2, 4, 0.1, this.PS.pspeed, (v) => v.toFixed(1))) +
+                    ui.row('Animation speed ×', ui.range('p.pspeed', 0.2, 4, 0.1, this.PS.pspeed, (v) => v.toFixed(1))) +
                     ui.row('Trail', ui.range('p.trail', 0.8, 0.985, 0.005, this.PS.trail, (v) => v.toFixed(3))) +
                     ui.row('Width', ui.range('p.width', 0.6, 3, 0.1, this.PS.width, (v) => v.toFixed(1))) +
                     ui.row('Speed curve', ui.seg('p.curve', [['linear', 'Linear'], ['sqrt', '√'], ['log', 'Log']], this.PS.curve)) +

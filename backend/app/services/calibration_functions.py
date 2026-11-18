@@ -452,16 +452,104 @@ def _read_lock(lock_path: str):
         with open(lock_path, encoding="utf-8") as f: return json.load(f)
     except Exception: return None
 
-def active_run(calibration_dir: str):
-    """Info of a simulation batch that is still alive for this project (any worker), else None."""
+def _proc_name(pid) -> str | None:
+    """Lower-case executable name of a running process, or None if it cannot be read."""
+    try:
+        import psutil
+        return psutil.Process(int(pid)).name().lower()
+    except ImportError: pass
+    except Exception: return None
+    if os.name == "nt":
+        try:
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"], capture_output=True,
+                text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW).stdout.strip()
+            if out.startswith('"'): return out.split('","')[0].strip('"').lower()
+        except Exception: pass
+    return None
+
+def _alive_as(pid, *names) -> bool:
+    """Alive AND (when the name can be read) one of `names`: after a restart Windows may give the old
+    PID to another program, which must not keep the lock alive forever."""
+    if not _pid_alive(pid): return False
+    name = _proc_name(pid)
+    return name is None or any(n in name for n in names)
+
+def _kill_pid(pid) -> bool:
+    try:
+        import psutil
+        p = psutil.Process(int(pid))
+        for c in p.children(recursive=True): c.kill()
+        p.kill(); return True
+    except ImportError: pass
+    except Exception: return False
+    try:
+        if os.name == "nt":
+            r = subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True, timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+            return r.returncode == 0
+    except Exception: return False
+
+# Progress on disk: the batch may run in another uvicorn worker (or this worker restarted),
+# so the status endpoint cannot rely on the in-memory `processes` dict alone.
+def _status_path(calibration_dir: str, key: str) -> str:
+    return os.path.join(calibration_dir, f".simulation_status_{key}.json")
+
+def _stop_path(calibration_dir: str, key: str) -> str:
+    return os.path.join(calibration_dir, f".simulation_stop_{key}")
+
+def read_run_status(calibration_dir: str, key: str):
+    try:
+        with open(_status_path(calibration_dir, key), encoding="utf-8") as f: return json.load(f)
+    except Exception: return None
+
+def write_run_status(calibration_dir: str, key: str, data: dict) -> None:
+    if not calibration_dir: return
+    path = _status_path(calibration_dir, key)
+    with _LOCK_GUARD:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f: json.dump(data, f)
+            os.replace(tmp, path)
+        except OSError: pass
+
+def run_state(calibration_dir: str):
+    """
+    Batch recorded in the lock file, or None (a stale lock is removed). Adds:
+      owner_alive - the server process that runs the batch is alive (maybe another uvicorn worker)
+      solvers     - D-Flow FM processes of the batch that are still alive
+      state       - last progress written by the batch (read_run_status)
+    owner dead + solvers alive = orphaned solvers (server restarted / reloaded during the run).
+    """
     lock_path = os.path.join(calibration_dir, constants.RUN_LOCK_FILE)
     info = _read_lock(lock_path)
     if not info: return None
-    if _pid_alive(info.get("pid")) or any(_pid_alive(p) for p in info.get("children", [])):
-        return info
-    try: os.remove(lock_path)       # stale: owner and all solvers are gone
+    owner = _alive_as(info.get("pid"), "python", "uvicorn")
+    solvers = [p for p in info.get("children", []) if _alive_as(p, "dflowfm", "cmd")]
+    if not owner and not solvers:
+        try: os.remove(lock_path)       # stale: owner and all solvers are gone (or their PIDs were reused)
+        except OSError: pass
+        return None
+    return {**info, "owner_alive": owner, "solvers": solvers, "state": read_run_status(calibration_dir, info.get("key"))}
+
+def active_run(calibration_dir: str):
+    """Info of a simulation batch that is still alive for this project (any worker), else None."""
+    return run_state(calibration_dir)
+
+def stop_run(calibration_dir: str, key: str) -> dict:
+    """Stop a batch that this worker cannot reach through `processes`."""
+    st = run_state(calibration_dir)
+    if not st or st.get("key") != key:
+        return {"status": "not_started", "message": "No simulation running."}
+    if st["owner_alive"]:               # the owning worker polls this flag and stops its solvers
+        with open(_stop_path(calibration_dir, key), "w", encoding="utf-8") as f: f.write(datetime.now().isoformat())
+        return {"status": "stopping", "message": "Stop requested – the running solvers are being stopped."}
+    killed = [p for p in st["solvers"] if _kill_pid(p)]
+    try: os.remove(os.path.join(calibration_dir, constants.RUN_LOCK_FILE))
     except OSError: pass
-    return None
+    write_run_status(calibration_dir, key, {**(st.get("state") or {}), "status": "stopped",
+        "message": f"Stopped {len(killed)} leftover solver process(es) of the run started {st.get('started')}."})
+    return {"status": "stopped", "message": f"Stopped {len(killed)} of {len(st['solvers'])} leftover solver process(es). "
+        "Their scenarios were not marked as completed – resume to run them again."}
 
 def acquire_run_lock(calibration_dir: str, key: str, scenarios: list):
     """Atomically create the lock file. Returns (lock_path, None) or (None, info_of_running_batch)."""
@@ -565,7 +653,26 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
     percent_re = re.compile(r'(?P<percent>\d{1,3}(?:\.\d+)?)\s*%')
     results, running, partial = {}, {}, {}           # case_id -> ok/failed ; case_id -> Popen ; case_id -> %
     turn_cv, next_turn = threading.Condition(), [0]   # solvers are launched strictly in ascending order
-    def stopped(): return key not in processes
+    cal_dir = os.path.dirname(lock_path) if lock_path else None
+    stop_flag = _stop_path(cal_dir, key) if cal_dir else None
+    if stop_flag and os.path.exists(stop_flag): os.remove(stop_flag)
+    last = {"check": 0.0, "write": 0.0, "stop": False}
+    def stop_requested():                       # stop flag from another worker (checked at most every 2 s)
+        now = datetime.now().timestamp()
+        if not last["stop"] and stop_flag and now - last["check"] > 2:
+            last["check"], last["stop"] = now, os.path.exists(stop_flag)
+        return last["stop"]
+    def stopped(): return key not in processes or stop_requested()
+    def save_status(status="running", message=None, force=False):
+        now = datetime.now().timestamp()
+        if not force and now - last["write"] < 3: return
+        last["write"] = now
+        info = processes.get(key) or {}
+        write_run_status(cal_dir, key, {"key": key, "pid": os.getpid(), "status": status,
+            "progress": info.get("progress", 0.0), "current": info.get("current", len(results)), "total": total,
+            "running": info.get("running", []), "message": message or info.get("message", ""),
+            "log_file": os.path.basename(log_path), "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        )
     def pass_turn():
         with turn_cv: next_turn[0] += 1; turn_cv.notify_all()
     def update_progress():
@@ -577,6 +684,7 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
             info["current"], info["total"] = done, total
             info["progress"] = round(frac / total * 100.0, 1) if total else 100.0
             info["running"] = sorted(running)
+            save_status()
     def run_one(case_id: int) -> None:
         pos = scenarios.index(case_id)
         with turn_cv: turn_cv.wait_for(lambda: next_turn[0] == pos)
@@ -647,10 +755,8 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
         if ok:
             with open(flag, 'w', encoding='utf-8') as f: f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             fc(f"[COMPLETED] Scenario {case_id} in {hours:.2f} h")
-        else:
-            fc(f"[FAILED] Scenario {case_id}: {mdu_path}, exit code={return_code}")
-        results[case_id] = ok
-        update_progress()
+        else: fc(f"[FAILED] Scenario {case_id}: {mdu_path}, exit code={return_code}")
+        results[case_id] = ok; update_progress()
     try:
         parallel, threads = default_parallel_config(total, parallel, threads)
         fc(); fc("=" * 80); fc("[SIMULATION STARTED]"); fc("=" * 80)
@@ -660,6 +766,7 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
         fc(f"[INFO] Physical cores    : {_physical_cores()}, logical: {os.cpu_count()}"); fc()
         if key in processes:
             processes[key]["message"] = f"Running {total} scenarios, {parallel} at a time ({threads} threads each)."
+            save_status(force=True)
         with ThreadPoolExecutor(max_workers=parallel, thread_name_prefix="dflowfm") as pool:
             futures = [pool.submit(run_one, c) for c in scenarios]   # FIFO queue: start order = 1, 2, 3, ...
             for f in futures: f.result()
@@ -672,14 +779,22 @@ def run_calibration(processes: dict, key: str, scenario_dir: str, scenarios: lis
         fc(f"[SUMMARY] Failed            : {len(failed)}" + (f" -> {failed}" if failed else ""))
         if skipped: fc(f"[SUMMARY] Not run (stopped) : {skipped}")
         fc("=" * 80); fc("[SIMULATION COMPLETED]"); fc("=" * 80); fc()
+        final = "stopped" if stopped() else "finished"
+        msg = f"Simulations {final}: {len(ok_ids)} ok, {len(failed)} failed" + (f", {len(skipped)} not run." if skipped else ".")
         if key in processes:
-            processes[key]["status"], processes[key]["progress"] = "finished", 100.0
-            processes[key]["message"] = f"Simulations completed: {len(ok_ids)} ok, {len(failed)} failed."
+            processes[key]["status"], processes[key]["message"] = final, msg
+            if final == "finished": processes[key]["progress"] = 100.0
+        save_status(final, msg, force=True)
     except Exception as e:
         if processes.get(key):
             processes[key]["status"], processes[key]["message"] = "failed", f"Internal error: {e}"
         fc(f"[INTERNAL ERROR] {e}")
-    finally: release_run_lock(lock_path)
+        save_status("failed", f"Internal error: {e}", force=True)
+    finally:
+        release_run_lock(lock_path)
+        if stop_flag and os.path.exists(stop_flag):
+            try: os.remove(stop_flag)
+            except OSError: pass
 
 def _set_state(processes: dict, key: str, message: str = None, 
     progress: float = None, status: str = None, history: bool = True) -> None:
@@ -1010,7 +1125,7 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
                 y_cv = cross_val_predict(make(), X_scaled, y, cv=cv)
                 cv_rmse, cv_r2 = float(np.sqrt(np.mean((y_cv - y) ** 2))), float(r2_score(y, y_cv))
                 fc(log_path, f"Cross-validation ({type(cv).__name__}): RMSE = {cv_rmse:.4f}, "
-                    f"R² = {cv_r2:.3f} (target range {y.min():.4f} – {y.max():.4f})")
+                    f"R2 = {cv_r2:.3f} (target range {y.min():.4f} - {y.max():.4f})")
                 if cv_r2 < 0.5:
                     fc(log_path, "[WARNING] The surrogate explains < 50% of the variance: the optimum is "
                         "unreliable. Add samples or choose more influential parameters.")

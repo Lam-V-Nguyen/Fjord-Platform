@@ -15,15 +15,15 @@ export const TOOL_GROUPS = [
         tools: [
             { id: 'preparation-hyd', title: 'Data Preparation for HYD Scenario', short: 'Data Preparation', label: 'Data Preparation (HYD)', url: '/src_frontend/htmls/hydPreparation.html', w: 12, h: 10, icon: 'clipboard' },
             { id: 'grid-generation', title: 'Grid Generation', url: '/src_frontend/htmls/unstructuredGrid.html', w: 12, h: 10, icon: 'grid' },
-            { id: 'new-hyd', title: 'Create HYD Scenario', url: '/src_frontend/htmls/hydCreator.html', w: 11, h: 9, icon: 'plus' },
-            { id: 'run-hyd', title: 'Run HYD Scenario', url: '/src_frontend/htmls/hydRunner.html', w: 11, h: 3, icon: 'play' },
+            { id: 'new-hyd', title: 'Create HYD Scenario', url: '/src_frontend/htmls/hydCreator.html', w: 12, h: 9, icon: 'plus' },
+            { id: 'run-hyd', title: 'Run HYD Scenario', url: '/src_frontend/htmls/hydRunner.html', w: 12, h: 3, icon: 'play' },
         ],
     },
     {
         id: 'waq', title: 'Water Quality (WAQ)', icon: 'flask',
         tools: [
-            { id: 'new-waq', title: 'Create WAQ Scenario', url: '/src_frontend/htmls/waqCreator.html', w: 11, h: 9, icon: 'plus' },
-            { id: 'run-waq', title: 'Run WAQ Scenario', url: '/src_frontend/htmls/waqRunner.html', w: 11, h: 3, icon: 'play' },
+            { id: 'new-waq', title: 'Create WAQ Scenario', url: '/src_frontend/htmls/waqCreator.html', w: 12, h: 9, icon: 'plus' },
+            { id: 'run-waq', title: 'Run WAQ Scenario', url: '/src_frontend/htmls/waqRunner.html', w: 12, h: 3, icon: 'play' },
         ],
     },
     {

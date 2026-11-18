@@ -24,11 +24,15 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from services import dashboard_functions as dfn
 from services import dashboard_results as dres
 from services import dashboard_extras as dext
+from services import dashboard_weather as dweather
+from services import dashboard_pollution as dpol
 from services import functions, constants
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 _MEMORY_CACHE: dict[str, tuple[float, object]] = {}
+
+
 # Helpers
 async def _body(request: Request) -> dict:
     try: return await request.json()
@@ -107,7 +111,7 @@ async def dashboard_alerts(request: Request, user=Depends(functions.basic_auth))
             alerts = [a for a in alerts if a["severity"] in body["severities"]]
         limit = int(body.get("limit", 20))
         return {"status": "ok", "alerts": alerts[:limit], "total": len(alerts)}
-    except Exception as e: functions.error("/dashboard/alerts", e)
+    except Exception as e: functions.error("/dashboard/alerts", e) 
 
 @router.post("/mesh")
 async def dashboard_mesh(request: Request, user=Depends(functions.basic_auth)):
@@ -163,7 +167,7 @@ async def dashboard_layers(request: Request, user=Depends(functions.basic_auth))
     try:
         project = _project(await _body(request), user)
         inventory = await asyncio.to_thread(dfn.project_inventory, project)
-        key = f"layers:{project}:{','.join(inventory.get('gis_layers', []))}"
+        key = f"layers:{project}:{','.join(inventory.get('gis_layers', []))}:{dfn.context_signature()}"
         data = await _cached(request, key, dfn.build_layers, project, inventory)
         return {"status": "ok", "layers": data}
     except Exception as e: functions.error("/dashboard/layers", e)
@@ -184,6 +188,44 @@ async def dashboard_thresholds(request: Request, user=Depends(functions.basic_au
         else: data = dfn.load_thresholds()
         return {"status": "ok", **json.loads(json.dumps(data))}
     except Exception as e: functions.error("/dashboard/thresholds", e)
+
+# Weather Live
+@router.post("/weather")
+async def dashboard_weather(request: Request, user=Depends(functions.basic_auth)):
+    """
+    Body: {projectName, sources: ["frost", "metno", "openmeteo"] | null, force: bool}. 
+    Cache theo nguồn trong dweather.
+    """
+    try:
+        body = await _body(request)
+        project = _project(body, user)
+        sources = body.get("sources")
+        if not sources and body.get("source") not in (None, "", "auto"):     # tương thích body cũ
+            sources = [body["source"]]
+        data = await asyncio.to_thread(dweather.get_weather, project, sources or None, bool(body.get("force")))
+        return data if data.get("status") == "ok" else JSONResponse(data)
+    except Exception as e: functions.error("/dashboard/weather", e)
+
+# Pollutant spread (WAQ concentration + particles on HYD velocity)
+@router.post("/pollution/init")
+async def dashboard_pollution_init(request: Request, user=Depends(functions.basic_auth)):
+    try:
+        project = _project(await _body(request), user)
+        data = await asyncio.to_thread(dpol.pollution_init, project)
+        if data.get("error"): return {"status": "unavailable", "message": data["error"]}
+        return {"status": "ok", **data}
+    except ValueError as e: functions.error("/dashboard/pollution/init", e, 404)
+    except Exception as e: functions.error("/dashboard/pollution/init", e)
+
+@router.post("/pollution/frame")
+async def dashboard_pollution_frame(request: Request, user=Depends(functions.basic_auth)):
+    try:
+        body = await _body(request)
+        project = _project(body, user)
+        data = await asyncio.to_thread(dpol.pollution_frame, project, body.get("name"), body.get("layer"), body.get("time"))
+        return {"status": "ok", **data}
+    except ValueError as e: functions.error("/dashboard/pollution/frame", e, 404)
+    except Exception as e: functions.error("/dashboard/pollution/frame", e)
 
 # Movement & Wflow
 @router.post("/extras")

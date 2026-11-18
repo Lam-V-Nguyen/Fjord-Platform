@@ -5,19 +5,37 @@
 //  - Profile thẳng đứng & chuỗi thời gian tại trạm (/dashboard/profile, /station)
 //  - Khi dự án chưa có kết quả: hiển thị các bước mô hình, mỗi bước mở công cụ tương ứng
 //  - Trạng thái (period, end, field, layer, station) đồng bộ vào URL để chia sẻ
-//  - Lớp bổ sung "Flow movement (HYD)" và "Wflow results": sáng khi có dữ liệu, mờ khi chưa có
+//  - Lớp bổ sung "Flow movement (HYD)", "Wflow results" và "Pollutant spread (WAQ)": sáng khi có dữ liệu, mờ khi chưa có
 
 import { icon } from './icons.js';
 import { DashboardMap, fmtVal } from './dashboardMap.js';
 import { MovementLayer } from './dashboardMovement.js';
 import { WflowLayer } from './dashboardWflow.js';
-import { renderGauge, renderDonut, renderStationSeries, renderProfile, resizeCharts, showEmpty } from './dashboardCharts.js';
+import { PollutionLayer } from './dashboardPollution.js';
+import { 
+    renderGauge, renderDonut, renderStationSeries, 
+    renderProfile, resizeCharts, showEmpty 
+} from './dashboardCharts.js';
+import { WeatherPanel } from './dashboardWeather.js';
+
 
 const FILTER_KEY = 'dash-filters', STATE_KEY = 'dash-state-v2';
 const PERIOD_LABEL = { '1d': '1 day', '7d': '7 days', '30d': '30 days', all: 'whole simulation' };
-const KPI_TONES = { surface_temperature: 'tone-pink', stratification: 'tone-blue', water_level: 'tone-violet', max_velocity: 'tone-amber', wqi: 'tone-green' };
+const KPI_TONES = { 
+    surface_temperature: 'tone-pink', stratification: 'tone-blue', 
+    water_level: 'tone-violet', max_velocity: 'tone-amber', wqi: 'tone-green' 
+};
 const SEV_ICON = { high: 'alert', medium: 'alert', low: 'check', info: 'info' };
 const STEP_ICONS = { data: 'clipboard', grid: 'grid', hyd: 'waves', waq: 'flask', calibration: 'sliders' };
+const WIDTH_KEY = 'ui-sidebar-width';
+const MIN_W = 200, MAX_W = 420, MOBILE_MAX = 980;
+// Lớp bổ sung: lớp JS, tên hiển thị, tiêu đề bảng ⚙, mở bảng ⚙ ngay khi bật
+const EXTRAS = {
+    movement: { Cls: MovementLayer, name: 'Flow movement', title: 'Flow movement settings' },
+    wflow: { Cls: WflowLayer, name: 'Wflow results', title: 'Wflow results settings' },
+    pollution: { Cls: PollutionLayer, name: 'Pollutant spread', title: 'Pollutant spread (WAQ)', openOnShow: true },
+};
+
 
 // helpers
 async function api(path, body = {}) {
@@ -35,12 +53,12 @@ function esc(s) {
 }
 
 export function fmtNumber(v, d = 2) {
-    if (v === null || v === undefined || Number.isNaN(Number(v))) return '—';
+    if (v === null || v === undefined || Number.isNaN(Number(v))) return '-';
     return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
 function fmtDate(iso, withTime = false) {
-    if (!iso) return '—';
+    if (!iso) return '-';
     const d = new Date(iso.length <= 10 ? iso + 'T00:00:00' : iso);
     if (Number.isNaN(d.getTime())) return iso;
     const opts = { year: 'numeric', month: 'short', day: 'numeric' };
@@ -60,7 +78,9 @@ function debounce(fn, ms) {
     return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
-function readJson(key) { try { return JSON.parse(localStorage.getItem(key)) || null; } catch (e) { return null; } }
+function readJson(key) { 
+    try { return JSON.parse(localStorage.getItem(key)) || null; } catch (e) { return null; } 
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -84,14 +104,14 @@ export class Dashboard {
         this.catalog = null; this.summary = null; this.alerts = []; this.thresholds = { substances: {}, physics: {} };
         this.meshVersion = null; this.contextLoaded = false;
         this.loading = false; this.playing = false; this.fieldToken = 0;
-        this.map = null;
-        this.profileDebounced = debounce(() => this.loadProfile(), 250);
-        this.extraLayers = {};            // key -> MovementLayer | WflowLayer
+        this.map = null; this.profileDebounced = debounce(() => this.loadProfile(), 250);
+        this.extraLayers = {};            // key -> MovementLayer | WflowLayer | PollutionLayer
         this.extrasProject = null;
         this.extraTimeDebounced = debounce(() => this.syncExtraTime(), 120);
+        this.weather = new WeatherPanel({ getProject });
     }
 
-    // ------------------------------------------------------------ init
+    // init
     init({ onExpandMap }) {
         this.map = new DashboardMap({
             mapId: 'main-map', legendEl: $('map-legend'), layerListEl: $('layer-list'),
@@ -100,7 +120,8 @@ export class Dashboard {
         }).init();
         this.map.registerExtra('movement', (on) => this.toggleExtra('movement', on), () => this.openLayerSettings('movement'));
         this.map.registerExtra('wflow', (on) => this.toggleExtra('wflow', on), () => this.openLayerSettings('wflow'));
-        this.renderSkeletons(); this.bindToolbar(); this.bindPanels();
+        this.map.registerExtra('pollution', (on) => this.toggleExtra('pollution', on), () => this.openLayerSettings('pollution'));
+        this.renderSkeletons(); this.bindToolbar(); this.bindPanels(); this.weather.init();
         window.addEventListener('resize', () => this.resize());
         api('thresholds').then(t => { this.thresholds = t; }).catch(() => {});
         return this.refresh();
@@ -202,6 +223,7 @@ export class Dashboard {
             const catalog = await api('catalog', this.body());
             const changed = force || !this.catalog || catalog.version !== this.catalog.version || catalog.project !== this.catalog.project;
             this.catalog = catalog;
+            if (force) this.weather.load(true); else this.weather.onProjectChanged();
             const [summary, alerts] = await Promise.all([api('summary', this.body()), api('alerts', this.body({ limit: 100 }))]);
             this.summary = summary; this.alerts = alerts.alerts || [];
             this.loadContext(); this.updateExtras();
@@ -341,7 +363,7 @@ export class Dashboard {
         const times = this.catalog?.times?.[this.fieldSource()] || [];
         const iso = times[this.state.tIndex];
         this._currentTime = iso;
-        $('tb-label').textContent = iso ? iso.replace('T', ' ').slice(0, 16) : '—';
+        $('tb-label').textContent = iso ? iso.replace('T', ' ').slice(0, 16) : '-';
         this.extraTimeDebounced();
     }
 
@@ -355,8 +377,8 @@ export class Dashboard {
         }
         let status;
         try { status = await api('extras', this.body()); }
-        catch (err) { status = { movement: { available: false, reason: err.message }, wflow: { available: false, reason: err.message } }; }
-        for (const key of ['movement', 'wflow']) {
+        catch (err) { status = Object.fromEntries(Object.keys(EXTRAS).map(k => [k, { available: false, reason: err.message }])); }
+        for (const key of Object.keys(EXTRAS)) {
             const st = status[key] || { available: false };
             this.map.setAvailability(key, st);
             if (!st.available && this.extraLayers[key]) { this.extraLayers[key].destroy(); delete this.extraLayers[key]; this.closeLayerSettings(key); }
@@ -367,16 +389,14 @@ export class Dashboard {
 
     async toggleExtra(key, on) {
         if (!on) {
-            this.extraLayers[key]?.hide();
-            this.map.setExtraLegend(key, null);
-            this.closeLayerSettings(key);
-            return;
+            this.extraLayers[key]?.hide(); this.map.setExtraLegend(key, null);
+            this.closeLayerSettings(key); return;
         }
         try {
             let layer = this.extraLayers[key];
             if (!layer) {
                 this.map.setLoading(key, true);
-                const Cls = key === 'movement' ? MovementLayer : WflowLayer;
+                const Cls = EXTRAS[key].Cls;
                 layer = await new Cls(this.map.map, { projectName: this.getProject() }).init();
                 this.extraLayers[key] = layer;
             }
@@ -385,13 +405,10 @@ export class Dashboard {
             if (!this.map.isOn(key)) return;            // người dùng đã tắt trong lúc chờ
             layer.show();
             this.map.setExtraLegend(key, layer.legend());
+            if (EXTRAS[key].openOnShow && $('layer-settings')?.dataset.key !== key) this.openLayerSettings(key);
         } catch (err) {
-            console.warn(key, err);
-            toast(`${key === 'movement' ? 'Flow movement' : 'Wflow results'}: ${err.message}`);
-            this.map.setChecked(key, false);
-        } finally {
-            this.map.setLoading(key, false);
-        }
+            console.warn(key, err); toast(`${EXTRAS[key].name}: ${err.message}`); this.map.setChecked(key, false);
+        } finally { this.map.setLoading(key, false); }
     }
 
     // Bảng ⚙ nổi trên bản đồ: nội dung do từng lớp dựng (renderSettings).
@@ -403,8 +420,7 @@ export class Dashboard {
         if (panel?.dataset.key === key) { this.closeLayerSettings(); return; }   // bấm lại ⚙ = đóng bảng
         this.closeLayerSettings();
         if (!layer?.renderSettings) { toast('Layer is still loading…'); return; }
-        const title = key === 'movement' ? 'Flow movement settings' : 'Wflow results settings';
-        panel = document.createElement('div');
+        const title = EXTRAS[key].title; panel = document.createElement('div');
         panel.id = 'layer-settings'; panel.className = 'layer-settings'; panel.dataset.key = key;
         panel.innerHTML = `<div class="ls-head" title="Drag to move"><span>${title}</span>
             <button type="button" class="ls-close" title="Close and hide this layer">×</button></div>
@@ -547,7 +563,7 @@ export class Dashboard {
             try { await layer.setTime(this._currentTime); this.map.setExtraLegend(key, layer.legend()); }
             catch (err) {
                 console.warn(key, err);
-                if (!layer._warned) { layer._warned = true; toast(`${key === 'movement' ? 'Flow movement' : 'Wflow results'}: ${err.message}`); }
+                if (!layer._warned) { layer._warned = true; toast(`${EXTRAS[key].name}: ${err.message}`); }
             }
         }
     }
@@ -686,15 +702,15 @@ export class Dashboard {
             <div class="monitor-cell">
                 <span class="m-label">Water Quality Index</span>
                 <div id="gauge-wqi"></div>
-                <span class="m-sub" style="color:${g.wqi?.value >= 65 ? 'var(--sev-low)' : g.wqi?.value >= 45 ? 'var(--sev-medium)' : 'var(--sev-high)'}">${esc(g.wqi?.label || '—')}</span>
+                <span class="m-sub" style="color:${g.wqi?.value >= 65 ? 'var(--sev-low)' : g.wqi?.value >= 45 ? 'var(--sev-medium)' : 'var(--sev-high)'}">${esc(g.wqi?.label || '--')}</span>
             </div>`];
         const critical = (g.critical || []).slice(0, 2);
         if (critical.length < 2) {
-            cells.push(`<div class="monitor-cell">
+            cells.push(`<div class="monitor-cell" title="${esc(strat.hint || '')}">
                 <span class="m-label">Stratification ΔT</span>
                 <span class="m-icon" style="background:var(--accent-2-soft); color:var(--accent-2)">${icon('thermo', 18)}</span>
                 <span class="m-value">${fmtNumber(strat.value, 1)}<small>°C</small></span>
-                <span class="m-sub" style="color:${strat.value >= 3 ? 'var(--sev-medium)' : 'var(--sev-low)'}">${esc(strat.label || '—')}</span>
+                <span class="m-sub" style="color:${strat.value >= 3 ? 'var(--sev-medium)' : 'var(--sev-low)'}">${esc(strat.label || '--')}</span>
             </div>`);
         }
         critical.forEach(c => cells.push(`
@@ -732,7 +748,7 @@ export class Dashboard {
                     <span class="b-val">${fmtNumber(it.value, 3)}</span>
                 </div>`).join('')}</div>
                 <div class="bars-foot"><span>In <strong>${fmtNumber(srcs.reduce((a, b) => a + (b.value || 0), 0), 3)} m³/s</strong></span>
-                <span>Out ${sinks.length ? sinks.map(k => `${esc(k.name)} <strong>${fmtNumber(Math.abs(k.value), 3)}</strong>`).join(', ') : '<strong>—</strong>'}</span></div>`;
+                <span>Out ${sinks.length ? sinks.map(k => `${esc(k.name)} <strong>${fmtNumber(Math.abs(k.value), 3)}</strong>`).join(', ') : '<strong>-</strong>'}</span></div>`;
             requestAnimationFrame(() => body.querySelectorAll('.bar-fill').forEach(b => { b.style.width = b.dataset.w + '%'; }));
             return;
         }
@@ -775,7 +791,7 @@ export class Dashboard {
             <div class="alert-item sev-${a.severity}" data-alert="${esc(a.id)}" title="${esc(a.detail || a.title)}">
                 <span class="alert-ico">${icon(SEV_ICON[a.severity], 16)}</span>
                 <div class="alert-text"><div class="alert-title">${esc(a.title)}</div>
-                    <div class="alert-meta">${esc(a.location || '—')} · ${esc(a.category)}</div></div>
+                    <div class="alert-meta">${esc(a.location || '-')} · ${esc(a.category)}</div></div>
                 <span class="alert-date">${a.time ? fmtDate(a.time) : ''}</span>
             </div>`).join('');
     }
@@ -806,10 +822,10 @@ export class Dashboard {
                     <tr class="sev-${c.severity}">
                         <td><span class="sev-pill">${c.severity === 'low' ? 'ok' : c.severity}</span></td>
                         <td>${esc(c.label)}<div style="color:var(--muted); font-size:11px">${esc(c.category)} · ${esc((c.source || '').toUpperCase())}${c.detail ? ' · ' + esc(c.detail) : ''}</div></td>
-                        <td class="num">${c.value === null || c.value === undefined ? '—' : fmtVal(c.value, c.unit)}</td>
-                        <td class="num">${c.exceed_pct === undefined || c.exceed_pct === null ? '—' : c.exceed_pct + ' %'}</td>
-                        <td>${esc(c.location || '—')}</td>
-                        <td>${c.time ? fmtDate(c.time, true) : '—'}</td>
+                        <td class="num">${c.value === null || c.value === undefined ? '-' : fmtVal(c.value, c.unit)}</td>
+                        <td class="num">${c.exceed_pct === undefined || c.exceed_pct === null ? '-' : c.exceed_pct + ' %'}</td>
+                        <td>${esc(c.location || '-')}</td>
+                        <td>${c.time ? fmtDate(c.time, true) : '-'}</td>
                     </tr>`).join('')}</tbody>
             </table>`;
         $('alerts-modal').classList.add('show');
@@ -854,7 +870,7 @@ export class Dashboard {
         const sim = summary.simulation || {};
         if (summary.mode !== 'empty' && sim.hyd) {
             const h = sim.hyd, w = sim.waq;
-            const parts = [`HYD: ${h.scenario || '—'} (${fmtDate(h.start)} – ${fmtDate(h.end)}${h.step_minutes ? `, ${h.step_minutes / 60} h step` : ''}${h.n_layers ? `, ${h.n_layers} layers` : ''})`];
+            const parts = [`HYD: ${h.scenario || '-'} (${fmtDate(h.start)} - ${fmtDate(h.end)}${h.step_minutes ? `, ${h.step_minutes / 60} h step` : ''}${h.n_layers ? `, ${h.n_layers} layers` : ''})`];
             parts.push(w?.available ? `WAQ: ${w.scenario}` : 'no WAQ');
             $('page-subtitle').textContent = parts.join(' · ');
         }
@@ -885,7 +901,7 @@ export class Dashboard {
 
     resize(refit = false) {
         this.map?.invalidate(refit);
-        resizeCharts(['gauge-wqi', 'donut-chart', 'ts-chart', 'profile-chart']);
+        resizeCharts(['gauge-wqi', 'donut-chart', 'ts-chart', 'profile-chart', 'weather-chart']);
     }
 }
 
@@ -899,3 +915,74 @@ export function positionPopover(pop, anchor, align = 'left') {
 }
 
 export { toast };
+
+export function initSidebarResize({ app, sidebar, onResize = () => {} }) {
+    if (!app || !sidebar) return;
+    const sash = document.createElement('div');
+    sash.className = 'sidebar-sash';
+    sash.setAttribute('role', 'separator');
+    sash.setAttribute('aria-orientation', 'vertical');
+    sash.setAttribute('aria-label', 'Resize sidebar');
+    sash.tabIndex = 0;
+    sash.title = 'Drag to resize · double-click to reset';
+    sash.innerHTML = '<span class="sash-grip" aria-hidden="true"><i></i><i></i><i></i></span>';
+    sidebar.appendChild(sash);
+    const clamp = (w) => Math.round(Math.min(MAX_W, Math.max(MIN_W, w)));
+    const current = () => sidebar.getBoundingClientRect().width;
+    let frame = null;
+    const notify = () => {                       // bản đồ / biểu đồ co giãn theo, tối đa 1 lần mỗi khung hình
+        if (frame) return;
+        frame = requestAnimationFrame(() => { frame = null; onResize(); });
+    };
+    const apply = (w, save = true) => {
+        const v = clamp(w);
+        app.style.setProperty('--sidebar-w', `${v}px`);
+        sash.setAttribute('aria-valuenow', String(v));
+        if (save) { try { localStorage.setItem(WIDTH_KEY, String(v)); } catch (e) { /* ignore */ } }
+        notify();
+    };
+    const reset = () => {
+        app.style.removeProperty('--sidebar-w');
+        try { localStorage.removeItem(WIDTH_KEY); } catch (e) { /* ignore */ }
+        notify();
+    };
+    sash.setAttribute('aria-valuemin', String(MIN_W));
+    sash.setAttribute('aria-valuemax', String(MAX_W));
+    // Độ rộng đã lưu
+    let saved = null;
+    try { saved = Number(localStorage.getItem(WIDTH_KEY)); } catch (e) { /* ignore */ }
+    if (saved) apply(saved, false);
+    // Kéo bằng chuột / cảm ứng
+    let startX = 0, startW = 0;
+    sash.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || app.classList.contains('sidebar-collapsed') || window.innerWidth <= MOBILE_MAX) return;
+        e.preventDefault();
+        startX = e.clientX; startW = current();
+        sash.setPointerCapture(e.pointerId);
+        document.body.classList.add('sash-dragging');
+        sash.classList.add('active');
+    });
+    sash.addEventListener('pointermove', (e) => {
+        if (!sash.hasPointerCapture(e.pointerId)) return;
+        apply(startW + (e.clientX - startX), false);
+    });
+    const end = (e) => {
+        if (!sash.hasPointerCapture(e.pointerId)) return;
+        sash.releasePointerCapture(e.pointerId);
+        document.body.classList.remove('sash-dragging');
+        sash.classList.remove('active');
+        apply(current());                        // lưu giá trị cuối
+    };
+    sash.addEventListener('pointerup', end);
+    sash.addEventListener('pointercancel', end);
+    sash.addEventListener('dblclick', reset);
+    // Bàn phím
+    sash.addEventListener('keydown', (e) => {
+        const step = e.shiftKey ? 40 : 10;
+        if (e.key === 'ArrowLeft') apply(current() - step);
+        else if (e.key === 'ArrowRight') apply(current() + step);
+        else if (e.key === 'Home') reset();
+        else return;
+        e.preventDefault();
+    });
+}
