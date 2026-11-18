@@ -15,7 +15,7 @@ import { setPendingRequest, clearPendingRequest, origin, getLastProject,
 import { renderPreview, currentMap } from "./mapManager.js";
 import { TOOL_GROUPS, QUICK_TOOLS, getTool, groupOf, standaloneLabel } from "./toolRegistry.js";
 import { icon } from "./icons.js";
-import { Dashboard, toast } from "./dashboardManager.js";
+import { Dashboard, toast, initSidebarResize } from "./dashboardManager.js";
 
 const app = document.getElementById('app');
 const githubCache = {}, pendingRequests = new Map();
@@ -25,6 +25,7 @@ const VIEW_TITLES = {
     map: 'Map View', workspace: 'Modelling Workspace',
     subtitle: 'Catchment, lake and fjord modelling - Hydrodynamics, water quality and calibration'
 };
+
 let userName = null, prevSource = null, currentTimeZone = null, selectedTimeZone = null;
 let dashboard = null, currentView = 'overview';
 
@@ -176,6 +177,11 @@ function bindShell() {
         app.classList.toggle('sidebar-collapsed');
         localStorage.setItem(SIDEBAR_KEY, app.classList.contains('sidebar-collapsed') ? '1' : '0');
         setTimeout(() => { dashboard?.resize(); window.dispatchEvent(new Event('resize')); }, 220);
+    });
+    // Kéo mép phải sidebar để đổi độ rộng
+    initSidebarResize({
+        app, sidebar: document.getElementById('sidebar'),
+        onResize: () => { dashboard?.resize(); window.dispatchEvent(new Event('resize')); },
     });
     // Đổi dự án (dùng modal sẵn có của projectManager)
     document.getElementById('project-chip').addEventListener('click', () => projectModifier(userName));
@@ -391,7 +397,9 @@ async function renderTimezoneList(resultsBox, query = '') {
 
 function getOffsetLabel(tzName) {
     try {
-        const parts = new Intl.DateTimeFormat('en-US', { timeZone: tzName, timeZoneName: 'shortOffset' }).formatToParts(new Date());
+        const parts = new Intl.DateTimeFormat('en-US', { 
+            timeZone: tzName, timeZoneName: 'shortOffset' 
+        }).formatToParts(new Date());
         return parts.find(p => p.type === 'timeZoneName')?.value || '';
     } catch (e) { return ''; }
 }

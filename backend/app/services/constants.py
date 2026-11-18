@@ -1,5 +1,9 @@
-import re, math
+import re, math, os
+from config import SOURCE_BACKEND
 import numpy as np
+
+SAMPLE_DIR = os.path.normpath(os.path.join(SOURCE_BACKEND, "samples"))
+FLOW_SAMPLE_DIR = os.path.normpath(os.path.join(SOURCE_BACKEND, "flow_samples"))
 
 # Dashboard
 DASH_MOVE_DIR, DASH_VIEW_DIR = "movement",  "viewer"
@@ -176,6 +180,30 @@ MET_VARS = {"precipitation_amount": "precip_mm", "air_temperature_2m": "t_k", "r
 OM_HOURLY = ("precipitation,temperature_2m,relative_humidity_2m,dew_point_2m,shortwave_radiation,wind_speed_10m,"
     "wind_direction_10m,pressure_msl,surface_pressure,cloud_cover"
 )
+
+# Weather Live
+WEATHER_USER_AGENT = "HydroAI-Water-Platform/1.0 (+https://github.com/Lam-V-Nguyen/HydroAI-Fjord-Platform)"
+WEATHER_STATION_MAX_KM = 30                   # trạm Frost xa hơn -> coi như không có trạm gần
+WEATHER_FALLBACK_ORDER = ("metno", "openmeteo")   # nguồn thay thế khi không có số đo trạm
+WEATHER_PAST_HOURS, WEATHER_FORECAST_HOURS, WEATHER_TIMEOUT = 48, 48, 20
+WEATHER_VARIABLES = [
+    {"key": "temperature", "label": "Air temperature", "short": "Temperature", "unit": "°C", "icon": "temperature", "decimals": 1},
+    {"key": "precipitation", "label": "Precipitation", "short": "Precipitation", "unit": "mm/h", "icon": "droplet", "decimals": 1},
+    {"key": "pressure", "label": "Air pressure (sea level)", "short": "Pressure (MSL)", "unit": "hPa", "icon": "activity", "decimals": 0},
+    {"key": "humidity", "label": "Relative humidity", "short": "Humidity", "unit": "%", "icon": "waves", "decimals": 0},
+]
+WEATHER_SOURCES = {
+    "frost": {"label": "MET Norway Frost", "kind": "Observations", "resolution": "hourly (~1 h delay)",
+        "ttl": 900, "license": "CC BY 4.0 · MET Norway", "url": "https://frost.met.no"},
+    "metno": {"label": "MET Norway Locationforecast 2.0", "kind": "Forecast", "resolution": "hourly, updated ~hourly",
+        "ttl": 1800, "license": "CC BY 4.0 · MET Norway", "url": "https://api.met.no"},
+    "openmeteo": {"label": "Open-Meteo", "kind": "Model analysis + forecast", "resolution": "hourly, updated ~hourly",
+        "ttl": 900, "license": "CC BY 4.0 · Open-Meteo", "url": "https://open-meteo.com"},
+}
+FROST_ELEMENTS = {
+    "temperature": "air_temperature", "precipitation": "sum(precipitation_amount PT1H)",
+    "pressure": "air_pressure_at_sea_level", "humidity": "relative_humidity",
+}
 
 # Wflow
 MASK_NAMES = ("mask", "subcatchment", "basins")
@@ -414,4 +442,12 @@ FRIENDLY = {
     "Maximum area must be greater than zero":
         "Cannot triangulate the polygon: it has duplicate/overlapping vertices or zero-length edges, "
         "or the scale factor is too small. Reset the vertexes or increase the scale factor and try again.",
+}
+# Lớp nền (lake, catchment, rivers, bathymetry): thiếu file -> None / [] -> dashboard ẩn lựa chọn tương ứng.
+# Cache theo (đường dẫn, mtime) để file được thêm / sửa / xoá sau khi server chạy vẫn được nhận ra.
+CONTEXT_FILES = {
+    "lake": os.path.join(FLOW_SAMPLE_DIR, "BrusdalLake.geojson"),
+    "catchment": os.path.join(FLOW_SAMPLE_DIR, "catchment.geojson"),
+    "rivers": os.path.join(FLOW_SAMPLE_DIR, "river.geojson"),
+    "bathymetry": os.path.join(SAMPLE_DIR, "depth.csv"),
 }

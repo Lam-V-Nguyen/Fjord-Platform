@@ -26,6 +26,7 @@ from pyproj import Transformer
 _LOCK = threading.Lock()
 _MESH_CACHE: dict[str, tuple[float, dict]] = {}
 _RANGE_CACHE: dict[str, tuple[float, list]] = {}
+_ORDER_CACHE: dict[str, np.ndarray | None] = {}
 
 # Helpers
 def _r(v, n=3):
@@ -106,6 +107,50 @@ def _to_wgs84(x, y, crs):
     except Exception:
         traceback.print_exc()
         return x, y
+
+def _face_centroids(ds: xr.Dataset):
+    """Face centres in the file's own coordinates (no reprojection), or None."""
+    for xk, yk in (("mesh2d_face_x", "mesh2d_face_y"), ("FlowElem_xcc", "FlowElem_ycc")):
+        if xk in ds.variables and yk in ds.variables:
+            return np.asarray(ds[xk].values, float).ravel(), np.asarray(ds[yk].values, float).ravel()
+    for nxk, nyk, fk in (("mesh2d_node_x", "mesh2d_node_y", "mesh2d_face_nodes"),
+                         ("NetNode_x", "NetNode_y", "NetElemNode")):
+        if fk in ds.variables:
+            nx, ny = np.asarray(ds[nxk].values, float), np.asarray(ds[nyk].values, float)
+            fn = np.asarray(ds[fk].values, float)
+            start = int(ds[fk].attrs.get("start_index", 1))
+            valid = np.isfinite(fn) & (fn >= start) & (fn < start + len(nx))
+            idx = np.where(valid, fn - start, 0).astype(int)
+            n = np.maximum(valid.sum(axis=1), 1)
+            return (np.where(valid, nx[idx], 0).sum(axis=1) / n, np.where(valid, ny[idx], 0).sum(axis=1) / n)
+    return None
+
+def face_order(display_ds: xr.Dataset, value_ds: xr.Dataset):
+    """
+    Cell order of `value_ds` (e.g. DELWAQ map, written on the waqgeom grid) relative to the mesh drawn
+    from `display_ds` (e.g. D-Flow FM map). Returns idx so that values_of_value_ds[..., idx] is in display
+    order, or None when both files already use the same order. Raises if the grids do not match cell by cell.
+    """
+    ch, cw = _face_centroids(display_ds), _face_centroids(value_ds)
+    if ch is None or cw is None:
+        raise ValueError("Cannot read face coordinates of the HYD/WAQ map files to align the grids")
+    if len(ch[0]) != len(cw[0]):
+        raise ValueError(f"WAQ map has {len(cw[0])} cells but the HYD mesh has {len(ch[0])} "
+            "(aggregated WAQ grid?) - cannot draw WAQ results on the HYD mesh"
+        )
+    scale = max(np.nanmax(ch[0]) - np.nanmin(ch[0]), np.nanmax(ch[1]) - np.nanmin(ch[1]), 1e-12)
+    tol = 1e-6 * scale
+    if np.allclose(ch[0], cw[0], atol=tol) and np.allclose(ch[1], cw[1], atol=tol): return None
+    from scipy.spatial import cKDTree
+    ptw = np.column_stack([np.nan_to_num(cw[0]), np.nan_to_num(cw[1])])
+    pth = np.column_stack([np.nan_to_num(ch[0]), np.nan_to_num(ch[1])])
+    dist, idx = cKDTree(ptw).query(pth)
+    if len(np.unique(idx)) != len(idx) or np.nanmax(dist) > 1e-3 * scale:
+        raise ValueError("HYD and WAQ map grids do not match cell by cell - cannot align WAQ results")
+    order = idx.astype(np.int64)
+    print(f"[results] WAQ map faces are ordered differently from the HYD mesh - reordering "
+        f"({int((order != np.arange(len(order))).sum())} of {len(order)} cells moved)")
+    return order
 
 def surface_index(source: str, n_layers: int) -> int:
     return n_layers - 1 if source == "hyd" else 0
@@ -408,6 +453,29 @@ class ProjectResults:
             _MESH_CACHE[path] = (m, result)
         return result
 
+    # WAQ -> display-mesh face order
+    def waq_face_order(self):
+        """
+        The map is drawn with the HYD (D-Flow FM) mesh, but the WAQ (DELWAQ) map file is written on the
+        waqgeom grid, whose faces are not guaranteed to be in the same order. Plotting WAQ values by
+        index on the HYD mesh then puts concentrations on the wrong cells (e.g. the opposite shore).
+        Returns idx so that waq_values[idx] is in display-mesh order, or None if the order is identical
+        (or the display mesh is the WAQ mesh itself).
+        """
+        hp, wp = self.paths.get("hyd_map"), self.paths.get("waq_map")
+        if not hp or not wp: return None
+        key = f"{hp}|{_mtime(hp)}|{wp}|{_mtime(wp)}"
+        with _LOCK:
+            if key in _ORDER_CACHE: return _ORDER_CACHE[key]
+        order = face_order(self.ds("hyd_map"), self.ds("waq_map"))
+        with _LOCK:
+            _ORDER_CACHE[key] = order
+        return order
+
+    def waq_face_index(self, display_index: int) -> int:
+        order = self.waq_face_order() if self.paths.get("hyd_map") else None
+        return int(order[display_index]) if order is not None else display_index
+
     # Field (map)
     def field(self, source: str, name: str, layer: str, when) -> dict:
         ds = self.ds(f"{source}_map")
@@ -421,6 +489,9 @@ class ProjectResults:
             alt = name.replace("mesh2d_", "mesh2d_2d_", 1)
             if alt in ds.data_vars: da_t = ds[alt].isel({time_dim(ds[alt]): tidx})
         vals = np.asarray(select_layer(da_t, source, layer).values, dtype=float).ravel()
+        if source == "waq" and self.mesh() and self.mesh()["source"] == "hyd_map":
+            order = self.waq_face_order()
+            if order is not None: vals = vals[order]     # WAQ order -> display (HYD) mesh order
         vmin, vmax = self.value_range(source, name, layer)
         times = self.times(source)
         return {
@@ -559,7 +630,8 @@ class ProjectResults:
             return f"{source.upper()} map grid differs from the display mesh"
         if dist > 1000: return f"Station '{station}' is {dist / 1000:.1f} km outside the model grid"
         tidx = self.time_index(source, when)
-        vals = np.asarray(da.isel({td: tidx, fd: i}).values, float).ravel()
+        fi = self.waq_face_index(i) if source == "waq" and mesh["source"] == "hyd_map" else i
+        vals = np.asarray(da.isel({td: tidx, fd: fi}).values, float).ravel()
         n = len(vals)
         frac = (np.arange(n) + 0.5) / n 
         rel = (1 - frac) if source == "hyd" else frac   # HYD: botom -> surface; WAQ: surface -> bottom

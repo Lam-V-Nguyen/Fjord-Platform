@@ -282,6 +282,10 @@ function initDynamicMap(projectName, map, timeControl, colorbarContainer,
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => { handleSliderUpdate(values, handle, unencoded); }, 80);
     });
+    // Track dragging so the animation does not fight the user and continues from the released position
+    let isDragging = false;
+    slider.noUiSlider.on('start', () => { isDragging = true; });
+    slider.noUiSlider.on('end', () => { isDragging = false; });
     // Play/Pause button
     if (playHandlerAttached && playHandlerRef) {
         // Remove previous handler
@@ -294,13 +298,12 @@ function initDynamicMap(projectName, map, timeControl, colorbarContainer,
             setStateVisualization({isPlaying: null});
             playBtn.textContent = "▶ Play"; return;
         }
-        // Get current index
-        let idx = Math.round(slider.noUiSlider.get());
         const len = maxIndex + 1;
         const speed = 1000/parseFloat(timeSpeed.value || 1);
         const interval = setInterval(() => {
-            idx = (idx + 1) % len;
-            slider.noUiSlider.set(idx);
+            if (isDragging) return;                                   // user is dragging: do not move the handle
+            const idx = Math.round(Number(slider.noUiSlider.get()));  // always continue from the current position
+            slider.noUiSlider.set((idx + 1) % len);
         }, speed);
         setStateVisualization({isPlaying: interval});
         playBtn.textContent = "⏸ Pause";

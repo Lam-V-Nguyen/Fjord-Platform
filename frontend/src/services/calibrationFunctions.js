@@ -21,13 +21,11 @@ export function fillOverrides(rows, table) {
     tbody.innerHTML = (rows && rows.length ? rows : [['', '', '']]).map(overrideRowHtml).join('');
 }
 
-export function updateLogSimulation(hydProject, key, logObject, progressBarObject, progressTextObject, seconds, logFile) {
+export function updateLogSimulation(hydProject, key, logObject, progressBarObject, progressTextObject, seconds, logFile, startOffset = 0) {
     if (logInterval) { clearInterval(logInterval); logInterval = null; }
-    activeProject = hydProject; lastOffsetHYD = 0; running = true;
+    activeProject = hydProject; lastOffsetHYD = startOffset; running = true;
     const fetchLog = async () => {
-        const res = await fetch(
-            `/calibration_log_tail/${hydProject}?offset=${lastOffsetHYD}&log_file=${logFile}`
-        );
+        const res = await fetch(`/calibration_log_tail/${hydProject}?offset=${lastOffsetHYD}&log_file=${logFile}`);
         if (!res.ok) { 
             const txt = await res.text();
             progressTextObject.innerText = txt;

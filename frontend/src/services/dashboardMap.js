@@ -49,12 +49,14 @@ export const LAYER_DEFS = [
     { key: 'field', label: 'Simulation field', kind: 'gradient', on: true },
     { key: 'stations', label: 'Observation stations', kind: 'point', color: '#e879f9', icon: 'eye', on: true },
     { key: 'alerts', label: 'Alert zones', kind: 'zone', color: '#f43f5e', on: true },
-    { key: 'lake', label: 'Lake boundary', kind: 'polygon', color: '#38bdf8', on: true },
-    { key: 'catchment', label: 'Catchment', kind: 'polygon-dashed', color: '#a3e635', on: false },
-    { key: 'rivers', label: 'River network', kind: 'line', color: '#60a5fa', on: false },
-    { key: 'bathymetry', label: 'Bathymetry points', kind: 'gradient', palette: 'bathymetry', on: false },
+    // context: true -> chỉ hiện trong danh sách khi backend trả dữ liệu (file .geojson / depth.csv tồn tại)
+    { key: 'lake', label: 'Lake boundary', kind: 'polygon', color: '#38bdf8', on: true, context: true },
+    { key: 'catchment', label: 'Catchment', kind: 'polygon-dashed', color: '#a3e635', on: false, context: true },
+    { key: 'rivers', label: 'River network', kind: 'line', color: '#60a5fa', on: false, context: true },
+    { key: 'bathymetry', label: 'Bathymetry points', kind: 'gradient', palette: 'bathymetry', on: false, context: true },
     // Lớp bổ sung: chỉ bật được khi dự án có dữ liệu (xem setAvailability / registerExtra)
     { key: 'movement', label: 'Flow movement (HYD)', kind: 'gradient', palette: 'speed_light', on: false, extra: true },
+    { key: 'pollution', label: 'Pollutant spread (WAQ)', kind: 'gradient', palette: 'quality', on: false, extra: true },
     { key: 'wflow', label: 'Wflow results', kind: 'gradient', palette: 'flow', on: false, extra: true },
 ];
 
@@ -79,11 +81,11 @@ function esc(s) {
 }
 
 export function fmtVal(v, unit = '') {
-    if (v === null || v === undefined || Number.isNaN(v)) return '—';
+    if (v === null || v === undefined || Number.isNaN(v)) return '-';
     if (v === 0) return unit ? `0${unit}` : '0';
     const a = Math.abs(v);
     const s = a >= 1000 ? v.toFixed(0) : a >= 100 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : a >= 0.01 ? v.toFixed(3) : v.toExponential(2);
-    return unit ? `${s} ${unit}` : s;
+    return unit ? `${s}${unit}` : s;
 }
 
 function loadState() { try { return JSON.parse(localStorage.getItem(LAYER_STATE_KEY)) || {}; } catch (e) { return {}; } }
@@ -170,7 +172,8 @@ export class DashboardMap {
     _addGroup(key, group) {
         if (this.groups[key]) this.map.removeLayer(this.groups[key]);
         this.groups[key] = group;
-        if (this.state[key] ?? true) group.addTo(this.map);
+        const def = this.defs.find(d => d.key === key);
+        if (this.state[key] ?? def?.on ?? true) group.addTo(this.map);   // mặc định theo LAYER_DEFS (on: false -> ẩn)
     }
 
     // Mesh + field
@@ -264,23 +267,32 @@ export class DashboardMap {
     // context layers
     setContext(layers) {
         const parts = [];
-        if (layers.lake) {
+        const hasGeo = (gj) => !!(gj && (gj.features ? gj.features.length : gj.type));
+        this.contextAvail = {
+            lake: hasGeo(layers.lake), catchment: hasGeo(layers.catchment), rivers: hasGeo(layers.rivers),
+            bathymetry: Array.isArray(layers.bathymetry) && layers.bathymetry.length > 0,
+        };
+        // Lớp không còn dữ liệu (vd. file bị xoá): gỡ khỏi bản đồ
+        Object.entries(this.contextAvail).forEach(([k, ok]) => {
+            if (!ok && this.groups[k]) { this.map.removeLayer(this.groups[k]); delete this.groups[k]; }
+        });
+        if (this.contextAvail.lake) {
             const g = L.geoJSON(layers.lake, {
                 style: { color: '#7dd3fc', weight: 1.4, fill: false, opacity: 0.9 }, interactive: false,
             });
             this._addGroup('lake', g); parts.push(g.getBounds());
         }
-        if (layers.catchment) {
+        if (this.contextAvail.catchment) {
             this._addGroup('catchment', L.geoJSON(layers.catchment, {
                 style: { color: '#a3e635', weight: 1.3, dashArray: '5 5', fillColor: '#a3e635', fillOpacity: 0.03 }, interactive: false,
             }));
         }
-        if (layers.rivers) {
+        if (this.contextAvail.rivers) {
             this._addGroup('rivers', L.geoJSON(layers.rivers, {
                 style: (f) => ({ color: '#60a5fa', weight: Math.min(4, 1 + (f.properties?.Width || 0.5)), opacity: 0.8 }), interactive: false,
             }));
         }
-        if (Array.isArray(layers.bathymetry) && layers.bathymetry.length) {
+        if (this.contextAvail.bathymetry) {
             const maxD = Math.max(...layers.bathymetry.map(p => p[2]));
             const r = L.canvas({ padding: 0.3 });
             this._addGroup('bathymetry', L.layerGroup(layers.bathymetry.map(([la, lo, d]) => L.circleMarker([la, lo], {
@@ -305,7 +317,7 @@ export class DashboardMap {
         this.renderLayerList(); this.renderLegend();
     }
 
-    // ------------------------------------------------------------ alerts
+    // alerts
     setAlerts(alerts) {
         if (!this.groups.alerts) { this.groups.alerts = L.layerGroup(); if (this.state.alerts ?? true) this.groups.alerts.addTo(this.map); }
         const g = this.groups.alerts;
@@ -342,10 +354,12 @@ export class DashboardMap {
         return true;
     }
 
-    // ------------------------------------------------------------ list & legend
+    // Lớp nền chưa tải xong (contextAvail chưa có) hoặc không có file -> không hiện trong danh sách
+    isListed(d) { return !d.context || !!this.contextAvail?.[d.key]; }
+    // list & legend
     renderLayerList() {
         if (!this.layerListEl) return;
-        this.layerListEl.innerHTML = this.defs.map(d => {
+        this.layerListEl.innerHTML = this.defs.filter(d => this.isListed(d)).map(d => {
             const av = this.availability[d.key];
             const disabled = d.extra && !(av && av.available);
             const on = !disabled && (this.state[d.key] ?? d.on);
@@ -370,7 +384,7 @@ export class DashboardMap {
         };
     }
 
-    // ------------------------------------------------------------ lớp bổ sung (movement, wflow)
+    //  lớp bổ sung (movement, wflow)
     registerExtra(key, handler, onSettings = null) {
         this.extraHandlers[key] = handler;
         if (onSettings) this.settingsHandlers[key] = onSettings;
@@ -425,7 +439,7 @@ export class DashboardMap {
 
     toggleAll() {
         // Lớp bổ sung (nặng) không bật/tắt hàng loạt
-        const base = this.defs.filter(d => !d.extra);
+        const base = this.defs.filter(d => !d.extra && this.isListed(d));
         const anyOff = base.some(d => !(this.state[d.key] ?? d.on));
         base.forEach(d => this.toggle(d.key, anyOff));
     }
@@ -449,7 +463,7 @@ export class DashboardMap {
                 <div class="lf-title">${esc(this.field.label)}${this.field.unit ? ` (${esc(this.field.unit)})` : ''}</div>
                 <div class="lf-mode">Scale: <button data-scale="fixed" class="${this.scaleMode === 'fixed' ? 'active' : ''}">all times</button><button data-scale="frame" class="${this.scaleMode === 'frame' ? 'active' : ''}">this frame</button></div>
                 <div class="lf-bar" style="background:${paletteCss(this.field.palette)}"></div>
-                <div class="lf-scale"><span>${fmtVal(this.field.min)}</span><span>${fmtVal(mid)}</span><span>${fmtVal(this.field.max)}</span></div>
+                <div class="lf-scale"><span>${fmtVal(x.min)}</span><span>${fmtVal(x.mid ?? (x.min + x.max) / 2)}</span><span>${x.maxPrefix || ''}${fmtVal(x.max)}</span></div>
             </div>`;
         }
         Object.entries(this.extraLegends).forEach(([key, xs]) => {
@@ -467,7 +481,7 @@ export class DashboardMap {
         this.legendEl.querySelectorAll('[data-scale]').forEach(b => b.addEventListener('click', () => this.setScaleMode(b.dataset.scale)));
     }
 
-    // ------------------------------------------------------------ utils
+    // utils
     fit() {
         const b = this.meshBounds || this.contextBounds;
         if (b && b.isValid()) this.map.fitBounds(b, { padding: [28, 28] });

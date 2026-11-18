@@ -77,6 +77,24 @@ async function getProject() {
     await projectRender(obj.comparisonSimProject, obj.comparisonSimList, respond);
 }
 
+// Show progress + log of a simulation that is already running (other server process, page reload…)
+const ATTACH_LOG_BYTES = 200000;          // only the last ~200 kB of a long log is loaded when attaching
+function attachToRun(project, runKey, st, defaultLog) {
+    obj.calibrationLog.value = ''; obj.progressContainer.style.display = 'flex';
+    obj.progressText.innerText = st.message || ''; obj.progressBar.value = Number(st.progress) || 0;
+    updateLogSimulation(project, runKey, obj.calibrationLog, obj.progressBar, obj.progressText, 5,
+        st.logFile || defaultLog, -ATTACH_LOG_BYTES);
+}
+
+// Solvers left over from a run whose server process is gone: offer to stop them.
+// Returns true when they were stopped (the caller may continue), false otherwise.
+async function stopOrphanedRun(project, runKey, st) {
+    if (!confirm(`${st.message}\n\nOK = stop these processes now\nCancel = leave them running`)) return false;
+    const r = await jsonLoader('stop_sim_calibration', { projectName: project, key: runKey });
+    alert(r.message || r.detail || 'Could not stop the processes.');
+    return r.status === 'stopped' || r.status === 'not_started';
+}
+
 function selectedProject(input = obj.projectName) {
     const project = input.value.trim();
     if (project === '') { alert('Please select a HYD scenario first.'); return null; }
@@ -303,15 +321,25 @@ function initialCheckManager() {
             ['calibration', 'log_calibration.txt', 'The calibration simulations']
         ]) {
             const st = await jsonLoader('check_sim_status_calibration', { projectName: currentProject, key: runKey });
+            if (st.status === 'orphaned') {
+                if (!(await stopOrphanedRun(currentProject, runKey, st))) return;
+                continue;
+            }
+            // if (st.status === 'running') {
+            //     alert(`${label} of project "${currentProject}" is still running.\n` +
+            //         `${st.message || ''}\nPlease wait until it finishes.`);
+            //     // Re-attach the log and progress bar to the running simulation
+            //     obj.calibrationLog.value = ''; obj.progressContainer.style.display = 'flex';
+            //     obj.progressText.innerText = st.message || ''; obj.progressBar.value = Number(st.progress) || 0;
+            //     updateLogSimulation(
+            //         currentProject, runKey, obj.calibrationLog, obj.progressBar, obj.progressText, 5, runLog
+            //     ); return;
+            // }
             if (st.status === 'running') {
+                attachToRun(currentProject, runKey, st, runLog);     // re-attach log + progress bar
                 alert(`${label} of project "${currentProject}" is still running.\n` +
                     `${st.message || ''}\nPlease wait until it finishes.`);
-                // Re-attach the log and progress bar to the running simulation
-                obj.calibrationLog.value = ''; obj.progressContainer.style.display = 'flex';
-                obj.progressText.innerText = st.message || ''; obj.progressBar.value = Number(st.progress) || 0;
-                updateLogSimulation(
-                    currentProject, runKey, obj.calibrationLog, obj.progressBar, obj.progressText, 5, runLog
-                ); return;
+                return;
             }
         }
         // Create a baseline
@@ -329,7 +357,8 @@ function initialCheckManager() {
         const start = await jsonLoader('start_sim_calibration', {
             projectName: currentProject, key: key, samplingName: 'baseline', logFile: logFile
         });
-        if (start.status === 'error') { alert(start.message); return; }
+        if (start.status === 'error' || start.status === 'orphaned') { alert(start.message); return; }
+        if (start.status === 'running') { attachToRun(currentProject, key, start, logFile); return; }
         obj.progressText.innerText = 'Running the baseline simulation...';
         updateLogSimulation(currentProject, key, obj.calibrationLog, obj.progressBar, obj.progressText, 5, logFile);
     });
@@ -454,13 +483,19 @@ function calibrationManager() {
         if (isBusy() || isBlocked(key)) { alert('A process is running. Please wait until it finishes.'); return; }
         for (const runKey of ['baseline', key]) {
             const st = await jsonLoader('check_sim_status_calibration', { projectName: currentProject, key: runKey });
+            if (st.status === 'orphaned') {
+                if (!(await stopOrphanedRun(currentProject, runKey, st))) return;
+                continue;                           // stopped -> the resume dialog below proposes the next scenario
+            }
             if (st.status !== 'running') continue;
-            obj.progressContainer.style.display = 'flex';
-            obj.progressText.innerText = st.message || ''; obj.progressBar.value = Number(st.progress) || 0;
-            const runLog = runKey === 'baseline' ? 'log_baseline.txt' : logFile;
-            obj.calibrationLog.value = '';      // updateLogSimulation re-reads the log from the start
-            updateLogSimulation(currentProject, runKey, obj.calibrationLog, obj.progressBar, obj.progressText, 5, runLog);
+            attachToRun(currentProject, runKey, st, runKey === 'baseline' ? 'log_baseline.txt' : logFile);
             alert(`The ${runKey} simulation is still running. Please wait until it finishes.`); return;
+            // obj.progressContainer.style.display = 'flex';
+            // obj.progressText.innerText = st.message || ''; obj.progressBar.value = Number(st.progress) || 0;
+            // const runLog = runKey === 'baseline' ? 'log_baseline.txt' : logFile;
+            // obj.calibrationLog.value = '';      // updateLogSimulation re-reads the log from the start
+            // updateLogSimulation(currentProject, runKey, obj.calibrationLog, obj.progressBar, obj.progressText, 5, runLog);
+            // alert(`The ${runKey} simulation is still running. Please wait until it finishes.`); return;
         }
         // Which scenarios already finished (e.g. after a crash or a server restart)?
         const st = await jsonLoader('scenario_status_calibration', { projectName: currentProject });
@@ -493,7 +528,11 @@ function calibrationManager() {
             projectName: currentProject, key: key, samplingName: '', logFile: logFile,
             iterationStart, iterationEnd, skipCompleted
         });
-        if (start.status === 'error') { alert(start.message); return; }
+        if (start.status === 'error' || start.status === 'orphaned') { alert(start.message); return; }
+        if (start.status === 'running') {           // started meanwhile elsewhere: follow that run instead
+            attachToRun(currentProject, key, start, logFile);
+            alert('This simulation is already running - showing its progress and log.'); return;
+        }
         obj.progressText.innerText = 'Preparing data for the calibration simulations...';
         updateLogSimulation(currentProject, key, obj.calibrationLog, obj.progressBar, obj.progressText, 5, logFile);
     });
@@ -545,7 +584,7 @@ function calibrationManager() {
         await sensitivityRender(obj.sensitivityContainer, respond.content, respond.key);
     });
 
-    // ---- Surrogate model + optimisation -------------------------------------------------
+    // Surrogate model + optimisation
     obj.surrogateBtn.addEventListener('click', async () => {
         const currentProject = selectedProject(); if (!currentProject) return;
         const key = KEYS.surrogate, logFile = LOG_FILES.surrogate;
@@ -613,7 +652,7 @@ function calibrationManager() {
         if (data.status === 'ok') await getProject();
     });
 
-    // ---- Compare a (calibrated) scenario with observations --------------------------------
+    // Compare a (calibrated) scenario with observations
     obj.comparisonSimBtn.addEventListener('click', async () => {
         const currentProject = selectedProject(obj.comparisonSimProject); if (!currentProject) return;
         await openProject(obj.comparisonSimProject, obj.simStartDate, obj.simEndDate);

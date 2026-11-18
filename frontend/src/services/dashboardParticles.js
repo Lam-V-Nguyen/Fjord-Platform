@@ -99,7 +99,7 @@ export class ParticleField {
         return g ? this.cellOf((latlng.lng - g.lon0) / g.dlon, (latlng.lat - g.lat0) / g.dlat) : -1;
     }
 
-    // ------------------------------------------------------------ view
+    // view
     show() {
         if (this.visible) return;
         this.visible = true;

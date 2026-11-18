@@ -913,8 +913,7 @@ function mapOptions(map) {
                     currentPolygon.setLatLngs(pointCollections);
                 } else {
                     currentPolygon = L.polygon(pointCollections, {
-                        color: '#2563eb', weight: 2,
-                        fillColor: '#3b82f6', fillOpacity: 0.2
+                        color: '#2563eb', weight: 2, fillColor: '#3b82f6', fillOpacity: 0.2
                     }).addTo(map);
                 }
             }

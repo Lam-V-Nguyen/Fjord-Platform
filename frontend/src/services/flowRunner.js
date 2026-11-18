@@ -175,7 +175,7 @@ async function wflowmanager(map, meta, flowName, opts = {}){
     const fill = (sel, kind) => {
         if (!sel) return;
         const list = groups(kind);
-        sel.innerHTML = `<option value="">— none —</option>` + [...list].map(([gname, items]) =>
+        sel.innerHTML = `<option value="">- none -</option>` + [...list].map(([gname, items]) =>
             `<optgroup label="${esc(gname)}">` + items.map(([k, i]) =>
                 `<option value="${esc(k)}">${esc(i.description)}${i.units ? ` (${esc(i.units)})` : ""}</option>`).join("") +
             `</optgroup>`).join("");

@@ -99,7 +99,7 @@ export class MovementLayer {
         this.onMouseMove = (e) => this.probe(e.latlng);
     }
 
-    // ------------------------------------------------------------ data
+    // data
     // opts: {res, layer, rebuild} – chỉ gửi khi người dùng đổi; mặc định dùng cache đang có
     async init(opts = {}) {
         const res = await post('movement/init', { projectName: this.projectName, ...opts });
@@ -193,6 +193,12 @@ export class MovementLayer {
         if (this.S.curve === 'log') return Math.log1p(LOG_K * x) / Math.log1p(LOG_K);
         return Math.sqrt(x);
     }
+    // Inverse of curveF: the value whose colour sits at fraction y of the colour bar (for the legend)
+    curveInv(y) {
+        if (this.S.curve === 'linear') return y;
+        if (this.S.curve === 'log') return Math.expm1(y * Math.log1p(LOG_K)) / LOG_K;
+        return y * y;
+    }
 
     // Menu Layer: Depth-mean, Surface + các lớp theo độ sâu (output/config/layers_hyd.json)
     layerOptions() {
@@ -222,15 +228,18 @@ export class MovementLayer {
         const m = this.meta || {}, S = this.S;
         const when = `HYD ${(m.times?.[Math.round(this.t)] || '').replace('T', ' ').slice(0, 16)}`;
         const note = [when, this.layerLabel(m.layer), m.res_m ? `${+Number(m.res_m).toFixed(1)} m${m.res_auto ? ' (auto)' : ''}` : ''].filter(Boolean).join(' · ');
-        const out = [];
-        if (S.raster === 'speed') out.push({ title: `Flow movement · velocity (m/s)${S.curve !== 'linear' ? ` · ${S.curve} scale` : ''}`, palette: 'hyd_speed', min: 0, max: m.speed_max || 0.1, note });
+        const out = [], vmax = m.speed_max || 0.1, scale = S.curve !== 'linear' ? ` · ${S.curve} scale` : '';
+        // Colours follow curveF(|v|/vmax): label the middle of the bar with the matching speed, and the top
+        // with "≥" because speeds above speed_max (99.5th percentile) get the last colour
+        const speedScale = { min: 0, max: vmax, mid: this.curveInv(0.5) * vmax, maxPrefix: '≥ ' };
+        if (S.raster === 'speed') out.push({ title: `Flow movement · velocity (m/s)${scale}`, palette: 'hyd_speed', ...speedScale, note });
         else if (S.raster === 'depth') out.push({ title: 'Flow movement · water depth (m)', palette: 'hyd_depth', min: 0, max: m.depth_max || 1, note });
-        if (S.pcolor === 'speed') out.push({ title: 'Particles · speed (m/s)', palette: 'hyd_particle', min: 0, max: m.speed_max || 0.1, note: S.raster === 'none' ? note : '' });
+        if (S.pcolor === 'speed') out.push({ title: `Particles · speed (m/s)${scale}`, palette: 'hyd_particle', ...speedScale, note: S.raster === 'none' ? note : '' });
         if (!out.length) out.push({ title: 'Flow movement (HYD)', palette: 'hyd_particle', min: 0, max: m.speed_max || 0.1, note });
         return out;
     }
 
-    // ------------------------------------------------------------ view
+    // view
     show() {
         if (this.visible) return;
         this.visible = true;
@@ -305,7 +314,7 @@ export class MovementLayer {
     gx2x(gx) { return this.P.ax * (this.meta.lon0 + gx * this.meta.dlon) + this.P.bx; }
     gy2y(gy) { return this.P.ay * merc(this.meta.lat0 + gy * this.meta.dlat) + this.P.by; }
 
-    // ------------------------------------------------------------ vòng lặp (= frame() của moveManager.js)
+    // vòng lặp (= frame() của moveManager.js)
     frame(now) {
         const dtReal = Math.min(0.1, (now - this.last) / 1000); this.last = now;
         if (!this.meta || !this.pctx || document.hidden) return;
@@ -418,7 +427,7 @@ export class MovementLayer {
         this.drawn = drawn;
     }
 
-    // ------------------------------------------------------------ nền raster (= buildRaster/drawRaster)
+    // nền raster (= buildRaster/drawRaster)
     buildRaster(fa, fb, w) {
         const m = this.meta, { nx, ny } = m, N = this.N, ND = this.ND, d = this.offImg.data;
         const mode = this.S.raster, lut = LUT[mode];
@@ -460,7 +469,7 @@ export class MovementLayer {
         }
     }
 
-    // ------------------------------------------------------------ đọc giá trị dưới con trỏ
+    // đọc giá trị dưới con trỏ
     probe(latlng) {
         if (!this.probeEl || !this.probeEl.isConnected || !this.meta) return;
         const m = this.meta, f = this.frames.get(Math.round(this.t));
@@ -473,7 +482,7 @@ export class MovementLayer {
         this.probeEl.textContent = `Speed ${Math.hypot(u, v).toFixed(3)} m/s · to ${dir.toFixed(0)}° · depth ${d.toFixed(2)} m`;
     }
 
-    // ------------------------------------------------------------ bảng cài đặt (giống bảng của Visualization)
+    // bảng cài đặt (giống bảng của Visualization)
     renderSettings(el, ctx) {
         if (el._bound) { const n = el.cloneNode(false); n.classList.remove('busy'); el.replaceWith(n); el = n; }   // vẽ lại -> bỏ listener cũ
         el._bound = true;

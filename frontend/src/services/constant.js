@@ -69,7 +69,7 @@ export const resetStateVisualization = () => { stateVisualization = structuredCl
 
 export function valueFormatter(value, options={}) {
     const { scientificThreshold = 0.01, decimalPlaces = 2, scientificDigits = 2 } = options;
-    if (!Number.isFinite(value)) return "—";
+    if (!Number.isFinite(value)) return "-";
     if (Math.abs(value) < scientificThreshold && value !== 0) {
         const [mantissa, exponent] = value
             .toExponential(scientificDigits).split("e");

@@ -3,6 +3,7 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends, Request
 from fastapi.responses import JSONResponse
 from config import PROJECT_ROOT
 from services import functions, constants
+from services.dashboard_results import face_order
 import geopandas as gpd, numpy as np, pandas as pd, xarray as xr
 from shapely.geometry import mapping
 
@@ -168,6 +169,16 @@ async def initiate_options(request: Request, user=Depends(functions.basic_auth))
             return JSONResponse({"status": 'ok', "content": data})
     except Exception as e: functions.error('/initiate_options', e)
 
+def _waq_face_order(project_cache: dict):
+    """WAQ map cell order -> order of project_cache['grid'] (built from the HYD map). Cached per WAQ dataset."""
+    hyd_map, waq_map = project_cache.get("hyd_map"), project_cache.get("waq_map")
+    if hyd_map is None or waq_map is None: return None
+    hit = project_cache.get("waq_face_order")
+    if hit is not None and hit[0] is waq_map: return hit[1]      # recomputed when another WAQ model is opened
+    order = face_order(hyd_map, waq_map)
+    project_cache["waq_face_order"] = (waq_map, order)
+    return order
+
 # Load general dynamic data
 @router.post("/load_general_dynamic")
 async def load_general_dynamic(request: Request, user=Depends(functions.basic_auth)):
@@ -211,13 +222,18 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
                 layer_info = dynamic_cache['layers'].get(value_type)
                 if not layer_info:
                     if value_type == 'Average':
-                        arr = np.nanmean(values, axis=2) if is_hyd else data_ds[f"{name.split('_')[0]}_2d_{name.split('_')[1]}"].values
+                        if is_hyd: arr = np.nanmean(values, axis=2)
+                        else:
+                            name_2d = name.replace("mesh2d_", "mesh2d_2d_", 1)
+                            arr = data_ds[name_2d].values if name_2d in data_ds else np.nanmean(values, axis=1)
                     else: arr = values[:, :, row_idx] if is_hyd else values[:, row_idx, :]
                     # Save layer atomic to Redis hash
                     dynamic_cache['layers'][value_type] = {'data': functions.encode_array(arr), 'shape': arr.shape}
                     await redis.set(dynamic_cache_key, msgpack.packb(dynamic_cache, use_bin_type=True), ex=600)
                 else: arr = functions.decode_array(layer_info["data"], layer_info["shape"])
         else: arr = values
+        # WAQ values are stored in the waqgeom cell order, the polygons come from the HYD map grid
+        order = None if is_hyd else _waq_face_order(project_cache)
         if temp[2] == 'load': # Initiate skeleton polygon for the first load
             await redis.delete(dynamic_cache_key)
             grid = project_cache.get("grid")
@@ -227,6 +243,7 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
                         for idx, row in grid.iterrows()]
             arr_np, fmt = np.array(arr), functions.numberFormatter
             new_arr = arr_np[-1, :] if arr_np.ndim == 2 else arr_np
+            if order is not None: new_arr = new_arr[order]
             data = { 'meshes':  {'type': 'FeatureCollection', 'features': features},
                 'values': functions.encode_array(fmt(new_arr)), 'min_max': [
                     fmt(np.nanmin(values)).tolist(), fmt(np.nanmax(values)).tolist()
@@ -238,6 +255,7 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
         else: # Update value of polygons
             arr_np, fmt = np.array(arr), functions.numberFormatter
             new_arr = arr_np[int(temp[2]), :] if arr_np.ndim == 2 else arr_np
+            if order is not None: new_arr = new_arr[order]
             data = {'values': functions.encode_array(fmt(new_arr))}
         return JSONResponse({'status': 'ok', 'content': data})
     except Exception as e: functions.error('/load_general_dynamic', e)
