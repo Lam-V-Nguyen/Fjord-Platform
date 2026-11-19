@@ -24,16 +24,16 @@
                 <div class="tabpanel main-panel" data-panel="settings-tab">
                     <div class="grid">
                         <div class="tile" style="grid-column: span 4;"><h3>HYD Scenario</h3>
-                            <div class="row">
+                            <div class="row cmp-form">
                                 <div class="field-inline">
                                     <label for="project-name">HYD Scenario:</label>
                                     <div class="project-name-wrapper">
                                         <input type="text" class="project-name" id="project-name" 
                                             placeholder="Click to select a scenario" 
-                                            style="max-width: 200px; line-height: 1.8; height: 40px;">
-                                        <ul class="project-list" id="project-list" style="max-width: 200px;"></ul>
+                                            style="line-height: 1.8; height: 40px; width: 100%;">
+                                        <ul class="project-list" id="project-list"></ul>
                                     </div>
-                                    <button id="project-btn">Open Scenario</button>
+                                    <button id="project-btn" style="max-width: 200px;">Open Scenario</button>
                                 </div>
                                 <div class="field-inline">
                                     <label for="sim-start-date">Start Time:</label>
@@ -251,22 +251,30 @@
                 <div class="tabpanel main-panel" data-panel="comparison-tab">
                     <div class="grid">
                         <div class="tile"><h3>Simulation</h3>
-                            <div class="row">
-                                <div class="field-inline" style="margin-top: -20px; margin-bottom: -20px;">
-                                    <label for="project-name-comparison">HYD Simulation:</label>
+                            <div class="row cmp-form">
+                                <div class="field-inline">
+                                    <label for="project-name-comparison">Calibrated Scenario:</label>
                                     <div class="project-name-wrapper">
                                         <input type="text" class="project-name" id="project-name-comparison"
-                                            style="margin-top: 20px; line-height: 1.8; height: 40px;"
-                                            placeholder="Click to select a scenario">
+                                            placeholder="Click to select the calibrated scenario">
                                         <ul class="project-list" id="project-list-comparison"></ul>
                                     </div>
                                     <button id="project-comparison-btn">Open Simulation</button>
                                 </div>
-                                <div class="field-inline" style="margin-bottom: -10px;">
+                                <div class="field-inline">
+                                    <label for="project-name-initial">Initial Scenario:</label>
+                                    <div class="project-name-wrapper">
+                                        <input type="text" class="project-name" id="project-name-initial"
+                                            placeholder="Optional - scenario before calibration">
+                                        <ul class="project-list" id="project-list-initial"></ul>
+                                    </div>
+                                    <button id="project-initial-clear-btn">Clear</button>
+                                </div>
+                                <div class="field-inline">
                                     <label for="sim-start">Start Time:</label>
                                     <input type="text" id="sim-start" placeholder="YYYY-mm-dd HH:mm:ss">
                                 </div>
-                                <div class="field-inline" style="margin-bottom: -10px;">    
+                                <div class="field-inline">
                                     <label for="sim-end">End Time:</label>
                                     <input type="text" id="sim-end" placeholder="YYYY-mm-dd HH:mm:ss">
                                 </div>
@@ -274,7 +282,7 @@
                                     <label for="depth-comparison">Tested Depth(s):</label>
                                     <input type="text" id="depth-comparison" placeholder="5, 10, 30, 40, 50"
                                         value="5, 10, 30, 40, 50">
-                                    <label for="comparison-select">Station</label>
+                                    <label for="comparison-select">Station:</label>
                                     <select id="comparison-select">
                                         <option value="">-- Select a station --</option>
                                     </select>
@@ -282,7 +290,7 @@
                             </div>
                         </div>
                         <div class="tile"><h3>Observation</h3>
-                            <div class="row">
+                            <div class="row cmp-form">
                                 <div class="field-inline">
                                     <button id="obs-comparison-btn">Open an Observation (*.csv)</button>
                                     <input type="file" id="obs-comparison-file" accept=".csv" hidden>

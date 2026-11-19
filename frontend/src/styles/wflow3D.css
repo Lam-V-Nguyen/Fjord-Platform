@@ -1,0 +1,76 @@
+/* Chế độ "Wflow 3D" của Dashboard (dashboardWflow3D.js tự nạp file này khi được bật).
+   .panel-map.w3d-on : ẩn bản đồ Leaflet và mọi thành phần của nó, chỉ giữ khung 3D và bảng cài đặt ⚙. */
+.panel-map.w3d-on > :not(.w3d-root):not(#layer-settings) { display: none !important; }
+
+.w3d-root {
+    position: absolute; inset: 0; z-index: 800; overflow: hidden; border-radius: var(--radius, 12px);
+    background: #07111f; color: var(--text, #e2e8f0); font-size: 12px; user-select: none;
+}
+.w3d-root[hidden] { display: none; }
+.w3d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+.w3d-canvas:active { cursor: grabbing; }
+
+.w3d-hud {
+    position: absolute; z-index: 2; background: rgba(12, 22, 39, 0.86); border: 1px solid var(--border-strong, #334155);
+    border-radius: 10px; backdrop-filter: blur(4px);
+}
+.w3d-tl { top: 12px; left: 12px; padding: 9px 12px; max-width: min(460px, calc(100% - 220px)); }
+.w3d-title { font-weight: 650; font-size: 13px; color: var(--text, #f1f5f9); }
+.w3d-sub { color: var(--muted, #94a3b8); margin-top: 2px; }
+.w3d-stats { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
+.w3d-stats:empty { display: none; }
+.w3d-rain { color: #93c5fd; }
+
+.w3d-tr { top: 12px; right: 12px; display: flex; gap: 4px; padding: 4px; }
+.w3d-tr button {
+    width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2, #cbd5e1);
+    font-size: 15px; cursor: pointer; display: grid; place-items: center;
+}
+.w3d-tr button:hover { background: var(--panel-hover, rgba(148, 163, 184, .15)); }
+.w3d-tr button.on { background: var(--accent-soft, rgba(52, 211, 153, .15)); color: var(--accent, #34d399); }
+
+.w3d-legend { left: 12px; bottom: 64px; padding: 8px 10px; min-width: 170px; max-width: 230px; }
+.w3d-legend:empty { display: none; }
+.w3d-lg + .w3d-lg { margin-top: 8px; }
+.w3d-lg-t { font-weight: 600; color: var(--text, #f1f5f9); margin-bottom: 4px; font-size: 11.5px; }
+.w3d-lg-bar { height: 8px; border-radius: 4px; }
+.w3d-lg-s { display: flex; justify-content: space-between; color: var(--muted, #94a3b8); font-size: 10.5px; margin-top: 2px; }
+.w3d-lg-n { color: var(--faint, #64748b); font-size: 10.5px; margin-top: 2px; }
+.w3d-rain-sw { display: inline-block; width: 2px; height: 11px; margin-right: 7px; background: #bfdbfe; transform: rotate(12deg); vertical-align: -1px; }
+
+.w3d-hydro { right: 12px; bottom: 64px; width: min(400px, calc(100% - 270px)); min-width: 260px; height: 230px; padding: 6px 6px 2px; display: flex; flex-direction: column; }
+.w3d-hydro[hidden] { display: none; }
+.w3d-hydro-head { display: flex; justify-content: space-between; align-items: baseline; padding: 0 4px 2px; font-weight: 600; color: var(--text, #f1f5f9); }
+.w3d-hint { font-weight: 400; color: var(--faint, #64748b); font-size: 10.5px; }
+.w3d-hydro-head { gap: 8px; }
+.w3d-hydro-head .w3d-hint { margin-left: auto; }
+.w3d-clear {
+    border: 1px solid var(--border-strong, #334155); background: transparent; color: var(--text-2, #cbd5e1);
+    border-radius: 6px; padding: 1px 7px; font-size: 10.5px; cursor: pointer; white-space: nowrap;
+}
+.w3d-clear:hover { border-color: #f87171; color: #fecaca; }
+.w3d-clear[hidden] { display: none; }
+.w3d-hydro-plot { flex: 1; min-height: 0; }
+
+.w3d-time {
+    left: 50%; transform: translateX(-50%); bottom: 14px; width: min(560px, calc(100% - 40px)); min-width: 260px;
+    display: flex; align-items: center; gap: 10px; padding: 6px 12px 6px 6px;
+}
+.w3d-time input[type=range] { flex: 1; accent-color: var(--accent, #34d399); min-width: 80px; }
+.w3d-time .tb-btn { font-size: 12px; cursor: pointer; }
+.w3d-time .tb-label { font-family: var(--mono, ui-monospace, monospace); color: var(--text-2, #cbd5e1); white-space: nowrap; }
+
+.w3d-tip {
+    position: absolute; z-index: 3; pointer-events: none; padding: 6px 8px; border-radius: 7px; font-size: 11.5px; line-height: 1.45;
+    background: rgba(2, 6, 23, 0.9); border: 1px solid var(--border-strong, #334155); color: var(--text-2, #cbd5e1); max-width: 260px;
+}
+.w3d-tip[hidden], .w3d-note[hidden] { display: none; }
+.w3d-note {
+    position: absolute; z-index: 3; top: 12px; left: 50%; transform: translateX(-50%); max-width: 60%;
+    padding: 7px 12px; border-radius: 8px; background: rgba(120, 53, 15, 0.92); color: #fef3c7; font-size: 11.5px;
+}
+
+@media (max-width: 900px) {
+    .w3d-hydro { left: 12px; right: 12px; width: auto; bottom: 64px; height: 190px; }
+    .w3d-legend { display: none; }
+}

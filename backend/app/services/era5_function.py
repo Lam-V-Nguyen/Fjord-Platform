@@ -105,7 +105,7 @@ def var_detector(input_var:list, logger=None):
 def get_site_elevation_kartverket(lat, lon, timeout=15):
     """Surface elevation (m) from Kartverket DTM 1 m. In case of Na Uy; exception -> None."""
     try:
-        r = requests.get(constants.KARTVERKET_URL, params={
+        r = requests.get(os.getenv("KARTVERKET_URL").strip(), params={
             "koordsys": 4258, "nord": lat, "ost": lon, "geojson": "false"}, timeout=timeout)
         r.raise_for_status()
         pts = r.json().get("punkter") or []

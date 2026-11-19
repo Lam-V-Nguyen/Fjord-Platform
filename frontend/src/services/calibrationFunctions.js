@@ -112,6 +112,21 @@ export async function initParameterContainer(container, addParamKey, addParamBtn
 export function plotComparison(container, data) {
     const dfSim = data.sim, dfObs = data.obs, merge = data.merge, minMax = data.min_max;
     const depths = data.depth, metrics = data.metrics, totalRMSE = data.rmse;
+    const initial = data.initial || null;              // run before calibration (optional)
+    const calLabel = initial ? 'Calibrated' : 'Simulation';
+    const fmtM = (m) => `RMSE = ${m?.[0] == null ? '–' : Number(m[0]).toFixed(3)}°C · ` +
+        `Bias = ${m?.[2] == null ? '–' : (m[2] > 0 ? '+' : '') + Number(m[2]).toFixed(2)}°C · ` +
+        `R² = ${m?.[1] == null ? '–' : Number(m[1]).toFixed(3)}`;
+    const seriesOf = (rows, col) => {
+        const x = [], y = [];
+        (rows || []).forEach(row => {
+            const time = stringToUTC(row.Time), raw = row[col];
+            if (raw === null || raw === undefined || raw === '') return;
+            const value = Number(raw);
+            if (time && Number.isFinite(value)) { x.push(time); y.push(value); }
+        });
+        return { x, y };
+    };
     if (!container || !Array.isArray(dfSim) || !Array.isArray(dfObs) ||
         !Array.isArray(depths) || depths.length === 0) {
         if (container) { container.innerHTML = '<p>No simulation or observation data available.</p>'; }
@@ -127,8 +142,7 @@ export function plotComparison(container, data) {
         chart.id = `comparison-${idx}`; chart.className = 'comparison-chart'; 
         chartGrid.appendChild(chart); 
         const obsCol = `obs_${d}`, simCol = `sim_${d}`, traces = [];
-        const metric = metrics[String(d)];
-        const rmse = metric?.[0], r2 = metric?.[1], bias = metric?.[2];
+        const metric = metrics[String(d)], metricInit = initial?.metrics?.[String(d)];
         // Observation
         if (Array.isArray(dfObs) && dfObs.length > 0) { 
             const x = [], y = []; 
@@ -149,19 +163,26 @@ export function plotComparison(container, data) {
                 });
             }
         }
-        // Simulation
+        // Initial scenario (before calibration)
+        if (initial) {
+            const { x, y } = seriesOf(initial.sim, simCol);
+            if (x.length > 0) {
+                traces.push({
+                    x, y, type: 'scatter', mode: 'lines', name: 'Initial',
+                    line: { color: '#7f7f7f', width: 1.3, dash: 'dash' }, opacity: 0.9,
+                    hovertemplate: 'Initial: %{y:.3f}°C<extra></extra>',
+                });
+            }
+        }
+        // Calibrated scenario
         if (Array.isArray(dfSim) && dfSim.length > 0) { 
-            const x = [], y = []; 
-            dfSim.forEach(row => { 
-                const time = stringToUTC(row.Time), value = Number(row[simCol]); 
-                if (time && Number.isFinite(value)) { x.push(time); y.push(value); } 
-            }); 
+            const { x, y } = seriesOf(dfSim, simCol);
             if (x.length > 0) { 
                 traces.push({ 
                     x, y, type: 'scatter', mode: 'lines+markers', 
-                    opacity: 0.85, name: `Simulation`, marker: { size: 3 },
+                    opacity: 0.85, name: calLabel, marker: { size: 3 },
                     line: { color: '#1f77b4', width: 1.4 }, 
-                    hovertemplate: 'Simulation: %{y:.3f}°C<extra></extra>',
+                    hovertemplate: `${calLabel}: %{y:.3f}°C<extra></extra>`,
                 });
             }
         }
@@ -193,10 +214,10 @@ export function plotComparison(container, data) {
             },
             annotations: [{
                 x: 0.45, y: 1.03, xref: 'paper', yref: 'paper', xanchor: 'center', yanchor: 'top',
-                text: `(RMSE = ${rmse == null ? '–' : Number(rmse).toFixed(3)}°C · Bias = ${bias == null ? '–' : (bias > 0 ? '+' : '') + Number(bias).toFixed(2)}°C · R² = ${r2 == null ? '–' : Number(r2).toFixed(3)})`,
+                text: initial ? `Initial: ${fmtM(metricInit)}<br>Calibrated: ${fmtM(metric)}` : `(${fmtM(metric)})`,
                 showarrow: false, align: 'center', font: { size: 12 }, 
             }],
-            margin: margin, autosize: true, hovermode: 'x unified'
+            margin: initial ? { ...margin, t: 85 } : margin, autosize: true, hovermode: 'x unified'
         };
         const config = { responsive: true, displaylogo: false };
         Plotly.newPlot(chart, traces, layout, config).then(() => {
@@ -211,22 +232,26 @@ export function plotComparison(container, data) {
     const depthColors = [ '#1f77b4', '#ff7f0e', '#2ca02c',
         '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'
     ];
-    depths.forEach((depth, index) => {
-        const rows = merge[String(depth)];
-        if (!Array.isArray(rows) || rows.length === 0) { return; }
-        const obsCol = `obs_${depth}`, simCol = `sim_${depth}`;
-        const x = [], y = [];
-        rows.forEach(row => {
+    // Calibrated = filled markers, initial = open markers, same colour per depth
+    const pairsOf = (rows, depth) => {
+        const obsCol = `obs_${depth}`, simCol = `sim_${depth}`, x = [], y = [];
+        (rows || []).forEach(row => {
             const obs = Number(row[obsCol]), sim = Number(row[simCol]);
-            if (Number.isFinite(obs) && Number.isFinite(sim)) { x.push(obs); y.push(sim); }
+            if (row[obsCol] != null && row[simCol] != null && Number.isFinite(obs) && Number.isFinite(sim)) { x.push(obs); y.push(sim); }
         });
-        if (x.length === 0) { return; }
-        traces.push({
-            x, y, type: 'scatter', mode: 'markers', name: `Depth ${depth} m`,
-            marker: {
-                color: depthColors[index % depthColors.length], size: 6, opacity: 0.5
-            }
-        });
+        return { x, y };
+    };
+    depths.forEach((depth, index) => {
+        const color = depthColors[index % depthColors.length];
+        if (initial) {
+            const { x, y } = pairsOf(initial.merge?.[String(depth)], depth);
+            if (x.length) traces.push({ x, y, type: 'scatter', mode: 'markers', name: `Initial ${depth} m`,
+                legendgroup: `d${index}`, marker: { color, size: 6, opacity: 0.6, symbol: 'circle-open' } });
+        }
+        const { x, y } = pairsOf(merge[String(depth)], depth);
+        if (x.length) traces.push({ x, y, type: 'scatter', mode: 'markers',
+            name: initial ? `Calibrated ${depth} m` : `Depth ${depth} m`, legendgroup: `d${index}`,
+            marker: { color, size: 6, opacity: 0.5 } });
     });
     // Add 1:1 line
     traces.push({
@@ -239,7 +264,9 @@ export function plotComparison(container, data) {
         title: {
             text:
                 `<b>Simulation vs. Observation (Station: ${data.station})</b><br>` +
-                `Total RMSE = ${totalRMSE.toFixed(3)}°C` + `</span>`,
+                (initial ? `Total RMSE: initial = ${initial.rmse == null ? '–' : Number(initial.rmse).toFixed(3)}°C → ` +
+                    `calibrated = ${totalRMSE == null ? '–' : Number(totalRMSE).toFixed(3)}°C`
+                    : `Total RMSE = ${totalRMSE == null ? '–' : Number(totalRMSE).toFixed(3)}°C`),
             font: { size: 15, weight: "bold" }
         },
         xaxis: {

@@ -4,8 +4,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form, Response, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.concurrency import run_in_threadpool
-from services import functions, data_functions, weather_functions, \
-    flow_functions, yml_update, era5_function, constants
+from services import functions, data_functions, flow_functions, yml_update, era5_function, constants
 from config import PROJECT_ROOT, SOURCE_BACKEND
 import geopandas as gpd, pandas as pd, numpy as np
 from services.data_functions import Regnbyge as regnbyge

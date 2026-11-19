@@ -49,7 +49,6 @@ OUTPUT_DIR, FEATURES_FILE = "output", "features.json"
 # Data Download
 DATASET_POINT = "reanalysis-era5-single-levels-timeseries"
 DATASET_GRID = "reanalysis-era5-single-levels"
-KARTVERKET_URL = "https://ws.geonorge.no/hoydedata/v1/punkt"
 POINT_SOURCES = ("met-nordic", "open-meteo")
 ACTIVE_STATES = ["accepted", "running"]
 ERA5_LATENCY_DAYS, TOA_CDS_NAME = 6, "toa_incident_solar_radiation"
@@ -78,7 +77,6 @@ ALIASES = {"fg10": ("i10fg",), "i10fg": ("fg10",)}
 NVE_THEMES = {"windSpeed10m1h": "Wind Speed_10m (m/s)", "windDirection10m1h": "Wind Direction_10m (°)"}
 
 # Flow
-ISRIC_URL = "https://files.isric.org/soilgrids/former/2017-03-10/data/"
 VIEW_DIR, FORMAT, LAYER_SEP, M_PER_DEG = "viewer", 1, "__layer", 111_320.0
 LDD_NAMES = ["local_drain_direction", "wflow_ldd", "ldd"]
 # PCRaster LDD: 1 SW 2 S 3 SE 4 W 5 pit 6 E 7 NW 8 N 9 NE
@@ -165,7 +163,6 @@ ALIASES = {"degc": "degC", "°c": "degC", "c": "degC", "celsius": "degC", "k": "
     "kpa": "kPa", "kg/m3": "kg/m^3", "kg m-3": "kg/m3", "g/cm3": "g/cm^3", "ph": "-", "1": "-"
 }
 SIGMA, MET_HOUR_RETRIES, MET_MAX_GAP_H, MET_MAX_MISSING_SHARE = 5.670374419e-8, 3, 6, 0.2
-METEO_URL = "https://archive-api.open-meteo.com/v1/archive"
 MET_BASE = "https://thredds.met.no/thredds/dodsC"
 MET_URLS = (
     MET_BASE + "/metpparchivev3/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
@@ -183,7 +180,7 @@ OM_HOURLY = ("precipitation,temperature_2m,relative_humidity_2m,dew_point_2m,sho
 
 # Weather Live
 WEATHER_USER_AGENT = "HydroAI-Water-Platform/1.0 (+https://github.com/Lam-V-Nguyen/HydroAI-Fjord-Platform)"
-WEATHER_STATION_MAX_KM = 30                   # trạm Frost xa hơn -> coi như không có trạm gần
+WEATHER_STATION_COUNT = 15
 WEATHER_FALLBACK_ORDER = ("metno", "openmeteo")   # nguồn thay thế khi không có số đo trạm
 WEATHER_PAST_HOURS, WEATHER_FORECAST_HOURS, WEATHER_TIMEOUT = 48, 48, 20
 WEATHER_VARIABLES = [

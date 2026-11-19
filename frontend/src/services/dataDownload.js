@@ -691,7 +691,7 @@ function updateManager() {
             era5Following = false; obj.era5LogText.value = ''; obj.era5LogContainer.style.display = 'flex';
             obj.era5SaveBtn.style.display = 'none'; obj.era5Table.style.display = 'none'; 
             const contents = {
-                projectName: currentProject, lat: lat, lon: lon, api_key: apiKey,
+                projectName: currentProject, lat: lat, lon: lon, apiKey: apiKey,
                 startTime: startTime, endTime: endTime, key: ERA5_KEY, logFile: logFile,
                 timeZone: getLastTimeZone(), variables: selectedValues
             };

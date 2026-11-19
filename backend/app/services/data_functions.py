@@ -904,7 +904,7 @@ def other_weather_downloader(source:str, key:str, directory:str, processes:dict,
         start_time = start_time.tz_convert("UTC").tz_localize(None) if start_time.tzinfo else start_time
         end_time = end_time.tz_convert("UTC").tz_localize(None) if end_time.tzinfo else end_time
         weather_functions.validate_request(source, None, start_time.to_pydatetime(), end_time.to_pydatetime())
-        hours = weather_functions.hours(start_time, end_time)
+        hours = weather_functions.hours_range(start_time, end_time)
         if len(hours) == 0: raise era5_function.ERA5Error("No full hour in the requested time range.")
         selected = [constants.POINT_ALIASES.get(v, v) for v in (vars or [])]
         unknown = [v for v in selected if v not in constants.VARIABLES]

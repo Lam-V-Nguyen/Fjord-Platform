@@ -11,6 +11,7 @@ import { icon } from './icons.js';
 import { DashboardMap, fmtVal } from './dashboardMap.js';
 import { MovementLayer } from './dashboardMovement.js';
 import { WflowLayer } from './dashboardWflow.js';
+import { Wflow3DView } from './wflow3DManager.js';
 import { PollutionLayer } from './dashboardPollution.js';
 import { 
     renderGauge, renderDonut, renderStationSeries, 
@@ -34,6 +35,7 @@ const EXTRAS = {
     movement: { Cls: MovementLayer, name: 'Flow movement', title: 'Flow movement settings' },
     wflow: { Cls: WflowLayer, name: 'Wflow results', title: 'Wflow results settings' },
     pollution: { Cls: PollutionLayer, name: 'Pollutant spread', title: 'Pollutant spread (WAQ)', openOnShow: true },
+    wflow3d: { Cls: Wflow3DView, name: 'Wflow 3D', title: 'Wflow 3D settings', statusKey: 'wflow' },
 };
 
 
@@ -120,6 +122,7 @@ export class Dashboard {
         }).init();
         this.map.registerExtra('movement', (on) => this.toggleExtra('movement', on), () => this.openLayerSettings('movement'));
         this.map.registerExtra('wflow', (on) => this.toggleExtra('wflow', on), () => this.openLayerSettings('wflow'));
+        this.map.registerExtra('wflow3d', (on) => this.toggleExtra('wflow3d', on), () => this.openLayerSettings('wflow3d'));
         this.map.registerExtra('pollution', (on) => this.toggleExtra('pollution', on), () => this.openLayerSettings('pollution'));
         this.renderSkeletons(); this.bindToolbar(); this.bindPanels(); this.weather.init();
         window.addEventListener('resize', () => this.resize());
@@ -379,7 +382,7 @@ export class Dashboard {
         try { status = await api('extras', this.body()); }
         catch (err) { status = Object.fromEntries(Object.keys(EXTRAS).map(k => [k, { available: false, reason: err.message }])); }
         for (const key of Object.keys(EXTRAS)) {
-            const st = status[key] || { available: false };
+            const st = status[EXTRAS[key].statusKey || key] || { available: false };
             this.map.setAvailability(key, st);
             if (!st.available && this.extraLayers[key]) { this.extraLayers[key].destroy(); delete this.extraLayers[key]; this.closeLayerSettings(key); }
             // Đã bật từ lần trước và có dữ liệu -> bật lại

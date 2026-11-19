@@ -1080,8 +1080,7 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
     model: str, directory: str, log_path: str) -> None:
     fc = functions.append_log
     try:
-        fc(log_path, "Building surrogate model...")
-        fc(log_path, "===============================")
+        fc(log_path, "Building surrogate model..."); fc(log_path, "="*50)
         col_name = df.columns.tolist()[-1]
         X, y = df.drop(columns=[col_name]), df[col_name].to_numpy(float)
         # Tham số thang log -> log10 trước khi chuẩn hoá
@@ -1124,11 +1123,13 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
             try:
                 y_cv = cross_val_predict(make(), X_scaled, y, cv=cv)
                 cv_rmse, cv_r2 = float(np.sqrt(np.mean((y_cv - y) ** 2))), float(r2_score(y, y_cv))
+                fc(log_path, "="*70)
                 fc(log_path, f"Cross-validation ({type(cv).__name__}): RMSE = {cv_rmse:.4f}, "
-                    f"R2 = {cv_r2:.3f} (target range {y.min():.4f} - {y.max():.4f})")
+                    f"R² = {cv_r2:.3f} (target range {y.min():.4f} - {y.max():.4f})")
                 if cv_r2 < 0.5:
                     fc(log_path, "[WARNING] The surrogate explains < 50% of the variance: the optimum is "
                         "unreliable. Add samples or choose more influential parameters.")
+                fc(log_path, "="*70)
             except Exception as e:
                 fc(log_path, f"[WARNING] Cross-validation failed: {e}")
             fc(log_path, "Training the final model with the best kernel...")
@@ -1136,7 +1137,7 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
             final_gpr.fit(X_scaled, y)
             model_dir = os.path.normpath(os.path.join(directory, 'model'))
             if os.path.exists(model_dir):
-                fc(log_path, f"Removing old model: {model_dir}.")
+                fc(log_path, f"\nRemoving old model: {model_dir}.")
                 shutil.rmtree(model_dir)
             os.makedirs(model_dir, exist_ok=True)
             for name, data in (('scaler_X', scaler_X), ('gpr_model', final_gpr)):
@@ -1146,16 +1147,13 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
                 json.dump({"columns": list(X.columns), "log10": log_cols, "kernel": best_name,
                            "cv_rmse": cv_rmse, "cv_r2": cv_r2, "target": col_name}, f, indent=2)
             fc(log_path, f"Saved model: {model_dir}.")
-            fc(log_path, "Model training completed.")
-            fc(log_path, "===============================")
+            fc(log_path, "="*50); fc(log_path, "Model training completed.")
             processes[key]["status"] = "finished"
-            processes[key]["message"] = "Model training completed." + (f" CV R² = {cv_r2:.3f}." if cv_r2 is not None else "")
-        else:
-            raise ValueError(f"Unsupported surrogate model: '{model}'.")
+            processes[key]["message"] = "Model training completed."
+        else: raise ValueError(f"Unsupported surrogate model: '{model}'.")
     except Exception as e:
         if processes.get(key):
-            processes[key]["status"] = "failed"
-            processes[key]["message"] = f"Internal error: {e}"
+            processes[key]["status"], processes[key]["message"] = "failed", f"Internal error: {e}"
         fc(log_path, f"[INTERNAL ERROR] {e}")
 
 def optuna_objective(trial, scaler_x, model, p_ranges, log_cols=()):
@@ -1227,3 +1225,37 @@ def run_optuna(processes: dict, key: str, direction: str,
             processes[key]["status"] = "failed"
             processes[key]["message"] = f"Internal error: {e}"
         functions.append_log(log_path, f"[INTERNAL ERROR] {e}")
+
+# Comparison
+def compare_run(his_file, station, depths, obs_df, t_start, t_end, time_col, time_zone):
+    """Simulated temperature of one run vs observations: time series, matched pairs and metrics per depth."""
+    sim_df = read_and_interpolate_his(his_file, station, depths, time_col)
+    if len(sim_df) == 0: return None
+    sim_df = sim_df[(sim_df.index >= t_start) & (sim_df.index <= t_end)].reset_index()
+    metrics, merge, rmses, lo, hi = {}, {}, [], np.inf, -np.inf
+    for depth in depths:
+        obs_col, sim_col = f"obs_{depth}", f"sim_{depth}"
+        obs_series = obs_df[[time_col, obs_col]].dropna().drop_duplicates(time_col).set_index(time_col).sort_index()
+        sim_series = sim_df[[time_col, sim_col]].dropna().drop_duplicates(time_col).set_index(time_col).sort_index()
+        combined_index = sim_series.index.union(obs_series.index)
+        sim_interp = sim_series.reindex(combined_index).sort_index()[sim_col].interpolate(method="time", limit_area="inside")
+        merge_df = pd.DataFrame({time_col: obs_series.index, obs_col: obs_series[obs_col].values,
+            sim_col: sim_interp.loc[obs_series.index].values})
+        merge_df[time_col] = functions.utc_to_local(merge_df[time_col], time_zone)
+        merge[str(depth)] = merge_df.replace({np.nan: None}).to_dict(orient="records")
+        valid = merge_df[[obs_col, sim_col]].dropna()
+        if valid.empty:
+            metrics[str(depth)] = [None, None, None]; rmses.append(np.nan); continue
+        rmse = float(np.sqrt(mean_squared_error(valid[obs_col], valid[sim_col])))
+        r2 = r2_score(valid[obs_col], valid[sim_col]) if len(valid) > 1 else np.nan
+        bias = float((valid[sim_col] - valid[obs_col]).mean())
+        metrics[str(depth)] = [round(rmse, 3), round(r2, 3) if np.isfinite(r2) else None, round(bias, 3)]
+        lo = min(lo, valid[obs_col].min(), valid[sim_col].min())
+        hi = max(hi, valid[obs_col].max(), valid[sim_col].max())
+        rmses.append(rmse)                         # one entry per depth (NaN = no pairs) -> weights stay aligned
+    sim_df[time_col] = functions.utc_to_local(sim_df[time_col], time_zone)
+    total = compute_weighted_rmse(depths, rmses)
+    return {"sim": sim_df.replace({np.nan: None}).to_dict(orient="records"), "merge": merge, "metrics": metrics,
+        "rmse": None if not np.isfinite(total) else round(total, 3),
+        "min_max": [float(lo), float(hi)] if np.isfinite(lo) else [None, None]
+    }

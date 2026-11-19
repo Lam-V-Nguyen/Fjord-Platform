@@ -460,8 +460,7 @@ def _sample_geojson_cached(path: str, step: int) -> dict | None:
 
 def sample_geojson(directory:str, name: str) -> dict | None:
     steps = {"catchment": 3, "river": 2, "BrusdalLake": 1}
-    path = os.path.join(directory, f"{name}.geojson")
-    mtime = _file_mtime(path)
+    path = os.path.join(directory, f"{name}.geojson"); mtime = _file_mtime(path)
     return _sample_geojson_cached(path, mtime, steps.get(name, 1)) if mtime is not None else None
 
 @lru_cache(maxsize=2)
@@ -476,18 +475,18 @@ def _depth_points_cached(path: str, max_points: int) -> list[list[float]]:
         traceback.print_exc()
         return []
 
-def load_depth_points(max_points: int = 4000) -> list[list[float]]:
-    path = constants.CONTEXT_FILES["bathymetry"]
-    mtime = _file_mtime(path)
+def load_depth_points(directory:str, name: str = "depth.csv", max_points: int = 4000) -> list[list[float]]:
+    path = os.path.join(directory, name); mtime = _file_mtime(path)
     return _depth_points_cached(path, max_points) if mtime is not None else []
 
 def build_layers(project_name: str, inventory: dict) -> dict:
     directory = project_dir(project_name)
+    out_dir = os.path.join(directory, 'others')
     layers = {
-        "lake": sample_geojson(directory, "BrusdalLake"), 
-        "catchment": sample_geojson(directory, "catchment"),
-        "rivers": sample_geojson(directory, "river"),
-        "bathymetry": load_depth_points(), "gis": {},
+        "lake": sample_geojson(out_dir, "BrusdalLake"), 
+        "catchment": sample_geojson(out_dir, "catchment"),
+        "rivers": sample_geojson(out_dir, "river"),
+        "bathymetry": load_depth_points(out_dir, "depth.csv"), "gis": {},
     }
     gis_dir = os.path.join(directory, "GIS")
     for name in inventory.get("gis_layers", []):

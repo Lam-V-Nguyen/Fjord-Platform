@@ -191,18 +191,22 @@ export class WeatherPanel {
         this.renderNow(); this.renderChart(); this.renderNote();
     }
 
-        // Dòng phụ đề: trạm thời tiết gần nhất đang lấy số đo, hoặc điểm lưới của nguồn thay thế
+    // Dòng phụ đề: trạm thời tiết gần nhất đang lấy số đo, hoặc điểm lưới của nguồn thay thế
     renderSite() {
         const sub = $('weather-sub'), d = this.data, site = d?.site, loc = d?.location, fb = d?.fallback;
         const ll = (o) => `${fmt(o.lat, 3)}°N, ${fmt(o.lon, 3)}°E`;
         const elev = (o) => o.elevation != null ? ` · ${fmt(o.elevation, 0)} m a.s.l.` : '';
-        let text, tip = [];
+        let text, tip = []; const km = (o) => o?.distance_km != null ? `${fmt(o.distance_km, 1)} km` : 'distance unknown';
         if (site?.kind === 'station') {
-            text = `Station ${site.name} (${site.id}) · ${ll(site)}${elev(site)}`
-                + `${site.distance_km != null ? ` · ${fmt(site.distance_km, 1)} km from model area` : ''}`
+            // Khoảng cách đứng ngay sau tên trạm (trạm gần nhất có số đo, không giới hạn khoảng cách)
+            text = `Station ${site.name} (${site.id}) · ${km(site)} from model area · ${ll(site)}${elev(site)}`
                 + `${site.others?.length ? ` · +${site.others.length} station${site.others.length > 1 ? 's' : ''}` : ''}`;
-            tip.push(`Nearest MET Norway station with observations: ${site.name} (${site.id})`);
-            Object.entries(site.per_variable || {}).forEach(([k, n]) => tip.push(`  ${this.meta(k)?.label || k}: ${n}`));
+            tip.push(`Nearest MET Norway station with observations: ${site.name} (${site.id}), ${km(site)} from the model area:`);
+            const byId = Object.fromEntries([site, ...(site.others || [])].map(x => [x.id, x]));
+            Object.entries(site.per_variable || {}).forEach(([k, x]) => {
+                const st = typeof x === 'object' ? x : Object.values(byId).find(o => o.name === x);
+                tip.push(`     + ${this.meta(k)?.label || k}: ${st?.name || x}${st ? ` (${km(st)})` : ''}`);
+            });
         } else if (site?.kind === 'model') {
             text = `${fb ? 'No nearby station data → ' : ''}${SOURCE_STYLE[site.source]?.short || site.label} at ${ll(site)}${elev(site)}`;
             tip.push(`${site.label}: model grid point ${ll(site)}`);
@@ -245,7 +249,7 @@ export class WeatherPanel {
         node.innerHTML = this.variables().map(v => {
             const c = cur[v.key] || {}, src = c.source || main;
             const name = SOURCE_STYLE[src]?.short || src || '';
-            const where = c.station ? `${c.station.name} (${c.station.id})` : name;
+            const where = c.station ? `${c.station.name} (${c.station.id}, ${c.station.distance_km != null ? fmt(c.station.distance_km, 1) + ' km' : 'distance unknown'})` : name;
             const tag = src && src !== main
                 ? `<span class="w-tag" title="Not observed at the station – value from ${esc(name)}">${esc(SOURCE_STYLE[src]?.abbr || name)}</span>` : '';
             return `<button type="button" class="w-tile ${v.key === this.state.variable ? 'active' : ''}" data-wvar="${v.key}"

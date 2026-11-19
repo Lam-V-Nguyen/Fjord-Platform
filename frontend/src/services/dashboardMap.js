@@ -58,6 +58,7 @@ export const LAYER_DEFS = [
     { key: 'movement', label: 'Flow movement (HYD)', kind: 'gradient', palette: 'speed_light', on: false, extra: true },
     { key: 'pollution', label: 'Pollutant spread (WAQ)', kind: 'gradient', palette: 'quality', on: false, extra: true },
     { key: 'wflow', label: 'Wflow results', kind: 'gradient', palette: 'flow', on: false, extra: true },
+    { key: 'wflow3d', label: 'Wflow 3D', kind: 'gradient', palette: 'flow', on: false, extra: true },
 ];
 
 // Colour helpers
@@ -458,7 +459,7 @@ export class DashboardMap {
         const active = this.defs.filter(d => d.key !== 'field' && (this.state[d.key] ?? d.on) && this.groups[d.key] && hasContent(this.groups[d.key]));
         let html = '';
         if (this.field && (this.state.field ?? true)) {
-            const mid = (this.field.min + this.field.max) / 2;
+            const x = (this.field.min + this.field.max) / 2;
             html += `<div class="legend-field">
                 <div class="lf-title">${esc(this.field.label)}${this.field.unit ? ` (${esc(this.field.unit)})` : ''}</div>
                 <div class="lf-mode">Scale: <button data-scale="fixed" class="${this.scaleMode === 'fixed' ? 'active' : ''}">all times</button><button data-scale="frame" class="${this.scaleMode === 'frame' ? 'active' : ''}">this frame</button></div>
