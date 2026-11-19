@@ -17,7 +17,8 @@ Quy ước lượng mưa thống nhất: giá trị tại giờ t = lượng mư
 Locationforecast (giờ tới) được dời +1 h.
 Cache trong bộ nhớ theo (nguồn, vị trí) với thời hạn theo nguồn -> frontend làm mới thường xuyên
 cũng không gọi lại API ngoài quá mức (điều khoản sử dụng của MET Norway / Open-Meteo).
-Luôn có dữ liệu: không có trạm Frost trong WEATHER_STATION_MAX_KM, trạm không có số đo, hoặc một biến
+Trạm Frost: trạm GẦN NHẤT có số đo (không giới hạn khoảng cách; xét WEATHER_STATION_COUNT trạm gần nhất).
+Luôn có dữ liệu: không có trạm Frost, trạm không có số đo, hoặc một biến
 thiếu số đo -> tự lấy nguồn thay thế (WEATHER_FALLBACK_ORDER) và ghi rõ trong 'fallback' / 'site'.
 """
 from __future__ import annotations
@@ -106,6 +107,13 @@ def _finish(series: dict, now: datetime, extra: dict) -> dict:
         current[key] = {"time": best[0], "value": best[1]} if best else {"time": None, "value": None}
     return {"series": series, "current": current, **extra}
 
+def _distance_km(lat1, lon1, lat2, lon2):
+    """Khoảng cách đường tròn lớn (km) từ vùng mô hình đến trạm."""
+    if None in (lat1, lon1, lat2, lon2): return None
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    a = np.sin((p2 - p1) / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(np.radians(lon2 - lon1) / 2) ** 2
+    return round(float(2 * 6371.0 * np.arcsin(np.sqrt(a))), 1)
+
 # MET Norway Frost (observations)
 def _fetch_frost(lat: float, lon: float, now: datetime) -> dict:
     cid = frost_client_id()
@@ -116,23 +124,19 @@ def _fetch_frost(lat: float, lon: float, now: datetime) -> dict:
     r = requests.get(f"{base}/sources/v0.jsonld", auth=auth, headers=headers, 
         timeout=constants.WEATHER_TIMEOUT, params={
         "types": "SensorSystem", "geometry": f"nearest(POINT({lon:.4f} {lat:.4f}))",
-        "nearestmaxcount": 8, "validtime": "now"}
+        "nearestmaxcount": constants.WEATHER_STATION_COUNT, "validtime": "now"}
     )
     r.raise_for_status(); stations = []
     for s in r.json().get("data", []):
         coords = (s.get("geometry") or {}).get("coordinates") or [None, None]
+        st_lon, st_lat = _num(coords[0]), _num(coords[1])
+        dist = _distance_km(lat, lon, st_lat, st_lon)          # tự tính; Frost 'distance' chỉ dùng khi thiếu toạ độ
         stations.append({"id": s["id"], "name": s.get("shortName") or s.get("name", s["id"]),
-            "distance_km": _num(s.get("distance")), "lon": _num(coords[0]), "lat": _num(coords[1]),
-            "elevation": _num(s.get("masl"))}
-        )
-    if not stations: raise RuntimeError("No Frost station near the model area")
-    near = [s for s in stations if s["distance_km"] is None or s["distance_km"] <= constants.WEATHER_STATION_MAX_KM]
-    if not near:
-        f = stations[0]
-        raise RuntimeError(f"No Frost station within {constants.WEATHER_STATION_MAX_KM} km "
-            f"(nearest: {f['name']}, {f['distance_km']} km)"
-        )
-    stations = near
+            "distance_km": dist if dist is not None else _num(s.get("distance")),
+            "lon": st_lon, "lat": st_lat, "elevation": _num(s.get("masl"))})
+    if not stations: raise RuntimeError("No Frost station found")
+    # Gần nhất trước – không giới hạn khoảng cách
+    stations.sort(key=lambda s: s["distance_km"] if s["distance_km"] is not None else float("inf"))
     start = (now - timedelta(hours=constants.WEATHER_PAST_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     r = requests.get(f"{base}/observations/v0.jsonld", auth=auth, headers=headers, 
         timeout=constants.WEATHER_TIMEOUT, params={
@@ -140,7 +144,10 @@ def _fetch_frost(lat: float, lon: float, now: datetime) -> dict:
         "elements": ",".join(constants.FROST_ELEMENTS.values()), "timeresolutions": "PT1H"}
     )
     if r.status_code in (404, 412):
-        raise RuntimeError(f"No recent hourly observations at the Frost stations within {constants.WEATHER_STATION_MAX_KM} km")
+        f = stations[0]
+        raise RuntimeError(f"No recent hourly observations at the {len(stations)} nearest Frost stations "
+            f"(nearest: {f['name']}, {f['distance_km']} km)"
+        )
     r.raise_for_status()
     # {element: {station_id: {time: value}}}
     raw: dict[str, dict[str, dict[str, float]]] = {}
@@ -299,7 +306,7 @@ def get_weather(project_name: str, sources: list[str] | None = None, force: bool
         main = st.get("temperature") or next(iter(st.values()))
         others = {x["id"]: x for x in st.values() if x["id"] != main["id"]}
         site = {"kind": "station", **main, "others": list(others.values()),
-            "per_variable": {k: x["name"] for k, x in st.items()}
+            "per_variable": {k: {"id": x["id"], "name": x["name"], "distance_km": x["distance_km"]} for k, x in st.items()}
         }
     else:
         src = primary; pt = results[src].get("point") or {"lat": loc["lat"], "lon": loc["lon"]}

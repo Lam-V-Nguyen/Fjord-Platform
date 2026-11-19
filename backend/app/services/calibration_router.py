@@ -5,7 +5,6 @@ from fastapi.responses import JSONResponse
 from config import PROJECT_ROOT
 from services import calibration_functions, functions
 import pandas as pd, numpy as np
-from sklearn.metrics import mean_squared_error, r2_score
 
 router, processes = APIRouter(), {}
 
@@ -185,7 +184,7 @@ async def stop_sim_calibration(request: Request, user=Depends(functions.basic_au
         key = body.get('key'); process_key = f"{project_name}:{key}"
         info = processes.get(process_key)
         if info and info.get("status") == "running":
-            processes.pop(process_key, None)        # run_calibration of this worker stops its solvers
+            processes.pop(process_key, None)
             return JSONResponse({"status": "stopping", "message": "Stop requested - the running solvers are being stopped."})
         cal_dir = os.path.join(PROJECT_ROOT, project_name, "calibration")
         return JSONResponse(calibration_functions.stop_run(cal_dir, key))
@@ -503,9 +502,9 @@ async def summarize_calibration(request: Request, user=Depends(functions.basic_a
         summary_csv = os.path.join(calibration_dir, 'calibration_summary.csv')
         summary_df.to_csv(summary_csv, index=False)
         bias = pd.DataFrame(metric_rows).groupby("depth", sort=False)["bias"].mean()
-        bias_txt = ", ".join(f"{d} m: {b:+.2f}" for d, b in bias.items() if np.isfinite(b))
+        bias_txt = "\n   - ".join(f"{d} (m): {b:+.2f}" for d, b in bias.items() if np.isfinite(b))
         return JSONResponse({'status': 'ok', 'message': f'Calibration summary completed ({len(summary_df)} scenarios). '
-            f'Mean bias (sim − obs, °C) — {bias_txt}'})
+            f'\nMean bias (sim - obs, °C):\n\n   - {bias_txt}'})
     except Exception as e: functions.error("/summarize_calibration", e)
 
 @router.post("/correlation_calibration")
@@ -702,81 +701,52 @@ async def get_stations_comparison(request: Request, user=Depends(functions.basic
 
 @router.post("/comparison_plot")
 async def comparison_plot(request: Request, user=Depends(functions.basic_auth)):
+    """Observations vs the calibrated scenario (projectName) and, optionally, the initial scenario (initialProject)."""
     try:
         body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
+        initial_name = (body.get('initialProject') or '').strip()
+        initial_project = functions.project_definer(initial_name, user)[0] if initial_name else None
         time_col, time_zone = 'Time', body.get('timeZone')
         station, obs_data = body.get('station'), body.get('obsData')
         redis, process_key = request.app.state.redis, f"{project_name}:comparison"
         lock = redis.lock(process_key, timeout=1000, blocking_timeout=10)
         async with lock:
-            # Define period
+            # Define period (the period of the calibrated scenario, as opened in the form)
             start_sim, end_sim = body.get('simStart'), body.get('simEnd')
             start_obs, end_obs = body.get('obsStart'), body.get('obsEnd')
-            depths_selected = [x.strip() for x in body.get('depthSelection').split(",")]
+            depths_selected = [x.strip() for x in body.get('depthSelection').split(",") if x.strip()]
             measured_df = pd.DataFrame(data=obs_data, columns=[time_col, 'temperature', 'depth'])
             measured_df[time_col] = functions.local_to_utc(measured_df[time_col], time_zone)
-            sim_start = functions.local_to_utc(start_sim, time_zone)
-            sim_end = functions.local_to_utc(end_sim, time_zone)
-            obs_start = functions.local_to_utc(start_obs, time_zone)
-            obs_end = functions.local_to_utc(end_obs, time_zone)
-            t_start, t_end = max(sim_start, obs_start), min (sim_end, obs_end)
+            sim_start, sim_end = functions.local_to_utc(start_sim, time_zone), functions.local_to_utc(end_sim, time_zone)
+            obs_start, obs_end = functions.local_to_utc(start_obs, time_zone), functions.local_to_utc(end_obs, time_zone)
+            t_start, t_end = max(sim_start, obs_start), min(sim_end, obs_end)
             if t_start > t_end:
-                return JSONResponse({
-                    "status": "error", "message": "Simulation and observation periods do not overlap."
-                })
-            # Detect measurement periods
+                return JSONResponse({"status": "error", "message": "Simulation and observation periods do not overlap."})
             measured_df = measured_df[(measured_df[time_col] >= t_start) & (measured_df[time_col] <= t_end)]
             obs_df = calibration_functions.split_temp_from_depth(measured_df, depths_selected, time_col)
-            if len(obs_df) == 0: 
-                return JSONResponse({
-                    "status": "error", "message": f"No simulation found between: {start_obs} and {end_obs}"
-                })
-            his_file = calibration_functions.hyd_his(project_name)
-            sim_df = calibration_functions.read_and_interpolate_his(his_file, station, depths_selected, time_col)
-            if len(sim_df) == 0: 
-                return JSONResponse({
-                    "status": "error", "message": f"No simulation found between: {start_sim} and {end_sim}"
-                })
-            sim_df = sim_df[(sim_df.index >= t_start) & (sim_df.index <= t_end)]
-            # Prepare observation timestamps
-            sim_df, obs_df = sim_df.reset_index(), obs_df.reset_index(drop=True)
-            metrics, merge, rmses, global_min, global_max = {}, {}, [], np.inf, -np.inf
-            for depth in depths_selected:
-                obs_col, sim_col = f"obs_{depth}", f"sim_{depth}"
-                obs_series = (obs_df[[time_col, obs_col]]
-                    .dropna().drop_duplicates(time_col).set_index(time_col).sort_index()
-                )
-                sim_series = (sim_df[[time_col, sim_col]]
-                    .dropna().drop_duplicates(time_col).set_index(time_col).sort_index()
-                )
-                combined_index = sim_series.index.union(obs_series.index)
-                sim_interp = sim_series.reindex(combined_index).sort_index()[sim_col].interpolate(method="time")
-                aligned_df = sim_interp.loc[obs_series.index]
-                merge_df = pd.DataFrame({
-                    time_col: obs_series.index, obs_col: obs_series[obs_col].values, sim_col: aligned_df.values
-                })
-                merge_df[time_col] = functions.utc_to_local(merge_df[time_col], time_zone)
-                merge[str(depth)] = merge_df.replace({np.nan: None}).to_dict(orient="records")
-                valid = merge_df[[obs_col, sim_col]].dropna()
-                if valid.empty:
-                    metrics[str(depth)] = [None, None, None]; continue
-                rmse = np.sqrt(mean_squared_error(valid[obs_col], valid[sim_col]))
-                r2 = r2_score(valid[obs_col], valid[sim_col]) if len(valid) > 1 else np.nan
-                bias = float((valid[sim_col] - valid[obs_col]).mean())
-                metrics[str(depth)] = [round(rmse, 3), round(r2, 3) if np.isfinite(r2) else None, round(bias, 3)]
-                local_min = min(valid[obs_col].min(), valid[sim_col].min())
-                local_max = max(valid[obs_col].max(), valid[sim_col].max())
-                global_min = min(global_min, local_min)
-                global_max = max(global_max, local_max)
-                rmses.append(rmse)
+            if len(obs_df) == 0:
+                return JSONResponse({"status": "error", "message": f"No observation found between: {start_obs} and {end_obs}"})
+            obs_df = obs_df.reset_index(drop=True)
+            calibrated = calibration_functions.compare_run(calibration_functions.hyd_his(project_name), station, depths_selected,
+                obs_df, t_start, t_end, time_col, time_zone)
+            if calibrated is None:
+                return JSONResponse({"status": "error", "message":
+                    f"No simulation of station '{station}' found in '{project_name}' between {start_sim} and {end_sim}."})
+            initial, note = None, None
+            if initial_project:
+                initial =  calibration_functions.compare_run(calibration_functions.hyd_his(initial_project), station, depths_selected,
+                    obs_df, t_start, t_end, time_col, time_zone)
+                if initial is None:
+                    note = f"Initial scenario '{initial_name}': no output for station '{station}' in the comparison period."
+                else: initial["project"] = initial_name
+            ranges = [r["min_max"] for r in (calibrated, initial) if r and r["min_max"][0] is not None]
+            min_max = [min(r[0] for r in ranges), max(r[1] for r in ranges)] if ranges else [0, 1]
             obs_df[time_col] = functions.utc_to_local(obs_df[time_col], time_zone)
-            sim_df[time_col] = functions.utc_to_local(sim_df[time_col], time_zone)
-            total_rmse = calibration_functions.compute_weighted_rmse(depths_selected, rmses)
             content = {
-                'sim': sim_df.to_dict(orient="records"), 'depth': depths_selected,
-                'obs': obs_df.to_dict(orient="records"), 'metrics': metrics, 'station': station,
-                "rmse": total_rmse, "merge": merge, "min_max": [global_min, global_max]
+                'sim': calibrated["sim"], 'depth': depths_selected, 'obs': obs_df.replace({np.nan: None}).to_dict(orient="records"),
+                'metrics': calibrated["metrics"], 'station': station, "rmse": calibrated["rmse"], "merge": calibrated["merge"],
+                "min_max": min_max, "project": body.get('projectName'), "initial": initial, "note": note,
             }
             return JSONResponse({"status": "ok", "content": content})
     except Exception as e: functions.error("/comparison_plot", e)

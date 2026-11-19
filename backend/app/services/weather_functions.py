@@ -712,7 +712,7 @@ def prepare_open_meteo(ctx):
     logger.info(f"Open-Meteo: point lat={lat}, lon={lon} (catchment centre), {len(hours)} hours. "
         "Free use is non-commercial only.")
     era5_function.check_cancel(ctx["processes"], ctx["process_key"])
-    r = requests.get(constants.METEO_URL, timeout=180, params={
+    r = requests.get(os.getenv('METEO_URL').strip(), timeout=180, params={
         "latitude": lat, "longitude": lon, "start_date": f"{hours[0]:%Y-%m-%d}", "end_date": f"{hours[-1]:%Y-%m-%d}",
         "hourly": constants.OM_HOURLY, "wind_speed_unit": "ms", "timezone": "GMT"}
     )
@@ -799,7 +799,7 @@ def open_meteo_point(lat, lon, hours, logger, processes=None, process_key=None, 
         "hourly": constants.OM_HOURLY, "wind_speed_unit": "ms", "timezone": "GMT"
     }
     if model: params["models"] = model
-    r = requests.get(constants.METEO_URL, timeout=timeout, params=params)
+    r = requests.get(os.getenv('METEO_URL').strip(), timeout=timeout, params=params)
     if r.status_code == 429: 
         raise era5_function.ERA5Error("Open-Meteo: request limit reached (HTTP 429). Try again later.")
     if r.status_code != 200:

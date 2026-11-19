@@ -393,13 +393,14 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
             return arr, valid
         if soil_source == "isric":
             soil_depths = constants.SOIL_DEPTH; depths = list(soil_depths.values())
+            url = os.getenv("ISRIC_URL").strip()
             # Get raster information
             result = rioxarray.open_rasterio(dtm_path)
             if isinstance(result, list): ref = result[0].squeeze()
             else: ref = result.squeeze()
             # Soil thickness
             logger.info("Creating soil thickness data...")
-            soil_thickness_url = f"{constants.ISRIC_URL}BDRICM_M_250m_ll.tif"
+            soil_thickness_url = f"{url}BDRICM_M_250m_ll.tif"
             soil_thickness_array, mask_valid = read_isric(soil_thickness_url)
             # Interpolate data
             logger.info("Interpolating soil thickness data...")
@@ -418,7 +419,7 @@ def soil_downloader(project_name:str, processes:dict, process_key:str, flow_name
             for _, values in constants.SOIL_TYPES.items():
                 file, name, scale, dtype, nodata_soil, unit = values[0], values[1], values[2], values[3], values[4], values[5]
                 for depth in depths:
-                    file_url = f'{constants.ISRIC_URL}{file}_{depth}_250m_ll.tif'
+                    file_url = f'{url}{file}_{depth}_250m_ll.tif'
                     logger.info(f"Downloading: {file}_{depth}_250m_ll.tif...")
                     soil_array, mask_valid = read_isric(file_url)
                     # Interpolate data
