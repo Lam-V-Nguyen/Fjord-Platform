@@ -13,7 +13,7 @@ import { ui, bindSettings, loadSettings, saveSettings } from './dashboardLayerSe
 
 const L = window.L;
 const SETTINGS_KEY = 'dash.pollution.settings.v1';
-const DEFAULTS = { name: '', layer: 'average', threshold: 0.01 };
+const DEFAULTS = { name: '', layer: 'max', threshold: 0.01 };
 const PALETTE = 'quality';
 const PER_CELL = 0.06;                 // hạt / ô lưới hạt bị ô nhiễm -> cùng mật độ ở mọi vùng, mọi thời điểm
 const MAX_PARTICLES = 20000;
@@ -67,7 +67,7 @@ export class PollutionLayer {
         this.info = res;
         if (!res.substances?.length) throw new Error('No WAQ substance on the model grid');
         if (!res.substances.some(s => s.name === this.S.name)) this.S.name = res.substances[0].name;
-        if (!res.layers.some(([k]) => k === String(this.S.layer))) this.S.layer = 'average';
+        if (!res.layers.some(([k]) => k === String(this.S.layer))) this.S.layer = res.layers[0]?.[0] || 'average';
         this.cellFace = Int32Array.from(res.cell_face);
         const mesh = await post('mesh', { projectName: this.projectName });
         if (mesh.status !== 'ok') throw new Error(mesh.message || 'No mesh');
@@ -178,12 +178,13 @@ export class PollutionLayer {
         const parts = [`WAQ ${(f.time || '').replace('T', ' ').slice(0, 16)}`, this.layerLabel(), `cells < ${pct} of max hidden`];
         if (f.u) parts.push(`particles: HYD current ${(f.hyd_time || '').replace('T', ' ').slice(0, 16)}, linear speed, max ${fmtVal(f.speed_max, 'm/s')}`);
         return { title: `Pollutant · ${s?.label || f.label}${f.unit ? ` (${f.unit})` : ''}`, palette: PALETTE,
-                 min: this.S.threshold * cmax, max: cmax, maxPrefix: '≥ ', note: parts.join(' · ') };
+            min: this.S.threshold * cmax, max: cmax, maxPrefix: '≥ ', note: parts.join(' · ') 
+        };
     }
 
     status() {
         if (!this.frame) return 'Loading pollutant data…';
-        const ps = this.frame.u ? this.particles.status() : 'No HYD velocities – particles disabled';
+        const ps = this.frame.u ? this.particles.status() : 'No HYD velocities - particles disabled';
         return `${this.nPolluted.toLocaleString()} polluted cells · ${ps}`;
     }
 
@@ -196,9 +197,11 @@ export class PollutionLayer {
                 (s?.layered !== false && this.info.layers.length > 1 ? ui.row('Layer', ui.select('layer', this.info.layers, S.layer)) : '') +
                 ui.row('Show cells ≥', ui.select('threshold', THRESHOLDS, String(S.threshold))),
                 'Colour = concentration on a <b>fixed scale for the whole simulation</b> (up to the 99.5th percentile). ' +
-                'Particles follow the HYD current of the same layer and only move where the pollutant is above the threshold. ' +
+                '<b>Max over depth</b> shows where the pollutant is at any depth (best to follow the spread); ' +
+                '<b>Depth average</b> dilutes a surface plume over deep water, so it can seem to vanish mid-lake and reappear near the shallow far shore. ' +
+                'Particles follow the HYD current of the same layer (depth-averaged for Max over depth) and only move where the pollutant is above the threshold. ' +
                 'Particle density is the same in every polluted area and particle speed is proportional to the current speed, ' +
-                'so neither can be changed – this keeps times and areas comparable.') +
+                'so neither can be changed - this keeps times and areas comparable.') +
             `<div class="ls-status"></div>`;
         bindSettings(el, {
             onSet: async (k, val) => {

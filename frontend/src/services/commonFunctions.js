@@ -566,6 +566,7 @@ export async function updateTable(table, comboBox, projectName, key='') {
         data_arr.push([item, data.type[idx]]);
     });
     if (data_arr.length > 0) { fillTable(data_arr, table); }
+    return data
 }
 
 export async function initOptions(comboBox, key, projectName) {

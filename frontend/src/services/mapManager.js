@@ -46,12 +46,12 @@ let currentTileLayer = null, timeCounter = null, html = '', markersObs = [],
     pathCrossSection = null, pathBoundary = null, currentPointsCross = [],
     currentPointsBoundary = [], waqObs = [], waqLoads = [], mapContainer = null,
     markerLayer = null, terrainLayer = null, streamLayer = null, gridLayer = null,
-    isPourpointActive = false;
+    isPourpointActive = false, markersSource = [];
 const configCrossSectionPoint = { color: 'blue', fillColor: 'yellow', radius: 4, fill: true, fillOpacity: 1 },
     configBoundaryPoint = { color: 'red', fillColor: 'green', radius: 4, fill: true, fillOpacity: 1 },
     configCrossSectionPath = { color: 'blue', weight: 2, dashArray: '5,5' },
     configBoundaryPath = { color: 'red', weight: 2 };
-
+const scenarioPaths = { crossSection: [], boundary: [] };
 const hoverTooltip = L.tooltip({
     permanent: false, direction: 'bottom', sticky: true,
     offset: [0, 10], className: 'custom-tooltip'
@@ -91,15 +91,63 @@ function lineAdd(pointContainer, map, lineType) {
         currentMap.fitBounds(pathBoundary.getBounds());
     }
 }
+function clearScenarioPaths(lineType) {
+    scenarioPaths[lineType].forEach(l => l.remove()); scenarioPaths[lineType].length = 0;
+}
+
+// Vẽ các đường (mặt cắt/biên) theo nhóm tên: 'CS_1','CS_2' | 'Bnd_0001',... -> 1 đường mỗi nhóm
+function drawGroupedLines(rows, lineType) {
+    const isCross = lineType === 'crossSection';
+    const markerList = isCross ? markerCrossSection : markerBoundary;
+    const configPoint = isCross ? configCrossSectionPoint : configBoundaryPoint;
+    const configPath = isCross ? configCrossSectionPath : configBoundaryPath;
+    const groups = new Map();
+    (rows || []).forEach(([name, lat, lon]) => {
+        const la = parseFloat(lat), lo = parseFloat(lon);
+        if (!name || isNaN(la) || isNaN(lo)) return;
+        const key = String(name).replace(/_\d+$/, '');
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push([la, lo]);
+    });
+    groups.forEach((latlngs, key) => {
+        latlngs.forEach(ll => markerList.push(L.circleMarker(ll, configPoint).bindPopup(key).addTo(currentMap)));
+        if (latlngs.length >= 2) scenarioPaths[lineType].push(L.polyline(latlngs, configPath).bindPopup(key).addTo(currentMap));
+    });
+}
+
+function drawScenario(c = {}) {
+    if (c.obs) {
+        markerLayer.clearLayers(); markersObs.length = 0;
+        iconAdd(`/src_frontend/images/station.png?v=${Date.now()}`, markersObs, currentMap, c.obs);
+    }
+    if (c.crossSection) { renderPreview({ requestId: 'clearCrossSection' }); drawGroupedLines(c.crossSection, 'crossSection');
+    }
+    if (c.boundary) { renderPreview({ requestId: 'clearBoundary' }); drawGroupedLines(c.boundary, 'boundary');
+    }
+    if (c.sources) {
+        markersSource.forEach(m => m.remove()); markersSource.length = 0;
+        iconAdd(`/src_frontend/images/source.png?v=${Date.now()}`, markersSource, currentMap, c.sources);
+    }
+    if (c.fit) {
+        const layers = [...markersObs, ...markersSource, ...markerCrossSection, ...markerBoundary,
+            ...scenarioPaths.crossSection, ...scenarioPaths.boundary];
+        if (layers.length > 0) {
+            const b = L.featureGroup(layers).getBounds();
+            if (b.isValid()) currentMap.fitBounds(b, { padding: [30, 30], maxZoom: 14 });
+        }
+    }
+}
 
 export async function renderPreview(request = null) {
     currentPoints.length = 0; if (!request) return;
-    const type = request.type, requestId = request.requestId;
+    const requestId = request.requestId;
     if (requestId === 'updateObsPoint') {
         markerLayer.clearLayers();
         const iconUrl = `/src_frontend/images/station.png?v=${Date.now()}`;
         iconAdd(iconUrl, markersObs, currentMap, request.content.rows);
+    } else if (requestId === 'drawScenario') { drawScenario(request.content || {});
     } else if (requestId === 'pickPath') {
+        if (scenarioPaths[request.lineType]) clearScenarioPaths(request.lineType);
         const pointList = request.content.rows, lineType = request.content.lineType;
         if (!pointList || pointList.length === 0) return;
         lineAdd(pointList, currentMap, lineType);
@@ -111,6 +159,7 @@ export async function renderPreview(request = null) {
             markerCrossSection.forEach(marker => marker.remove());
             markerCrossSection.length = 0;
         }
+        clearScenarioPaths('crossSection');
         currentPointsCross.length = 0; currentPoints.length = 0;
     } else if (requestId === 'clearBoundary') {
         if (pathBoundary) {
@@ -120,6 +169,7 @@ export async function renderPreview(request = null) {
             markerBoundary.forEach(marker => marker.remove());
             markerBoundary.length = 0;
         }
+        clearScenarioPaths('boundary');
         currentPointsBoundary.length = 0; currentPoints.length = 0;
     } else if (requestId === 'waqPoint' || requestId === 'loadsPoint') {
         let iconUrl = null;

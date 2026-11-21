@@ -1,7 +1,7 @@
 """
 Dashboard router
 ================
-API cho trang Overview – nội dung chính là KẾT QUẢ MÔ PHỎNG HYD / WAQ của dự án.
+API cho trang Overview - nội dung chính là KẾT QUẢ MÔ PHỎNG HYD / WAQ của dự án.
 
     POST /dashboard/projects    -> danh sách dự án của người dùng
     POST /dashboard/catalog     -> thông tin kịch bản HYD/WAQ, biến bản đồ & trạm, trạm, nguồn, mốc thời gian
@@ -87,6 +87,15 @@ async def dashboard_catalog(request: Request, user=Depends(functions.basic_auth)
         return {"status": "ok", **data}
     except Exception as e: functions.error("/dashboard/catalog", e)
 
+@router.post("/waq_scenarios")
+async def dashboard_waq_scenarios(request: Request, user=Depends(functions.basic_auth)):
+    """Danh sách kịch bản WAQ + kịch bản đang dùng (output/config/config.json) cho bộ chọn nhanh."""
+    try:
+        project = _project(await _body(request), user)
+        data = await asyncio.to_thread(dres.waq_scenarios, project)
+        return {"status": "ok", **data}
+    except Exception as e: functions.error("/dashboard/waq_scenarios", e)
+
 @router.post("/summary")
 async def dashboard_summary(request: Request, user=Depends(functions.basic_auth)):
     try:
@@ -167,28 +176,36 @@ async def dashboard_layers(request: Request, user=Depends(functions.basic_auth))
     try:
         project = _project(await _body(request), user)
         inventory = await asyncio.to_thread(dfn.project_inventory, project)
-        key = f"layers:{project}:{','.join(inventory.get('gis_layers', []))}:{dfn.context_signature()}"
+        key = f"layers:{project}:{','.join(inventory.get('gis_layers', []))}:{dfn.context_signature(project)}"
         data = await _cached(request, key, dfn.build_layers, project, inventory)
         return {"status": "ok", "layers": data}
     except Exception as e: functions.error("/dashboard/layers", e)
 
+async def _clear_summary_cache(request: Request):
+    """Ngưỡng đổi -> checks / WQI / cảnh báo phải tính lại."""
+    _MEMORY_CACHE.clear()
+    redis = getattr(request.app.state, "redis", None)
+    if redis is not None:
+        try:
+            async for k in redis.scan_iter("dashboard:summary:*"):
+                await redis.delete(k)
+        except Exception: traceback.print_exc()
+
 @router.post("/thresholds")
 async def dashboard_thresholds(request: Request, user=Depends(functions.basic_auth)):
+    """Body: {} -> đọc | {reload: true} -> nạp lại file | {save: {substances, physics}} -> ghi đè file."""
     try:
         body = await _body(request)
-        if body.get("reload"):
-            _MEMORY_CACHE.clear()
-            redis = getattr(request.app.state, "redis", None)
-            if redis is not None:
-                try:
-                    async for k in redis.scan_iter("dashboard:summary:*"):
-                        await redis.delete(k)
-                except Exception: traceback.print_exc()
+        if body.get("save") is not None:
+            data = await asyncio.to_thread(dfn.save_thresholds, body["save"])
+            await _clear_summary_cache(request)
+        elif body.get("reload"):
+            await _clear_summary_cache(request)
             data = dfn.reload_thresholds()
         else: data = dfn.load_thresholds()
         return {"status": "ok", **json.loads(json.dumps(data))}
+    except ValueError as e: functions.error("/dashboard/thresholds", e, 400)
     except Exception as e: functions.error("/dashboard/thresholds", e)
-
 # Weather Live
 @router.post("/weather")
 async def dashboard_weather(request: Request, user=Depends(functions.basic_auth)):

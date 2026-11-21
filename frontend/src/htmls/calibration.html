@@ -29,17 +29,16 @@
                                     <label for="project-name">HYD Scenario:</label>
                                     <div class="project-name-wrapper">
                                         <input type="text" class="project-name" id="project-name" 
-                                            placeholder="Click to select a scenario" 
-                                            style="line-height: 1.8; height: 40px; width: 100%;">
+                                            placeholder="Click to select a scenario">
                                         <ul class="project-list" id="project-list"></ul>
                                     </div>
-                                    <button id="project-btn" style="max-width: 200px;">Open Scenario</button>
+                                    <button id="project-btn">Open Scenario</button>
                                 </div>
                                 <div class="field-inline">
                                     <label for="sim-start-date">Start Time:</label>
                                     <input type="text" id="sim-start-date" placeholder="YYYY-mm-dd HH:mm:ss">
                                 </div>
-                                <div class="field-inline">    
+                                <div class="field-inline">
                                     <label for="sim-end-date">End Time:</label>
                                     <input type="text" id="sim-end-date" placeholder="YYYY-mm-dd HH:mm:ss">
                                 </div>
@@ -164,7 +163,7 @@
                 <!-- Tab 3: Optimization -->
                 <div class="tabpanel main-panel" data-panel="optimization-tab">
                     <div class="grid">
-                        <div class="tile" style="grid-column: span 4;"><h3>Simulation Station</h3>
+                        <div class="tile" style="grid-column: span 2;"><h3>Simulation Station</h3>
                             <div class="row">
                                 <div class="field-inline">
                                     <button id="extract-station-btn">Extract Stations from Simulation</button>
@@ -172,7 +171,6 @@
                                         <option value="">-- Select a station --</option>
                                     </select>
                                 </div>
-                                
                                 <div class="field-inline">
                                     <label for="criteria-select">Optimization Target:</label>
                                     <select id="criteria-select">
@@ -181,7 +179,7 @@
                                     </select>
                                 </div>
                                 <div class="field-inline">
-                                    <label for="weight-select">Weight Method:</label>
+                                    <label for="weight-select">Weight:</label>
                                     <select id="weight-select">
                                         <option value="equal" selected>Equal Weight (All Layers have an equal weight)</option>
                                         <option value="surface">Surface-Weighted (Higher weight at shallower depths)</option>
@@ -201,12 +199,8 @@
                                     <select id="surrogate-select">
                                         <option value="gaussian-process" selected>Gaussian Process</option>
                                     </select>
+                                    <button id="surrogate-btn">Run Model</button>
                                 </div>
-                                <button id="surrogate-btn">Run Surrogate Model</button>
-                            </div>
-                        </div>
-                        <div class="tile" style="grid-column: span 2;"><h3>Run Optimization</h3>
-                            <div class="row">
                                 <div class="field-inline">
                                     <label for="direction-select">Direction:</label>
                                     <select id="direction-select">
@@ -217,9 +211,9 @@
                                 <div class="field-inline">
                                     <label for="iteration-value">Nr. of Iterations:</label>
                                     <input type="text" id="iteration-value" value="2000">
+                                    <button id="optimization-btn">Run Optimization</button>
                                 </div>
-                                <button id="optimization-btn">Run Optimization</button>
-                                <div class="progress-container" id="progressbar-optimization-container" style="margin-top: -10px;">
+                                <div class="progress-container" id="progressbar-optimization-container" style="margin-top: -5px;">
                                     <progress id="progressbar-optimization" value="0" max="100"></progress>
                                     <label id="progress-optimization-text"></label>
                                 </div>
@@ -250,7 +244,7 @@
                 <!-- Tab 4: Comparison -->
                 <div class="tabpanel main-panel" data-panel="comparison-tab">
                     <div class="grid">
-                        <div class="tile"><h3>Simulation</h3>
+                        <div class="tile" style="grid-column: span 3;"><h3>Simulation</h3>
                             <div class="row cmp-form">
                                 <div class="field-inline">
                                     <label for="project-name-comparison">Calibrated Scenario:</label>
@@ -262,7 +256,7 @@
                                     <button id="project-comparison-btn">Open Simulation</button>
                                 </div>
                                 <div class="field-inline">
-                                    <label for="project-name-initial">Initial Scenario:</label>
+                                    <label for="project-name-initial">Original Scenario:</label>
                                     <div class="project-name-wrapper">
                                         <input type="text" class="project-name" id="project-name-initial"
                                             placeholder="Optional - scenario before calibration">
@@ -289,10 +283,10 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="tile"><h3>Observation</h3>
-                            <div class="row cmp-form">
+                        <div class="tile" style="grid-column: span 3;"><h3>Observation</h3>
+                            <div class="row">
                                 <div class="field-inline">
-                                    <button id="obs-comparison-btn">Open an Observation (*.csv)</button>
+                                    <button id="obs-comparison-btn">Open Observation (*.csv)</button>
                                     <input type="file" id="obs-comparison-file" accept=".csv" hidden>
                                     <input type="text" id="obs-comparison-name">
                                     <button id="comparison-plot-btn">Comparison Plot</button>
@@ -317,6 +311,17 @@
                                         </tr>
                                     </tbody>
                                 </table>
+                            </div>
+                        </div>
+                        <div class="tile" style="grid-column: span 2;" id="override-container"><h3>Calibration Overrides</h3>
+                            <div class="row">
+                                <div class="field-inline">
+                                    <div><input class="param-check" type="checkbox" id="delete-calibration-checkbox"> Delete calibrated scenario</div>
+                                </div>
+                                <button id="override-btn">Overwrite Calibration &#10132; Original Scenario</button>
+
+                                
+
                             </div>
                         </div>
                         <div class="tile sensitivity-layout" id="plot-container"

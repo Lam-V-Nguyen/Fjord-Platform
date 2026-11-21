@@ -1,9 +1,6 @@
-import re, math, os
-from config import SOURCE_BACKEND
+import re, math
 import numpy as np
 
-SAMPLE_DIR = os.path.normpath(os.path.join(SOURCE_BACKEND, "samples"))
-FLOW_SAMPLE_DIR = os.path.normpath(os.path.join(SOURCE_BACKEND, "flow_samples"))
 
 # Dashboard
 DASH_MOVE_DIR, DASH_VIEW_DIR = "movement",  "viewer"
@@ -35,7 +32,23 @@ HIS_TO_MAP = {"temperature": "mesh2d_tem1", "salinity": "mesh2d_sa1", "velocity_
     "mesh2d_ucmag", "waterlevel": "mesh2d_s1", "Contaminant": "mesh2d_Contaminant"}
 CACHE_TTL = 300  # seconds
 
-# Calibration
+# 
+# ----------------------------------------------------------------------------------------------
+# Observation quality control – raw data, before interpolation to the selected depths.
+# The same cleaned observations are used by the initial check, the baseline evaluation,
+# the calibration summary (objective of the surrogate / Optuna) and the comparison plot.
+# Outliers are REMOVED (not replaced): no interpolated or smoothed value enters a metric.
+# ----------------------------------------------------------------------------------------------
+QC_TEMP_RANGE = (-0.5, 35.0)      # physical limits (°C)
+QC_N_SIGMA = 4.0                  # robust threshold (x MAD-sigma)
+QC_MIN_POINTS = 5                 # min. points of a profile for the vertical spike test
+QC_MIN_DELTA_VERTICAL = 1.0       # vertical spike: never flag a deviation below this (°C)
+QC_REF_PROFILES = 6               # reference casts: the nearest other casts in time ...
+QC_MIN_REF_PROFILES = 3           # ... at least this many with data at the depth ...
+QC_REF_MAX_GAP = "4D"             # ... and not further away than this
+QC_MIN_DELTA = 1.0                # deviation from the reference casts below this is never flagged (°C)
+QC_MAX_DISPLACEMENT = 10.0        # vertical displacement (m) accepted as a real event (upwelling, internal waves)
+QC_DISPLACEMENT_TOL = 0.5         # tolerance (°C) for that test
 OVERRIDES_FILE, COMPLETED_FLAG, FACTOR_SUFFIX, RUN_LOCK_FILE = "base_overrides.json", ".completed", "_factor", ".simulation_run.lock"
 INTERVAL_KEYS = ("HisInterval", "MapInterval", "WaqInterval", "ClassMapInterval", "RstInterval")
 INDEXED = re.compile(r"^(?P<key>[A-Za-z0-9_]+)\[(?P<i>\d+)\]$")
@@ -129,6 +142,11 @@ VAR_INFO = {
     "vegetation_throughfall": ("mm/Δt", "Throughfall", True, "depth", "Vegetation"),
 }
 NODATA_DEM, NODATA_SOIL_THICKNESS, NODATA_INT, NODATA_FLWDR = -9999.0, -99999, 0, 247
+ELEV_NAMES = ["land_elevation", "wflow_dem", "elevtn", "dem", "altitude"]
+UPAREA_NAMES = ["upstream_area", "wflow_uparea", "uparea", "river_upstream_area"]
+PRECIP_NAMES = ["precip", "precipitation", "P", "pr", "tp", "atmosphere_water__precipitation_volume_flux"]
+TERRAIN_FILE, SCENE_FILE = "w3d_terrain.npy", "w3d_scene.json"
+SCENE_VERSION, MAX_OUTLETS = 2, 12
 
 # Movement
 U_NAMES_AVG, V_NAMES_AVG = ["mesh2d_ucxa", "ucxa"], ["mesh2d_ucya", "ucya"]
@@ -286,6 +304,11 @@ SOIL_DEPTH = {
 }
 SOIL_DEPTH_REVERSE = {v: k for k, v in SOIL_DEPTH.items()}
 
+# Pollution
+GRID_CELLS = 320          # số ô lưới hạt theo cạnh dài của miền
+SAMPLE_STEPS = 24         # số bước thời gian lấy mẫu để tính thang cố định
+FILL_LIMIT = -998.0        # DELWAQ ghi -999 cho ô không hoạt động (z-layers) – không phải nồng độ
+
 # YAML
 TARGET_UNITS = {
     "precip": "mm", "temp": "degC", "press_msl": "hPa", "kin": "W/m^2", "kout": "W/m^2",
@@ -300,6 +323,7 @@ CONVERSIONS = {
 }
 
 # Others
+THRESHOLD_TEXT = ("label", "unit", "category")
 VARIABLES_NAME = {
     # For In-situ options
     'temperature':'Temperature (°C)', 'salinity':'Salinity (ppt)', 'contaminant':'Contaminant (mg/m³)', # For hydrodynamic stations
@@ -442,9 +466,4 @@ FRIENDLY = {
 }
 # Lớp nền (lake, catchment, rivers, bathymetry): thiếu file -> None / [] -> dashboard ẩn lựa chọn tương ứng.
 # Cache theo (đường dẫn, mtime) để file được thêm / sửa / xoá sau khi server chạy vẫn được nhận ra.
-CONTEXT_FILES = {
-    "lake": os.path.join(FLOW_SAMPLE_DIR, "BrusdalLake.geojson"),
-    "catchment": os.path.join(FLOW_SAMPLE_DIR, "catchment.geojson"),
-    "rivers": os.path.join(FLOW_SAMPLE_DIR, "river.geojson"),
-    "bathymetry": os.path.join(SAMPLE_DIR, "depth.csv"),
-}
+CONTEXT_LAYERS = { "lake": "lake.geojson", "catchment": "catchment.geojson", "river": "river.geojson", "bathymetry": "depth.csv" }

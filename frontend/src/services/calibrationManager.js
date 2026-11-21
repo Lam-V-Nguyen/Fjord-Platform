@@ -5,7 +5,7 @@ import { getProjectList, signalSender, jsonLoader, fillTable, getDataFromTable, 
 import { getLastTimeZone, calibrationParams } from "./constant.js";
 import { 
     fillOverrides, esc, updateLogSimulation, initParameterContainer, isBusy,
-    updateLogOptimization, plotComparison, plotOptuna, sensitivityRender
+    updateLogOptimization, plotComparison, plotOptuna, sensitivityRender, showRemovedObservations
 } from "./calibrationFunctions.js";
 
 
@@ -47,7 +47,8 @@ const obj = {
     obsEndDate: $('obs-end-date'), obsTable: $('obs-table'), comparisonPlot: $('comparison-plot-btn'), 
     comparisonContainer: $('comparison-container'), plotContainer: $('plot-container'),
     initialSimProject: $('project-name-initial'), initialSimList: $('project-list-initial'),
-    initialClearBtn: $('project-initial-clear-btn'),
+    initialClearBtn: $('project-initial-clear-btn'), overridesContainer: $('override-container'),
+    deleteCalibrationChecker: $('delete-calibration-checkbox'), overridesBtn: $('override-btn'), 
 }
 
 const KEYS = { iteration: 'iteration', simulation: 'calibration', surrogate: 'surrogate_model', optuna: 'optuna' };
@@ -99,9 +100,9 @@ async function stopOrphanedRun(project, runKey, st) {
     return r.status === 'stopped' || r.status === 'not_started';
 }
 
-function selectedProject(input = obj.projectName) {
+function selectedProject(input = obj.projectName, name = 'a HYD scenario') {
     const project = input.value.trim();
-    if (project === '') { alert('Please select a HYD scenario first.'); return null; }
+    if (project === '') { alert(`Please select ${name} first.`); return null; }
     return project;
 }
 function isBlocked(key) { return (CONFLICTS[key] || [key]).some(k => state.running[k]); }
@@ -157,7 +158,7 @@ async function openProject(projectObj, startObj, endObj, key='') {
 }
 
 function renderInitialCheck(c) {
-    const m = c.model, o = c.obs, fmt = (v, d = 2) => (v === null || v === undefined) ? '–' : Number(v).toFixed(d);
+    const m = c.model, o = c.obs, fmt = (v, d = 2) => (v === null || v === undefined) ? '-' : Number(v).toFixed(d);
     let html = `
         <div class="initial-check-content">
             <div class="initial-check-section">
@@ -265,7 +266,7 @@ function renderBaseline(content) {
     const b = content.baseline?.rows.map(r => r.bias).filter(v => v != null) || [];
     if (b.length && Math.abs(b.reduce((a, v) => a + v, 0) / b.length) > 1)
         html += `<p class="init-hint">The mean bias is still > 1°C: the error is systematic. Fix the initial conditions/forcing
-            first – the calibration parameters mainly change the shape of the profile, not a constant offset.</p>`;
+            first - the calibration parameters mainly change the shape of the profile, not a constant offset.</p>`;
     obj.initResult.insertAdjacentHTML('beforeend', html);
 }
 
@@ -329,16 +330,6 @@ function initialCheckManager() {
                 if (!(await stopOrphanedRun(currentProject, runKey, st))) return;
                 continue;
             }
-            // if (st.status === 'running') {
-            //     alert(`${label} of project "${currentProject}" is still running.\n` +
-            //         `${st.message || ''}\nPlease wait until it finishes.`);
-            //     // Re-attach the log and progress bar to the running simulation
-            //     obj.calibrationLog.value = ''; obj.progressContainer.style.display = 'flex';
-            //     obj.progressText.innerText = st.message || ''; obj.progressBar.value = Number(st.progress) || 0;
-            //     updateLogSimulation(
-            //         currentProject, runKey, obj.calibrationLog, obj.progressBar, obj.progressText, 5, runLog
-            //     ); return;
-            // }
             if (st.status === 'running') {
                 attachToRun(currentProject, runKey, st, runLog);     // re-attach log + progress bar
                 alert(`${label} of project "${currentProject}" is still running.\n` +
@@ -366,7 +357,8 @@ function initialCheckManager() {
             if (start.status === 'running') { attachToRun(currentProject, key, start, logFile); return; }
             obj.progressText.innerText = 'Running the baseline simulation...'; isBaseRunning = true;
             updateLogSimulation(currentProject, key, obj.calibrationLog, obj.progressBar, obj.progressText, 5, logFile,
-                async () => { alert(`Running baseline simulation completed.`); isBaseRunning = false; }
+                0, async () => { isBaseRunning = false; alert(st.status === 'finished' ? 'Running baseline simulation completed.'
+                    : `Baseline simulation ${st.status}: ${st.message || ''}`); }
             );
         } catch (error) { alert(`Running baseline simulation failed: ${error.message}`); isBaseRunning = false; }
     });
@@ -496,17 +488,11 @@ function calibrationManager() {
             const st = await jsonLoader('check_sim_status_calibration', { projectName: currentProject, key: runKey });
             if (st.status === 'orphaned') {
                 if (!(await stopOrphanedRun(currentProject, runKey, st))) return;
-                continue;                           // stopped -> the resume dialog below proposes the next scenario
+                continue;    // stopped -> the resume dialog below proposes the next scenario
             }
             if (st.status !== 'running') continue;
             attachToRun(currentProject, runKey, st, runKey === 'baseline' ? 'log_baseline.txt' : logFile);
             alert(`The ${runKey} simulation is still running. Please wait until it finishes.`); return;
-            // obj.progressContainer.style.display = 'flex';
-            // obj.progressText.innerText = st.message || ''; obj.progressBar.value = Number(st.progress) || 0;
-            // const runLog = runKey === 'baseline' ? 'log_baseline.txt' : logFile;
-            // obj.calibrationLog.value = '';      // updateLogSimulation re-reads the log from the start
-            // updateLogSimulation(currentProject, runKey, obj.calibrationLog, obj.progressBar, obj.progressText, 5, runLog);
-            // alert(`The ${runKey} simulation is still running. Please wait until it finishes.`); return;
         }
         // Which scenarios already finished (e.g. after a crash or a server restart)?
         const st = await jsonLoader('scenario_status_calibration', { projectName: currentProject });
@@ -581,8 +567,11 @@ function calibrationManager() {
             projectName: currentProject, simStart, simEnd, obsStart, obsEnd, station, depthSelection,
             obsData: observationData, targetValue: obj.criteriaTarget.value,
             weightValue: obj.weightSelector.value, timeZone: getLastTimeZone()
-        });
-        signalSender('hideOverlay'); alert(data.message);
+        }); signalSender('hideOverlay'); 
+        if (data.qc?.removed?.length) {
+            showRemovedObservations(data.qc.removed, { note: data.qc.message, fileName: data.qc.file });
+        }
+        alert(data.message);
     });
     obj.correlationBtn.addEventListener('click', async () => {
         const currentProject = selectedProject(); if (!currentProject) return;
@@ -591,14 +580,13 @@ function calibrationManager() {
         obj.sensitivityObject.style.display = 'block';
         await sensitivityRender(obj.sensitivityContainer, respond.content, respond.key);
     });
-
     // Surrogate model + optimisation
     obj.surrogateBtn.addEventListener('click', async (e) => {
         const currentProject = selectedProject(); if (!currentProject) return;
         const key = KEYS.surrogate, logFile = LOG_FILES.surrogate;
         if (isBusy()) { alert('A process is running. Please wait until it finishes.'); return; }
         obj.optimizationLogContainer.style.display = 'flex';
-        e.target.textContent = 'Running Surrogate Model. Please wait ...';
+        e.target.textContent = 'Running Model. Please wait ...'; e.target.style.color = '#f5dd08';
         obj.optimizationChartContainer.style.display = 'none'; obj.optimizationLog.value = '';
         try {
             const start = await jsonLoader('start_optimization_calibration', {
@@ -607,7 +595,7 @@ function calibrationManager() {
             if (start.status === 'error') { alert(start.message); return; }
             updateLogOptimization(currentProject, key, obj.optimizationLog, null, null, null, 1, logFile,
                 async () => {
-                    e.target.textContent = 'Run Surrogate Model';
+                    e.target.textContent = 'Run Model';  e.target.style.color = '#ffffff';
                     alert('Building surrogate model completed. Check the cross-validation R² in the log.');
                 }
             );
@@ -623,7 +611,7 @@ function calibrationManager() {
         obj.optimizationProgressBarContainer.style.display = 'flex'; obj.optimizationProgressBar.value = 0;
         obj.optimizationLogContainer.style.display = 'flex'; obj.optimizationChartContainer.style.display = 'none';
         obj.optimizationLog.value = ''; obj.optimizationResults.style.display = 'none';
-        e.target.textContent = 'Running Optimization. Please wait ...';
+        e.target.textContent = 'Running Optimization ...';  e.target.style.color = '#f5dd08';
         try {
             const start = await jsonLoader('start_optimization_optuna', {
                 projectName: currentProject, iterations, direction: obj.optimizationDirection.value, key, logFile
@@ -632,7 +620,8 @@ function calibrationManager() {
             updateLogOptimization(currentProject, key, obj.optimizationLog, obj.optimizationProgressBar,
                 obj.optimizationProgressText, obj.optimizationResults, 1, logFile,
                 async () => {
-                    e.target.textContent = 'Run Optimization'; alert(`Completed ${iterations} iterations.`);
+                    e.target.textContent = 'Run Optimization';  e.target.style.color = '#ffffff';
+                    alert(`Completed ${iterations} iterations.`);
                 }
             );
         } catch (error) {
@@ -644,8 +633,7 @@ function calibrationManager() {
         const currentProject = selectedProject(); if (!currentProject) return;
         signalSender('showOverlay', 'Getting data for plotting. Please wait...');
         const response = await jsonLoader('plot_optuna', { projectName: currentProject });
-        signalSender('hideOverlay');
-        if (response.status === 'error') { alert(response.message); return; }
+        signalSender('hideOverlay'); if (response.status === 'error') { alert(response.message); return; }
         obj.optimizationLogContainer.style.display = 'none'; obj.optimizationChartContainer.style.display = 'block';
         plotOptuna(obj.optimizationContainer, response.content, response.importance, response.target);
     });
@@ -660,24 +648,26 @@ function calibrationManager() {
         if (params.length === 0) { alert('No optimal parameters found. Please run the optimization first.'); return; }
         const bad = params.filter(p => !Number.isFinite(Number(p.value)));
         if (bad.length) { alert('Invalid value(s): ' + bad.map(p => p.abbreviation).join(', ')); return; }
-        const newName = prompt('Please specify a name for the new scenario.\n' +
-            'The overrides and the optimal parameters are applied to this scenario.\nIt is HIGHLY recommended to run this scenario afterwards.');
+        const newName = prompt('1. Please specify a name for the new scenario.\n' +
+            '2. The overrides and the optimal parameters are applied to this scenario.\n' +
+            '3. Run this scenario afterwards to update simulation information.');
         if (newName === null) return;
         if (nameChecker(newName)) { alert('Name of the new scenario is invalid.'); return; }
         signalSender('showOverlay', `Creating scenario '${newName}'. Please wait...`);
         const data = await jsonLoader('save_scenario_calibration', { oldProject: currentProject, newProject: newName, params });
-        signalSender('hideOverlay'); alert(data.message);
-        if (data.status === 'ok') await getProject();
+        signalSender('hideOverlay'); alert(data.message); if (data.status === 'ok') await getProject();
     });
-
     // Compare a (calibrated) scenario with observations
     obj.comparisonSimBtn.addEventListener('click', async () => {
         const currentProject = selectedProject(obj.comparisonSimProject); if (!currentProject) return;
         await openProject(obj.comparisonSimProject, obj.simStartDate, obj.simEndDate);
         signalSender('showOverlay', 'Getting station data from simulation "' + currentProject + '".\nPlease wait...');
         const data = await jsonLoader('get_stations_comparison', { projectName: currentProject });
-        signalSender('hideOverlay');
-        if (data.status === 'error') { alert(data.message); return; }
+        signalSender('hideOverlay'); 
+        if (data.status === 'error') { 
+            obj.simStartDate.value = ''; obj.simEndDate.value = ''; alert(data.message); return; 
+        }
+        obj.overridesContainer.style.display = 'none';
         obj.stationComparison.innerHTML = `<option value="">-- Select a station --</option>` +
             data.content.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
     });
@@ -720,8 +710,31 @@ function calibrationManager() {
             depthSelection, obsData, station: stationName
         }); signalSender('hideOverlay');
         if (data.status === 'error') { alert(data.message); return; }
-        if (data.content?.note) alert(data.content.note);
-        plotComparison(obj.comparisonContainer, data.content);
-        obj.plotContainer.style.display = 'block';
+        if (data.content?.removed?.length) {
+            showRemovedObservations(data.content.removed, {
+                note: data.content.qc, fileName: 'obs_qc_removed_comparison.csv',
+                title: 'Observations removed by the quality control (comparison period)'
+            });
+        }
+        if (data.content?.note) alert(data.content.note); obj.overridesContainer.style.display = 'block';
+        plotComparison(obj.comparisonContainer, data.content); obj.plotContainer.style.display = 'block';
+    });
+    // Override calibration
+    obj.overridesBtn.addEventListener('click', async () => {
+        const calibrationScenario = selectedProject(obj.comparisonSimProject, 'a calibrated HYD scenario'); if (!calibrationScenario) return;
+        const originalScenario = selectedProject(obj.initialSimProject, 'an original HYD scenario'); if (!originalScenario) return;
+        if (!confirm(
+            `1. This option is going to overwrite the original scenario by the calibrated scenario.\n` + 
+            `2. If you already ran WAQ simuation(s) using the original scenario. You must run the WAQ simulation(s) again.\n` +
+            `3. You might need to reset configuration ('Visualization → General Options → Reset Configuration') to update new information.\n\n` +
+            `Are you sure you want to move on?`
+        )) { return; }
+        signalSender('showOverlay', `Copying scenario '${calibrationScenario}' → scenario '${originalScenario}'`);
+        const content = { 
+            oldName: calibrationScenario, newName: originalScenario, 
+            delete: obj.deleteCalibrationChecker.checked
+        }
+        const res = await jsonLoader('finish_calibration', content);
+        signalSender('hideOverlay'); alert(res.message);
     });
 }

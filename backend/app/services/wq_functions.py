@@ -1,4 +1,4 @@
-import os, json
+import os, json, glob
 from config import SOURCE_BACKEND
 from services import functions
 import geopandas as gpd, xarray as xr, numpy as np
@@ -80,6 +80,28 @@ def segmentFinder(lat:float, lon:float, grid:gpd.GeoDataFrame) -> int:
     if polygon.empty: return 0
     idx = int(polygon.index[0])
     return idx + 1
+
+def boundaryNames(hyd_path: str, n_bnd: int) -> list[tuple[int, str]]:
+    """(số biên DELWAQ 1..n_bnd, tên nhóm) lấy từ file .bnd mà D-Flow FM ghi cạnh file .hyd.
+    Định dạng .bnd: <số nhóm>, rồi mỗi nhóm: <tên>, <số ô biên>, mỗi ô 1 dòng '<-id> x1 y1 x2 y2'."""
+    names: dict[int, str] = {}
+    folder, stem = os.path.dirname(hyd_path), os.path.splitext(os.path.basename(hyd_path))[0]
+    cands = [os.path.join(folder, f"{stem}.bnd")] + sorted(glob.glob(os.path.join(folder, "*.bnd")))
+    bnd_path = next((p for p in cands if os.path.isfile(p)), None)
+    if bnd_path:
+        try:
+            with open(bnd_path, 'r', encoding='utf-8', errors='replace') as f:
+                lines = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith(';')]
+            pos, n_groups = 1, int(lines[0].split()[0])
+            for _ in range(n_groups):
+                group = lines[pos].strip().strip("'\""); n_cells = int(lines[pos + 1].split()[0]); pos += 2
+                for ln in lines[pos:pos + n_cells]:
+                    names[abs(int(ln.split()[0]))] = group
+                pos += n_cells
+        except (ValueError, IndexError) as e:
+            print(f"[waq] could not read {bnd_path}: {e} - generic boundary names used")
+            names = {}
+    return [(i, names.get(i, f"Bnd_{i}")) for i in range(1, n_bnd + 1)]
 
 def ddhhmmss_to_seconds(value) -> int:
     s = str(value).strip().strip("'").zfill(8)
@@ -233,29 +255,29 @@ def wqPreparation(parameters:dict, key:str, output_folder:str, includes_folder:s
         params_INC['B4_length'] = f"0 ; Lengths from binary file\n'{temp_length}' ; lengths file"
         # Prepare for the config file B5
         params_INC['B5_boundlist'] = [";'NodeID' 'Comment field' 'Boundary name used for data grouping'"]
-        n_bnd = poi_info['n_boundaries']
-        names = [p[0] for p in parameters['sources']] if parameters['sources'] else []
-        for i in range(n_bnd):
-            group = names[i % len(names)] if names else f"Bnd_{i+1}"
-            params_INC['B5_boundlist'].append(f"'{i+1}' '' '{group}'")
+        boundaries = boundaryNames(parameters['hyd_path'], poi_info['n_boundaries'])
+        for i, group in boundaries:
+            params_INC['B5_boundlist'].append(f"'{i}' '{group}' '{group}'")
+        if boundaries: model_type['wq_boundaries'] = sorted({g for _, g in boundaries})
         params_INC['B5_boundaliases'], params_INC['B5_bounddata'] = '', ''
         # Prepare for the config file B6_loads
-        n_loads = parameters["loads_data"]
-        if len(list(parameters["loads_data"])) > 0: model_type['wq_loads'] = list(parameters["loads_data"])
-        params_INC['B6_loads'] = [f'{len(n_loads)} ; Number of loads']
-        params_INC['B6_loads'].append(';SegmentID  Load-name  Comment  Load-type')
-        for load in n_loads:
+        valid, skipped = [], []
+        for load in parameters["loads_data"]:
             segment = segmentFinder(load[1], load[2], grid)
-            if segment == 0: continue
-            params_INC['B6_loads'].append(f"{segment} '{load[0]}' '' ''")
+            (valid if segment > 0 else skipped).append((load, segment))
+        for load, _ in skipped:
+            print(f"[waq] load '{load[0]}' at lat {load[1]}, lon {load[2]} is outside the grid - skipped")
+        if valid: model_type['wq_loads'] = [load for load, _ in valid]
+        params_INC['B6_loads'] = [f'{len(valid)} ; Number of loads', ';SegmentID  Load-name  Comment  Load-type']
+        params_INC['B6_loads'] += [f"{segment} '{load[0]}' '' ''" for load, segment in valid]
         # Prepare for the config file B6_loads_aliases
-        params_INC['B6_loads_aliases'] = []
-        for load in n_loads:
-            params_INC['B6_loads_aliases'].append(f"USEDATA_ITEM '{load[0]}' FORITEM\n'{load[0]}'")
-        # Prepare for the config file B6_loads_data
-        tbl_path = os.path.normpath(os.path.join(output_folder, 'includes_deltashell', 'load_data_tables', f'{parameters["folder_name"]}.tbl'))
-        temp_btl = tbl_path.replace(os.sep, "/")
-        params_INC['B6_loads_data'] = f"INCLUDE '{temp_btl}'"
+        params_INC['B6_loads_aliases'] = [f"USEDATA_ITEM '{load[0]}' FORITEM\n'{load[0]}'" for load, _ in valid]
+        # Prepare for the config file B6_loads_data (không có tải lượng hợp lệ -> không include bảng)
+        if valid:
+            tbl_path = os.path.normpath(os.path.join(output_folder, 'includes_deltashell', 'load_data_tables', f'{parameters["folder_name"]}.tbl'))
+            temp_btl = tbl_path.replace(os.sep, "/")
+            params_INC['B6_loads_data'] = f"INCLUDE '{temp_btl}'"
+        else: params_INC['B6_loads_data'] = ''
         # Prepare for the config file B7_functions, B7_dispersion
         params_INC['B7_functions'], params_INC['B7_dispersion'] = '', ''
         # Prepare for the config file B7_parameters

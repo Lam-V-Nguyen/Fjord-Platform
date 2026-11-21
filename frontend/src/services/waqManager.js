@@ -51,6 +51,11 @@ const obj = {
 };
 
 setupTabs(document); projectOptions(); waqManager();
+// Vẽ điểm quan trắc / tải lượng trong bảng lên bản đồ (icon waq_obs.png / waq_loads.png như khi chọn điểm)
+function drawWaqPoints() {
+    window.parent.postMessage({ type: 'waqPoint', content: getDataFromTable(obj.obsPointTable, true) }, origin);
+    window.parent.postMessage({ type: 'loadsPoint', content: getDataFromTable(obj.loadsPointTable, true) }, origin);
+}
 
 async function projectOptions(){
     projectSelected = await getProjectList();
@@ -148,6 +153,7 @@ async function projectOptions(){
         addRowToTable(obj.loadsPointTable, ['Name', 'Latitude', 'Longitude']);
         deleteTable(obj.timeTable); 
         addRowToTable(obj.timeTable, ['Time', 'Location', 'Substance', 'Value']);
+        drawWaqPoints();
         // Physical tab
         obj.physicalSelector.value = ''; obj.physicalName.value = ''; 
         obj.usesforFromPhysical.innerHTML = ''; obj.usesforToPhysical.innerHTML = '';
@@ -173,7 +179,7 @@ async function projectOptions(){
             const data = await jsonLoader('load_waq', content);
             if (data.status === "error") { alert(data.message); return; }
             if (data.content.obs.length > 0) { fillTable(data.content.obs, obj.obsPointTable, true); }
-            fillTable(data.content.loads, obj.loadsPointTable, true);
+            fillTable(data.content.loads, obj.loadsPointTable, true); drawWaqPoints();
             deleteTable(obj.timeTable); fillTable(data.content.time_data, obj.timeTable, true);
             if (data.content.mode === 'physical') {
                 obj.physicalSelector.value = data.content.key;

@@ -716,7 +716,8 @@ function unGridManager() {
     });
     obj.interpolateFile.addEventListener('change', async (e) => {
         const file = e.target.files[0]; if (!file) return;
-        const formData = new FormData(); formData.append('file', file); 
+        const formData = new FormData(); formData.append('projectName', currentProject);
+        formData.append('file', file); 
         signalSender('showOverlay', 'Reading depth data. Please wait...');
         const response = await fetch('/grid_interpolation_upload', { method: 'POST', body: formData });
         const data = await response.json(); signalSender('hideOverlay'); e.target.value = '';

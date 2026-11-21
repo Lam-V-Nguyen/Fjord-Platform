@@ -103,7 +103,7 @@ async def get_scenario(request: Request, user=Depends(functions.basic_auth)):
                                     elif line1.strip().startswith('forcingFile'):
                                         parts = line1.split("=")
                                         if len(parts) >= 2 and parts[1] not in forcing: forcing.append(parts[1])
-                            data["boundaryTable"] = boundary[0]
+                            data["boundaryTable"] = [row for rows in boundary for row in rows]
                     elif line.startswith('DtUser'):
                         parts = [p.strip() for p in line.split("=") if p.strip()]
                         if len(parts) == 2:
@@ -302,15 +302,27 @@ async def init_source(request: Request, user=Depends(functions.basic_auth)):
             with open(path, 'w', encoding=functions.encoding_detect(path)) as file:
                 joined_parts = '\n\n'.join(parts)
                 file.write(f"\n{joined_parts}\n")
-        status, data, type = 'ok', [], []
+        status, data, type, points, in_dir = 'ok', [], [], [], os.path.dirname(path)
         for part in parts:
             if 'QUANTITY=discharge_salinity_temperature_sorsin' in part:
                 match = re.search(r'FILENAME=(.+?)\.pli', part)
                 if match:
                     data.append(match.group(1))
                     type.append('discharge_salinity_temperature_sorsin')
-    else: status, data, type = 'error', [], []
-    return JSONResponse({"status": status, "content": data, "type": type})
+                    lat_lon = _pli_point(os.path.join(in_dir, f"{match.group(1)}.pli"))
+                    if lat_lon: points.append([match.group(1), *lat_lon])
+    else: status, data, type, points = 'error', [], [], []
+    return JSONResponse({"status": status, "content": data, "type": type, "points": points})
+
+def _pli_point(pli_path: str) -> list | None:
+    """Toạ độ [lat, lon] của điểm đầu tiên trong file .pli (dòng 3: 'lon  lat')."""
+    if not os.path.exists(pli_path): return None
+    try:
+        with open(pli_path, 'r', encoding=functions.encoding_detect(pli_path)) as f:
+            lines = [ln.split() for ln in f if ln.strip()]
+        lon, lat = float(lines[2][0]), float(lines[2][1])
+        return [lat, lon]
+    except (IndexError, ValueError): return None
 
 # Update boundary conditions
 @router.post("/update_boundary")

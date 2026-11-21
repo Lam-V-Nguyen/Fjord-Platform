@@ -393,7 +393,8 @@ async function hydManager(){
         const name = obj.sourceSelectorRemove.value;
         removeRowFromTable(obj.sourceRemoveTable, name); deleteTable(obj.sourceTable);
         const content = getDataFromTable(obj.sourceRemoveTable, true).rows;
-        updateTable(obj.sourceRemoveTable, obj.sourceSelectorRemove, nameProject, content);
+        const src = await updateTable(obj.sourceRemoveTable, obj.sourceSelectorRemove, nameProject, content);
+        signalSender('drawScenario', { sources: src?.points || [] });
     });
     // Change output options
     assignOutput(obj.outputHis, obj.hisStart, obj.hisStop, obj.startDate, obj.stopDate);
@@ -413,8 +414,8 @@ async function hydManager(){
             lon: lon, data: table.rows, BC: 1, timeZone: getLastTimeZone()
         };
         const data = await jsonLoader('save_source', content);
-        updateTable(obj.sourceRemoveTable, obj.sourceSelectorRemove, nameProject);
-        alert(data.message);
+        const src = await updateTable(obj.sourceRemoveTable, obj.sourceSelectorRemove, nameProject);
+        signalSender('drawScenario', { sources: src?.points || [] }); alert(data.message);
     });
     // Save meteo data to project
     obj.meteoSaveBtn.addEventListener('click', async () => {
@@ -528,7 +529,12 @@ async function loadScenario(scenarioName){
     obj.initSalinity.value = data.content.initSalinity;
     obj.initTemperature.value = data.content.initTemperature;
     // Get source data if exist
-    updateTable(obj.sourceRemoveTable, obj.sourceSelectorRemove, scenarioName);
+    const src = await updateTable(obj.sourceRemoveTable, obj.sourceSelectorRemove, scenarioName);
+    // Vẽ các đối tượng của kịch bản lên bản đồ (cùng icon/kiểu như khi tạo mới)
+    signalSender('drawScenario', {
+        obs: data.content.obsPointTable || [], crossSection: data.content.crossSectionTable || [],
+        boundary: data.content.boundaryTable || [], sources: src?.points || [], fit: true
+    });
     if (data.content.meteoPath.length > 0) { 
         obj.meteoUploadText.value = data.content.meteoName;
         const meteoPath = data.content.meteoPath;

@@ -6,16 +6,16 @@ làm nội dung chính (đọc qua dashboard_results.ProjectResults).
 
 Gồm:
 - Ngưỡng cảnh báo (backend/src/dashboard_thresholds.json), phân loại high/medium/low
-- Kiểm kê dự án (pipeline: dữ liệu → lưới → HYD → WAQ → flow)
+- Kiểm kê dự án (pipeline: dữ liệu → lưới → HYD → WAQ → calibration)
 - summarize(): KPI, gauges, trạng thái chất lượng nước, nguồn/xả, checks, phân bố rủi ro
 - Lớp bản đồ ngữ cảnh (ranh giới hồ, lưu vực, sông, độ sâu mẫu, lớp GIS của dự án)
 - Cảnh báo từ checks
 
-Các phần của mô hình Flow / tải dữ liệu / hiệu chỉnh KHÔNG nằm ở đây – chúng hiển thị trong
+Các phần của mô hình Flow / tải dữ liệu / hiệu chỉnh KHÔNG nằm ở đây - chúng hiển thị trong
 công cụ tương ứng (Workspace) và có thể thêm thành module dashboard riêng sau này.
 """
 from __future__ import annotations
-import glob, json, math, os, traceback
+import glob, json, math, os, traceback, shutil
 from datetime import datetime
 from pyproj import Transformer
 from functools import lru_cache
@@ -67,6 +67,47 @@ def reload_thresholds() -> dict:
     load_thresholds.cache_clear()
     return load_thresholds()
 
+def validate_thresholds(data: dict) -> tuple[dict, list[str]]:
+    """Kiểm tra & chuẩn hoá {'substances': {...}, 'physics': {...}} trước khi ghi file."""
+    clean, errors = {"substances": {}, "physics": {}}, []
+    if not isinstance(data, dict): return clean, ["Invalid data"]
+    required_physics = set(load_thresholds()["physics"])          # khoá physics do code dùng
+    for group in ("substances", "physics"):
+        rows = data.get(group) or {}
+        if not isinstance(rows, dict): errors.append(f"'{group}' must be an object"); continue
+        for key, r in rows.items():
+            key = str(key).strip().replace("mesh2d_2d_", "").replace("mesh2d_", "")
+            if not key or not isinstance(r, dict): errors.append(f"{group}: empty key or invalid row"); continue
+            try: medium, high = float(r.get("medium")), float(r.get("high"))
+            except (TypeError, ValueError): errors.append(f"{key}: medium/high must be numbers"); continue
+            if not (math.isfinite(medium) and math.isfinite(high)): errors.append(f"{key}: medium/high must be finite"); continue
+            direction = "below" if r.get("direction") == "below" else "above"
+            if direction == "above" and medium > high: errors.append(f"{key}: 'above' needs medium ≤ high"); continue
+            if direction == "below" and medium < high: errors.append(f"{key}: 'below' needs medium ≥ high"); continue
+            row = {k: str(r.get(k) or "").strip() for k in constants.THRESHOLD_TEXT}
+            row["label"] = row["label"] or key
+            row.update({"direction": direction, "medium": medium, "high": high})
+            clean[group][key] = row
+    missing = required_physics - set(clean["physics"])
+    if missing: errors.append(f"physics: missing {', '.join(sorted(missing))}")
+    return clean, errors
+
+def save_thresholds(data: dict) -> dict:
+    """Ghi đè dashboard_thresholds.json (giữ '_comment', bản sao lưu .bak) rồi nạp lại. ValueError nếu dữ liệu sai."""
+    clean, errors = validate_thresholds(data)
+    if errors: raise ValueError("; ".join(errors))
+    comment = None
+    if os.path.exists(THRESHOLD_PATH):
+        try:
+            with open(THRESHOLD_PATH, "r", encoding="utf-8") as f: comment = json.load(f).get("_comment")
+        except Exception: pass
+        shutil.copy2(THRESHOLD_PATH, THRESHOLD_PATH + ".bak")
+    out = ({"_comment": comment} if comment else {}) | clean
+    tmp = THRESHOLD_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(out, f, ensure_ascii=False, indent=4)
+    os.replace(tmp, THRESHOLD_PATH)     # ghi nguyên tử: không để file dở dang
+    return reload_thresholds()
+
 def classify(value, rule: dict) -> str:
     if value is None or rule is None: return "info"
     if rule.get("direction", "above") == "below":
@@ -116,7 +157,7 @@ def list_projects(user_dir_name: str) -> list[str]:
 def project_inventory(project_name: str) -> dict:
     """Quickly summarise from the project (don't open big files)."""
     pdir = project_dir(project_name)
-    out = os.path.join(pdir, "output")
+    out, input_dir = os.path.join(pdir, "output"), os.path.join(pdir, "input")
     hyd_dir, waq_dir = os.path.join(out, "HYD"), os.path.join(out, "WAQ")
     scen_dir, gis_dir = os.path.join(out, "scenarios"), os.path.join(pdir, "GIS")
     def _ls(folder, suffix):
@@ -128,18 +169,25 @@ def project_inventory(project_name: str) -> dict:
     gis_layers = [f[:-8] for f in _ls(gis_dir, ".geojson")]
     flows_dir = os.path.join(pdir, "flows")
     flows = sorted(p.name for p in os.scandir(flows_dir) if p.is_dir()) if os.path.isdir(flows_dir) else []
-    input_dir = os.path.join(pdir, "input")
     n_inputs = sum(len(fs) for _, _, fs in os.walk(input_dir)) if os.path.isdir(input_dir) else 0
     grid_files = glob.glob(os.path.join(pdir, "**", "*_net.nc"), recursive=True)
     stamps = [t for t in (_mtime(os.path.join(hyd_dir, f)) for f in hyd_his + hyd_map) if t]
     stamps += [t for t in (_mtime(os.path.join(waq_dir, f)) for f in waq_his) if t]
-    calibration_checked = os.path.isdir(os.path.join(out, "calibration"))
+    # Calibration checker
+    calibration_checked = False
+    calibration_path = os.path.join(input_dir, 'calibration.json')
+    if os.path.exists(calibration_path):
+        try:
+            with open(calibration_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                calibration_checked = data.get('calibration', False)
+        except (json.JSONDecodeError, OSError): calibration_checked = False
     pipeline = [
         {"key": "data", "label": "Input data", "done": n_inputs > 0, "tool": "preparation-hyd"},
         {"key": "grid", "label": "Grid", "done": len(grid_files) > 0 or len(hyd_map) > 0, "tool": "grid-generation"},
         {"key": "hyd", "label": "HYD run", "done": len(hyd_his) > 0, "tool": "run-hyd"},
-        {"key": "waq", "label": "WAQ run", "done": len(waq_his) > 0, "tool": "run-waq"},
         {"key": "calibration", "label": "Calibration", "done": calibration_checked, "tool": "calibration"},
+        {"key": "waq", "label": "WAQ run", "done": len(waq_his) > 0, "tool": "run-waq"},
     ]
     return {
         "exists": os.path.isdir(pdir),
@@ -260,7 +308,7 @@ def waq_checks(pr: ProjectResults, start, end) -> list[dict]:
             "source": "waq", "key": var_name, "label": rule["label"], "unit": rule["unit"],
             "category": rule.get("category", "Water quality"), "value": worst,
             "current": last_worst, "location": location, "time": _iso(tt[ti]), 
-            "severity": classify(worst, rule), "weight": rule.get("weight", 10), "exceed_pct": pct,
+            "severity": classify(worst, rule), "exceed_pct": pct,
             "ratio": limit_ratio(worst, rule), "scenario": pr.waq_name,
             "threshold": {"medium": rule["medium"], "high": rule["high"], "direction": rule.get("direction", "above")},
             "detail": f"Exceeds medium limit {_round(100 * np.nanmean(np.any(exceed, axis=1)), 1)}% of the time",
@@ -275,33 +323,48 @@ def physics_checks(stats: dict) -> list[dict]:
         out.append({"source": "hyd", "key": "surface_temperature", "label": rule["label"], "unit": rule["unit"],
             "category": rule["category"], "value": t, "current": stats.get("surface_temperature"),
             "location": "Lake surface", "time": stats.get("temperature_time"),
-            "severity": classify(t, rule), "weight": rule.get("weight", 10),
-            "ratio": limit_ratio(t, rule), "threshold": {"medium": rule["medium"], "high": rule["high"], "direction": "above"}}
+            "severity": classify(t, rule), "ratio": limit_ratio(t, rule), 
+            "threshold": {"medium": rule["medium"], "high": rule["high"], "direction": "above"}}
         )
     v = stats.get("max_velocity")
     if v is not None and "current_speed" in phys:
         rule = phys["current_speed"]
         out.append({"source": "hyd", "key": "current_speed", "label": rule["label"], "unit": rule["unit"],
             "category": rule["category"], "value": v, "location": stats.get("max_velocity_station", "Lake"),
-            "time": stats.get("temperature_time"), "severity": classify(v, rule), "weight": rule.get("weight", 5),
-            "ratio": limit_ratio(v, rule), "threshold": {"medium": rule["medium"], "high": rule["high"], "direction": "above"}}
+            "time": stats.get("temperature_time"), "severity": classify(v, rule), "ratio": limit_ratio(v, rule), 
+            "threshold": {"medium": rule["medium"], "high": rule["high"], "direction": "above"}}
         )
     return out
 
-def water_quality_index(checks: list[dict]) -> dict:
-    """Simple WQI index 0–100: substract by weight * penalty."""
-    factor = {"high": 1.0, "medium": 0.45, "low": 0.0, "info": 0.0}
+def quality_status(checks: list[dict]) -> dict:
+    """Chất lượng nước = số chỉ tiêu WAQ nằm trong ngưỡng (mức tệ nhất của mỗi chất trong cửa sổ thời gian).
+    Không dùng trọng số; ngưỡng vật lý (nhiệt độ, dòng chảy) KHÔNG tính ở đây."""
     worst: dict[str, dict] = {}
     for c in checks:
-        if c["severity"] not in factor or not c.get("weight"): continue
+        if c["source"] != "waq" or c["severity"] not in ("high", "medium", "low"): continue
         if c["key"] not in worst or constants.SEVERITY_ORDER[c["severity"]] < constants.SEVERITY_ORDER[worst[c["key"]]["severity"]]:
             worst[c["key"]] = c
-    if not worst: return {"score": None, "label": "No WAQ data"}
-    total_w = sum(c["weight"] for c in worst.values()) or 1
-    penalty = sum(c["weight"] * factor[c["severity"]] for c in worst.values())
-    score = max(0.0, 100.0 - 100.0 * penalty / total_w)
-    label = "Excellent" if score >= 85 else "Good" if score >= 65 else "Fair" if score >= 45 else "Poor"
-    return {"score": round(score), "label": label}
+    if not worst:
+        return {"total": 0, "ok": 0, "pct": None, "high": [], "medium": [], "label": "No WAQ data",
+                "severity": "info", "summary": "No WAQ thresholds evaluated"}
+    high = sorted(c["label"] for c in worst.values() if c["severity"] == "high")
+    medium = sorted(c["label"] for c in worst.values() if c["severity"] == "medium")
+    total = len(worst); ok = total - len(high) - len(medium)
+    parts = ([f"{len(high)} high"] if high else []) + ([f"{len(medium)} medium"] if medium else [])
+    return {"total": total, "ok": ok, "pct": round(100 * ok / total), "high": high, "medium": medium,
+        "label": "Poor" if high else "Fair" if medium else "Good",
+        "severity": "high" if high else "medium" if medium else "low",
+        "summary": " · ".join(parts) if parts else "All within limits"
+    }
+
+def _limit_flag(checks: list[dict], key: str) -> dict | None:
+    """Ngưỡng vật lý gắn vào KPI tương ứng (Surface Temperature / Max Current Speed)."""
+    c = next((x for x in checks if x["source"] == "hyd" and x["key"] == key), None)
+    if c is None: return None
+    th = c["threshold"]
+    return {"severity": c["severity"], "text": f"{c['label']}: {c['value']} {c['unit']} "
+        f"(medium ≥ {th['medium']}, high ≥ {th['high']} {c['unit']})"
+    }
 
 def risk_level(checks: list[dict]) -> dict:
     n_high = sum(c["severity"] == "high" for c in checks)
@@ -314,14 +377,14 @@ def risk_level(checks: list[dict]) -> dict:
 
 def _strat_hint(stats: dict) -> str:
     """Tooltip: lớp nào được so sánh (z-layers: lớp có giá trị trên cùng / dưới cùng tại từng trạm)."""
-    f = lambda k: "—" if stats.get(k) is None else stats.get(k)
+    f = lambda k: "-" if stats.get(k) is None else stats.get(k)
     depth = ""
     if stats.get("surface_depth") is not None and stats.get("bottom_depth") is not None:
         depth = f" (≈ {stats['surface_depth']} m vs ≈ {stats['bottom_depth']} m below the surface, station mean)"
-    return (f"Surface {f('surface_temperature')} °C - bottom {f('bottom_temperature')} °C{depth}. "
+    return (f"Surface: {f('surface_temperature')}°C - Bottom: {f('bottom_temperature')}°C{depth}. "
         f"Surface = uppermost wet layer, bottom = deepest wet layer at each HYD station "
-        f"({stats.get('n_layers', '—')} model layers); mean over stations at the end of the period. "
-        "≥ 3 °C stratified · 1 - 3 °C weak layering · < 1 °C well mixed."
+        f"({stats.get('n_layers', '-')} model layers); mean over stations at the end of the period. "
+        "≥ 3°C stratified · 1 - 3°C weak layering · < 1°C well mixed."
     )
 
 def _strat_label(dt):
@@ -344,47 +407,50 @@ def summarize(project_name: str, end: str | None, period: str | None) -> dict:
     stats = hyd_stats(pr, start, end_ts) if pr.has_hyd else {}
     checks = waq_checks(pr, start, end_ts) + physics_checks(stats)
     if not pr.has_waq:
-        checks.append({"source": "model", "key": "no_waq", "label": "No WAQ results", "unit": "", "category": "Model",
-            "value": None, "location": "Project", "time": None, "severity": "info", "weight": 0,
+        checks.append({"source": "model", "key": "no_waq", "label": "No WAQ results", "unit": "", 
+            "category": "Model", "value": None, "location": "Project", "time": None, "severity": "info",
             "detail": "Create and run a WAQ scenario to evaluate water-quality thresholds."
         })
     if info["waq"].get("synthetic"):
         checks.append({"source": "model", "key": "synthetic", "label": "Synthetic demo results", "unit": "",
             "category": "Model", "value": None, "location": "Project", "time": None, "severity": "info",
-            "weight": 0, "detail": "Generated by backend/tools/make_demo_results.py - not a real simulation."
+            "detail": "Generated by backend/tools/make_demo_results.py - not a real simulation."
         })
-    wqi, risk = water_quality_index(checks), risk_level(checks)
+    wq, risk = quality_status(checks), risk_level(checks)
     span = f"{days:g} d"
     def delta(a, b): return _round(a - b, 2) if (a is not None and b is not None) else None
     kpis = [
         {"key": "surface_temperature", "label": "Surface Temperature", "value": stats.get("surface_temperature"),
          "unit": "°C", "decimals": 1, "icon": "temperature", "delta": delta(stats.get("surface_temperature"), stats.get("surface_temperature_start")),
-         "delta_unit": "°C", "delta_label": f"over {span}", "hint": "Mean of HYD stations, uppermost wet layer"},
+         "delta_unit": "°C", "delta_label": f"over {span}", "hint": "Mean of HYD stations, uppermost wet layer",
+         "limit": _limit_flag(checks, "surface_temperature")},
         {"key": "stratification", "label": "Stratification ΔT", "value": stats.get("stratification"), "unit": "°C",
          "decimals": 1, "icon": "thermo", "status": _strat_label(stats.get("stratification")), "hint": _strat_hint(stats)},
         {"key": "water_level", "label": "Water Level", "value": stats.get("water_level"), "unit": "m", "decimals": 2,
          "icon": "level", "status": f"Range {stats.get('water_level_range', '—')} m", "hint": "Mean of HYD stations"},
         {"key": "max_velocity", "label": "Max Current Speed", "value": stats.get("max_velocity"), "unit": "m/s",
          "decimals": 3, "icon": "waves", "status": stats.get("max_velocity_station") or f"over {span}",
-         "hint": f"Maximum over stations and layers, {span}"},
-        {"key": "wqi", "label": "Water Quality Index", "value": wqi["score"], "unit": "", "decimals": 0,
-         "status": wqi["label"], "icon": "quality", "hint": f"{sum(1 for c in checks if c['source'] == 'waq')} substances"},
+         "hint": f"Maximum over stations and layers, {span}", "limit": _limit_flag(checks, "current_speed")},
+        {"key": "quality", "label": "Water Quality", "value": f"{wq['ok']}/{wq['total']}" if wq["total"] else None,
+         "unit": "", "icon": "quality", "status": wq["summary"], "severity": wq["severity"],
+         "hint": (f"{wq['ok']} of {wq['total']} WAQ substances within limits"
+            + (f" · high: {', '.join(wq['high'])}" if wq["high"] else "")
+            + (f" · medium: {', '.join(wq['medium'])}" if wq["medium"] else "")) if wq["total"] else wq["summary"]},
         {"key": "risk", "label": "Risk Level (Overall)", "value": risk["level"], "unit": "",
          "status": f"{risk['high']} high · {risk['medium']} medium", "icon": "risk",
          "severity": "high" if risk["level"] == "High" else "medium" if "Moderate" in risk["level"] else "low"},
     ]
-    quality = sorted([c for c in checks if c.get("ratio") is not None],
+    quality = sorted([c for c in checks if c["source"] == "waq" and c.get("ratio") is not None],
         key=lambda c: (constants.SEVERITY_ORDER[c["severity"]], -(c["ratio"] or 0))
     )
     critical = [c for c in quality if c["source"] == "waq"][:2]
-    gauges = {
-        "wqi": {"value": wqi["score"], "label": wqi["label"]},
+    gauges = {"quality": wq,
         "stratification": {"value": stats.get("stratification"), "surface": stats.get("surface_temperature"),
             "bottom": stats.get("bottom_temperature"), "label": _strat_label(stats.get("stratification")), "hint": _strat_hint(stats)},
         "critical": [{"label": c["label"], "value": c["value"], "unit": c["unit"], "severity": c["severity"],
             "location": c["location"], "key": c["key"]} for c in critical],
     }
-    hyd_label = info["hyd"]["scenario"] or "—"
+    hyd_label = info["hyd"]["scenario"] or "-"
     waq_label = info["waq"]["scenario"] or "no WAQ"
     return {
         **base, "mode": "simulation",
@@ -449,47 +515,58 @@ def _file_mtime(path: str) -> float | None:
     try: return os.path.getmtime(path) if os.path.isfile(path) else None
     except OSError: return None
 
-def context_signature() -> str:
-    """Thay đổi khi một file lớp nền được thêm / sửa / xoá (dùng trong khoá cache /dashboard/layers)."""
-    return ",".join(f"{k}:{_file_mtime(p) or 0}" for k, p in constants.CONTEXT_FILES.items())
+def context_signature(project_name: str) -> str:
+    """Thay đổi khi một file lớp nền CỦA DỰ ÁN được thêm / sửa / xoá (khoá cache /dashboard/layers)."""
+    out_dir = os.path.join(project_dir(project_name), "others")
+    return ",".join(f"{k}:{_file_mtime(os.path.join(out_dir, f)) or 0}" for k, f in constants.CONTEXT_LAYERS.items())
 
-@lru_cache(maxsize=8)
-def _sample_geojson_cached(path: str, step: int) -> dict | None:
+@lru_cache(maxsize=16)
+def _sample_geojson_cached(path: str, step: int, mtime: float) -> dict | None:   # mtime: file sửa -> đọc lại
     gj = read_geojson(path, step)
-    return gj if gj and gj.get("features") else None          # file rỗng / hỏng = không có lớp
+    return gj if gj and gj.get("features") else None
 
-def sample_geojson(directory:str, name: str) -> dict | None:
-    steps = {"catchment": 3, "river": 2, "BrusdalLake": 1}
-    path = os.path.join(directory, f"{name}.geojson"); mtime = _file_mtime(path)
-    return _sample_geojson_cached(path, mtime, steps.get(name, 1)) if mtime is not None else None
+def sample_geojson(directory: str, name: str) -> dict | None:
+    steps = {"catchment": 3, "river": 2, "lake": 1}
+    path = os.path.join(directory, f"{name}.geojson")
+    mtime = _file_mtime(path)
+    if mtime is None: return None
+    return _sample_geojson_cached(path, steps.get(name, 1), mtime)
 
-@lru_cache(maxsize=2)
-def _depth_points_cached(path: str, max_points: int) -> list[list[float]]:
+@lru_cache(maxsize=4)
+def _depth_points_cached(path: str, max_points: int, mtime: float) -> list[list[float]]:
     try:
-        df = pd.read_csv(path, encoding="utf-8-sig").dropna()
-        if len(df) > max_points:
-            df = df.sample(max_points, random_state=7)
+        df = pd.read_csv(path, encoding="utf-8-sig")
+        cols = {str(c).strip().lower(): c for c in df.columns}            # không phân biệt hoa/thường, khoảng trắng
+        need = [cols.get(k) for k in ("lat", "lon", "depth")]
+        if None in need:
+            print(f"[dashboard] {path}: needs columns Lat, Lon, Depth (found {list(df.columns)})", flush=True)
+            return []
+        df = df[need].apply(pd.to_numeric, errors="coerce").dropna()       # chỉ bỏ dòng thiếu 3 cột này
+        df.columns = ["Lat", "Lon", "Depth"]
+        if len(df) > max_points: df = df.sample(max_points, random_state=7)
         df["Depth"] = df["Depth"].abs()
-        return df[["Lat", "Lon", "Depth"]].round(5).values.tolist()
+        return df.round(5).values.tolist()
     except Exception:
         traceback.print_exc()
         return []
 
-def load_depth_points(directory:str, name: str = "depth.csv", max_points: int = 4000) -> list[list[float]]:
+def load_depth_points(directory: str, name: str = "depth.csv", max_points: int = 4000) -> list[list[float]]:
     path = os.path.join(directory, name); mtime = _file_mtime(path)
-    return _depth_points_cached(path, max_points) if mtime is not None else []
+    return _depth_points_cached(path, max_points, mtime) if mtime is not None else []
 
 def build_layers(project_name: str, inventory: dict) -> dict:
     directory = project_dir(project_name)
     out_dir = os.path.join(directory, 'others')
     layers = {
-        "lake": sample_geojson(out_dir, "BrusdalLake"), 
+        "lake": sample_geojson(out_dir, "lake"), 
         "catchment": sample_geojson(out_dir, "catchment"),
         "rivers": sample_geojson(out_dir, "river"),
         "bathymetry": load_depth_points(out_dir, "depth.csv"), "gis": {},
     }
     gis_dir = os.path.join(directory, "GIS")
     for name in inventory.get("gis_layers", []):
-        gj = read_geojson(os.path.join(gis_dir, f"{name}.geojson"))
+        path = os.path.join(gis_dir, f"{name}.geojson")
+        if _file_mtime(path) is None: continue
+        gj = read_geojson(path)
         if gj: layers["gis"][name] = gj
     return layers

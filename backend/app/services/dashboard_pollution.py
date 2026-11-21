@@ -11,22 +11,25 @@ và HƯỚNG / TỐC ĐỘ lan truyền (hạt trôi theo vận tốc HYD, chỉ
 Quy ước
 - Giá trị theo THỨ TỰ Ô CỦA LƯỚI HIỂN THỊ (mesh của /dashboard/mesh, dựng từ HYD map): nồng độ WAQ được
   sắp xếp lại bằng ProjectResults.waq_face_order() vì file map DELWAQ có thể dùng thứ tự ô khác.
-- layer: "average" (trung bình theo độ sâu) hoặc chỉ số lớp WAQ "0".."n-1" (0 = lớp mặt, như DELWAQ).
-  Vận tốc lấy ở lớp HYD tương ứng (HYD đánh số đáy -> mặt), cùng độ sâu tương đối nếu số lớp khác nhau.
+- layer: "max" (lớn nhất theo độ sâu – mặc định, thấy đường lan ở MỌI độ sâu), "average" (trung bình theo THỂ
+  TÍCH ô nếu file WAQ có 'volume', nếu không thì trung bình các lớp có nước) hoặc chỉ số lớp WAQ "0".."n-1"
+  (0 = lớp mặt, như DELWAQ). Ô không hoạt động (z-layers: lớp dưới đáy, giá trị điền -999) bị loại.
+  Lưu ý: trung bình độ sâu làm loãng vệt ô nhiễm lớp mặt ở vùng SÂU (giữa hồ) nhưng không ở vùng NÔNG (ven bờ)
+  -> vệt có thể "biến mất" giữa hồ rồi "xuất hiện" ở bờ bên kia. Dùng "max" hoặc lớp mặt để theo dõi đường lan.
 - Thời gian: bước WAQ gần nhất (<=) thời điểm được hỏi; vận tốc ở bước HYD gần nhất với bước WAQ đó.
 - Thang màu và tốc độ hạt CỐ ĐỊNH theo toàn bộ thời gian (cmax = P99.5 các giá trị dương,
   speed_max = P99.5 tốc độ), không cho người dùng chỉnh mật độ/tốc độ hạt để tránh hiểu nhầm.
 """
 from __future__ import annotations
 import base64, threading
-import numpy as np, pandas as pd
+import numpy as np
+from services import constants
 from services.dashboard_results import (ProjectResults, time_dim, face_dim, layer_dim, var_meta, _iso, _mtime)
 
 _GUARD = threading.Lock()
 _GRID_CACHE: dict[str, dict] = {}
 _RANGE_CACHE: dict[str, float] = {}
-GRID_CELLS = 320          # số ô lưới hạt theo cạnh dài của miền
-SAMPLE_STEPS = 24         # số bước thời gian lấy mẫu để tính thang cố định
+
 
 def _b64(a) -> str:
     return base64.b64encode(np.ascontiguousarray(a, dtype="<f4").tobytes()).decode()
@@ -55,13 +58,37 @@ def _pick_layer(da, source: str, layer: str, n_waq: int):
     frac = (k + 0.5) / max(n_waq, 1)                                         # độ sâu tương đối từ mặt
     return da.isel({ld: n - 1 - min(n - 1, int(frac * n))})               # HYD: 0 = đáy
 
+def _valid(da):
+    """Loại giá trị điền (-999…) / NaN của ô không hoạt động."""
+    return da.where(np.isfinite(da) & (da > constants.FILL_LIMIT))
+
+def _volume_like(ds, da, tidx):
+    """Thể tích ô WAQ cùng thời điểm & lớp (biến 'volume' / 'mesh2d_volume' nếu file có), hoặc None."""
+    for vn in ("mesh2d_volume", "volume", "mesh2d_Volume"):
+        if vn in ds.data_vars and ds[vn].dims == da.dims:
+            v = ds[vn].isel({time_dim(ds[vn]): tidx})
+            return v.where(np.isfinite(v) & (v > 0))
+    return None
+
 def _waq_conc(pr: ProjectResults, name: str, layer: str, tidx, n_waq: int):
     ds = pr.ds("waq_map")
-    if layer == "average":
-        alt = name.replace("mesh2d_", "mesh2d_2d_", 1)
-        if alt in ds.data_vars: return ds[alt].isel({time_dim(ds[alt]): tidx})
     da = ds[name]
-    return _pick_layer(da.isel({time_dim(da): tidx}), "waq", layer, n_waq)
+    ld = layer_dim(da, exclude=[d for d in (time_dim(da), face_dim(da)) if d])
+    layered = bool(ld) and ld in da.dims
+    if layer == "max":
+        c = _valid(da.isel({time_dim(da): tidx}))
+        return c.max(dim=ld, skipna=True) if layered else c
+    if layer == "average":
+        c = _valid(da.isel({time_dim(da): tidx}))
+        if not layered: return c
+        vol = _volume_like(ds, da, tidx)
+        if vol is not None:                                    # trung bình theo THỂ TÍCH: Σ c·V / Σ V
+            w = vol.where(c.notnull())
+            return (c * w).sum(dim=ld, skipna=True) / w.sum(dim=ld, skipna=True)
+        alt = name.replace("mesh2d_", "mesh2d_2d_", 1)          # trung bình độ sâu do DELWAQ ghi sẵn
+        if alt in ds.data_vars: return _valid(ds[alt].isel({time_dim(ds[alt]): tidx}))
+        return c.mean(dim=ld, skipna=True)                     # chỉ các lớp có nước
+    return _valid(_pick_layer(da.isel({time_dim(da): tidx}), "waq", layer, n_waq))
 
 def _waq_layers(pr: ProjectResults) -> int:
     ds = pr.ds("waq_map")
@@ -95,7 +122,7 @@ def _particle_grid(pr: ProjectResults) -> dict:
     (s, w), (n, e) = mesh["bounds"]
     lat_mid = np.radians((s + n) / 2)
     span = max((e - w) * np.cos(lat_mid), n - s)
-    d = span / GRID_CELLS                                                    # ô ~ vuông theo mét
+    d = span / constants.GRID_CELLS                                                    # ô ~ vuông theo mét
     dlat, dlon = d, d / max(np.cos(lat_mid), 1e-6)
     nx, ny = int(np.ceil((e - w) / dlon)) + 1, int(np.ceil((n - s) / dlat)) + 1
     lon0, lat0 = w + dlon / 2, s + dlat / 2
@@ -122,7 +149,7 @@ def pollution_init(project: str) -> dict:
     pr = ProjectResults(project)
     pr.waq_face_order()                         # báo lỗi sớm nếu lưới WAQ không khớp lưới HYD
     n_waq = _waq_layers(pr)
-    layers = [("average", "Depth average")]
+    layers = [("max", "Max over depth"), ("average", "Depth average")] if n_waq > 1 else [("average", "Depth average")]
     if n_waq > 1:
         layers += [(str(k), f"Layer {k + 1}" + (" (surface)" if k == 0 else " (bottom)" 
             if k == n_waq - 1 else "")) for k in range(n_waq)
@@ -135,7 +162,7 @@ def pollution_init(project: str) -> dict:
 
 # Fixed scales over the whole simulation
 def _steps(n: int) -> np.ndarray:
-    return np.unique(np.linspace(0, n - 1, min(SAMPLE_STEPS, n)).astype(int))
+    return np.unique(np.linspace(0, n - 1, min(constants.SAMPLE_STEPS, n)).astype(int))
 
 def _conc_max(pr: ProjectResults, name: str, layer: str, n_waq: int) -> float:
     key = f"c|{pr.paths['waq_map']}|{_mtime(pr.paths['waq_map'])}|{name}|{layer}"
@@ -148,6 +175,7 @@ def _conc_max(pr: ProjectResults, name: str, layer: str, n_waq: int) -> float:
     return cmax
 
 def _hyd_velocity(pr: ProjectResults, layer: str, tidx, n_waq: int):
+    if layer == "max": layer = "average"                     # 'max theo độ sâu' -> hạt theo dòng trung bình độ sâu
     ds = pr.ds("hyd_map"); pair = _velocity_vars(ds, layer)
     if pair is None: return None, None
     out = []
@@ -172,7 +200,7 @@ def pollution_frame(project: str, name: str, layer: str, when) -> dict:
     pr = ProjectResults(project)
     if pr.ds("waq_map") is None or name not in pr.ds("waq_map").data_vars:
         raise ValueError(f"Substance '{name}' not found in the WAQ map")
-    layer = "average" if layer in (None, "", "average", "-1") else str(int(layer))
+    layer = layer if layer in ("max", "average") else "average" if layer in (None, "", "-1") else str(int(layer))
     n_waq = _waq_layers(pr)
     tw = pr.time_index("waq", when)
     t_waq = pr.times("waq")[tw]
@@ -182,7 +210,8 @@ def pollution_frame(project: str, name: str, layer: str, when) -> dict:
     th = pr.time_index("hyd", t_waq)
     u, v = _hyd_velocity(pr, layer, th, n_waq)
     out = {"name": name, **var_meta("waq", name), "layer": layer, "time": _iso(t_waq), "index": int(tw),
-           "conc": _b64(conc), "cmax": _conc_max(pr, name, layer, n_waq), "n_faces": int(conc.size)}
+        "conc": _b64(conc), "cmax": _conc_max(pr, name, layer, n_waq), "n_faces": int(conc.size)
+    }
     if u is not None:
         out.update({"hyd_time": _iso(pr.times("hyd")[th]), "u": _b64(u.ravel()), 
             "v": _b64(v.ravel()), "speed_max": _speed_max(pr, layer, n_waq)

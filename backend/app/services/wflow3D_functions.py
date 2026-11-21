@@ -15,22 +15,13 @@ Hàm công khai:
     river_series(project, flow, river_id, var=None) -> dict: chuỗi thời gian tại một ô sông
 """
 from __future__ import annotations
-import glob, json, math, os, threading, tomllib
-from typing import Any, Optional
+import glob, json, os, threading, tomllib
+from typing import Optional
 import numpy as np, pandas as pd, xarray as xr
 from pyproj import Transformer
 from scipy import ndimage
 from services import constants
 from services import dashboard_extras as dext
-
-ELEV_NAMES = ["land_elevation", "wflow_dem", "elevtn", "dem", "altitude"]
-UPAREA_NAMES = ["upstream_area", "wflow_uparea", "uparea", "river_upstream_area"]
-PRECIP_NAMES = ["precip", "precipitation", "P", "pr", "tp",
-                "atmosphere_water__precipitation_volume_flux"
-]
-TERRAIN_FILE, SCENE_FILE = "w3d_terrain.npy", "w3d_scene.json"
-SCENE_VERSION = 2
-MAX_OUTLETS = 12
 
 _LOCKS: dict[str, threading.Lock] = {}
 
@@ -38,7 +29,7 @@ def _lock(key: str) -> threading.Lock:
     return _LOCKS.setdefault(key, threading.Lock())
 
 
-# ------------------------------------------------------------------ helpers
+# helpers
 def _ctx(project: str, flow: str):
     """(model_dir, meta, fc, paths) – meta là meta.json của cache viewer dashboard."""
     model, meta, fc = dext.wflow_context(project, flow)
@@ -83,12 +74,11 @@ def _sample_static(da: xr.DataArray, xn: str, yn: str, PX: np.ndarray, PY: np.nd
     out = np.where((w > 0.5) & inside, out, np.nan)
     return out.reshape(PX.shape)
 
-
-# ------------------------------------------------------------------ terrain
+# terrain
 def terrain(project: str, flow: str) -> tuple[bytes, dict]:
     model, meta, fc, p = _ctx(project, flow)
     g = meta["grid"]; cache = p["cache"]
-    path, info_path = os.path.join(cache, TERRAIN_FILE), os.path.join(cache, TERRAIN_FILE + ".json")
+    path, info_path = os.path.join(cache, constants.TERRAIN_FILE), os.path.join(cache, constants.TERRAIN_FILE + ".json")
     with _lock(f"terrain:{model}"):
         info = None
         if os.path.exists(path) and os.path.exists(info_path):
@@ -98,9 +88,9 @@ def terrain(project: str, flow: str) -> tuple[bytes, dict]:
             if not os.path.exists(p["static"]):
                 raise FileNotFoundError(f"Static grid not found: {p['static']}")
             with xr.open_dataset(p["static"]) as st:
-                name = _pick(st, ELEV_NAMES)
+                name = _pick(st, constants.ELEV_NAMES)
                 if name is None:
-                    raise ValueError(f"Static grid has no elevation variable ({', '.join(ELEV_NAMES)})")
+                    raise ValueError(f"Static grid has no elevation variable ({', '.join(constants.ELEV_NAMES)})")
                 xn, yn = _xy_names(st)
                 da = st[name].squeeze(drop=True).transpose(yn, xn)
                 LON, LAT = _viewer_lonlat(g)
@@ -117,8 +107,7 @@ def terrain(project: str, flow: str) -> tuple[bytes, dict]:
         z = np.load(path)
     return np.ascontiguousarray(z, dtype="<f4").tobytes(), info
 
-
-# ------------------------------------------------------------------ scene
+#  scene
 def _river_cells(model: str, meta: dict, fc, p: dict):
     """Dựng lại danh sách ô sông ĐÚNG thứ tự như flow_connection.build_cache
     (feature id k trong rivers.geojson = cột k của river_<var>.npy)."""
@@ -135,7 +124,7 @@ def _river_cells(model: str, meta: dict, fc, p: dict):
                 return a[::-1] if flip else a
             basin = static(constants.BASIN_NAMES)
             river = static(constants.RIVER_NAMES)
-            uparea = static(UPAREA_NAMES)
+            uparea = static(constants.UPAREA_NAMES)
     if river is None or basin is None: return None
     domain = np.nan_to_num(basin.astype(float)) > 0
     river = (np.nan_to_num(river.astype(float)) > 0) & domain
@@ -189,7 +178,7 @@ def _precip_series(model: str, meta: dict, p: dict) -> dict:
         except Exception as e:
             print(f"wflow3d precip: cannot open {files[0]}: {e}"); continue
         try:
-            vn = name if name and name in ds else _pick(ds, PRECIP_NAMES)
+            vn = name if name and name in ds else _pick(ds, constants.PRECIP_NAMES)
             if vn is None or "time" not in ds[vn].dims: continue
             s = _basin_mean(ds[vn], ds, p)
             tf = s.index
@@ -210,12 +199,12 @@ def _precip_series(model: str, meta: dict, p: dict) -> dict:
 
 def scene(project: str, flow: str) -> dict:
     model, meta, fc, p = _ctx(project, flow)
-    cache = p["cache"]; path = os.path.join(cache, SCENE_FILE)
+    cache = p["cache"]; path = os.path.join(cache, constants.SCENE_FILE)
     with _lock(f"scene:{model}"):
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f: out = json.load(f)
-            if out.get("version") == meta.get("version") and out.get("format") == SCENE_VERSION: return out
-        out = {"format": SCENE_VERSION, "version": meta.get("version"), "flow": flow,
+            if out.get("version") == meta.get("version") and out.get("format") == constants.SCENE_VERSION: return out
+        out = {"format": constants.SCENE_VERSION, "version": meta.get("version"), "flow": flow,
                "times": meta["times"], "step_hours": meta.get("step_hours"),
                "outlets": [], "discharge_var": None, "precip": None, "area_km2": None, "notes": []}
         g = meta["grid"]
@@ -239,9 +228,9 @@ def scene(project: str, flow: str) -> dict:
             for sid in np.unique(groups):
                 ks = np.flatnonzero(groups == sid)
                 if ks.size: picks.append((int(sid), int(ks[np.argmax(score[ks])]), float(np.max(score[ks]))))
-            picks.sort(key=lambda t: -t[2]); picks = picks[:MAX_OUTLETS]
+            picks.sort(key=lambda t: -t[2]); picks = picks[:constants.MAX_OUTLETS]
             if len(picks) < len(np.unique(groups)):
-                out["notes"].append(f"Only the {MAX_OUTLETS} largest sub-basin outlets are listed.")
+                out["notes"].append(f"Only the {constants.MAX_OUTLETS} largest sub-basin outlets are listed.")
             rows = fc.NpyRows(os.path.join(cache, f"river_{qv}.npy"))
             for n, (sid, k, sc) in enumerate(picks):
                 lon, lat = feats[k]["geometry"]["coordinates"][0]
