@@ -1,5 +1,5 @@
 import os, json, tempfile
-from fastapi import UploadFile, File, APIRouter, Request, Depends, BackgroundTasks
+from fastapi import UploadFile, File, APIRouter, Request, Depends, BackgroundTasks, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 from services import functions, grid_functions
@@ -7,7 +7,7 @@ from config import PROJECT_ROOT
 from shapely.geometry import Point, Polygon
 import numpy as np, geopandas as gpd
 import pandas as pd, xarray as xr, dask.array as da
-from meshkernel import MeshKernel, GeometryList
+from meshkernel import GeometryList
 
 router, processes = APIRouter(), {}
 
@@ -343,8 +343,12 @@ async def grid_checker(request: Request, user=Depends(functions.basic_auth)):
     else: return JSONResponse({'status': 'error'})
 
 @router.post("/grid_interpolation_upload")
-async def grid_interpolation_upload(file: UploadFile = File(...)):
+async def grid_interpolation_upload(projectName: str = Form(...), file: UploadFile = File(...), user=Depends(functions.basic_auth)):
     try:
+        project_name, _ = functions.project_definer(projectName, user)
+        others_dir = os.path.join(PROJECT_ROOT, project_name, "others")
+        os.makedirs(others_dir, exist_ok=True)
+        csv_path = os.path.join(others_dir, 'depth.csv')
         df = pd.read_csv(file.file, low_memory=False)
         required_columns = ['Lat', 'Lon', 'Depth']
         missing_columns = [col for col in required_columns if col not in df.columns]
@@ -352,6 +356,7 @@ async def grid_interpolation_upload(file: UploadFile = File(...)):
             return JSONResponse({'status': 'error',
                 'message': f"Missing required columns: {', '.join(missing_columns)}"}, status_code=400)
         content = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(x=df['Lon'], y=df['Lat']), crs="EPSG:4326")
+        df.to_csv(csv_path, index=False)
         return JSONResponse({'status': 'ok', 'content': json.loads(content.to_json())})
     except Exception as e: functions.error('/grid_interpolation_upload', e)
     finally: await file.close()

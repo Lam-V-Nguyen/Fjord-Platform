@@ -973,15 +973,94 @@ def hyd_his(project_name: str):
     hits = sorted(glob.glob(os.path.join(d, "*_his.zarr"))) + sorted(glob.glob(os.path.join(d, "*_his.nc")))
     return hits[0] if hits else None
 
-def _remove_rolling_outliers(df: pd.DataFrame, column: str, window: int=20, n_std: float=3.0) -> pd.DataFrame:
-    df_clean = df.copy()
-    if df_clean[column].notna().sum() < 5: return df_clean        # too few points to judge outliers
-    rolling_mean = df_clean[column].rolling(window=window, center=True, min_periods=3).mean()
-    rolling_std = df_clean[column].rolling(window=window, center=True, min_periods=3).std()
-    lower = rolling_mean - n_std * rolling_std
-    upper = rolling_mean + n_std * rolling_std
-    mask = ((df_clean[column] >= lower) & (df_clean[column] <= upper)) | df_clean[column].isna() | rolling_std.isna()
-    return df_clean[mask].copy()
+# Outlier
+def observations(obs_data, time_zone: str):
+    """Observations in UTC after the quality control - the same cleaned data for every step."""
+    raw = measured_utc(obs_data or [], time_zone)
+    clean, removed = qc_observations(raw)
+    return clean, removed, qc_message(removed, len(raw))
+
+def _cast_outliers(d: pd.DataFrame, time_col: str, n_sigma: float) -> pd.Series:
+    """Compare every value with the SAME depth in the nearest OTHER casts (never with its own cast, so a whole
+    bad cast or a bad block of depths is found too). A strong deviation is still kept when it can be explained
+    by a vertical displacement of the water column (upwelling, internal waves): the same temperature exists in
+    most reference casts within QC_MAX_DISPLACEMENT metres of that depth."""
+    flag = pd.Series(False, index=d.index)
+    casts = []
+    for _, g in d.groupby(_profile_ids(d, time_col)):
+        prof = g.groupby("depth")["temperature"].median().sort_index()      # depth-sorted, duplicates merged
+        casts.append((g[time_col].median(), prof.index.to_numpy(float), prof.to_numpy(float), g.index))
+    if len(casts) <= constants.QC_MIN_REF_PROFILES: return flag
+    times, max_gap = pd.DatetimeIndex([c[0] for c in casts]), pd.Timedelta(constants.QC_REF_MAX_GAP).total_seconds()
+    D, tol = constants.QC_MAX_DISPLACEMENT, constants.QC_DISPLACEMENT_TOL
+    for k, (t, _, _, idx) in enumerate(casts):
+        dt = np.abs((times - t).total_seconds().to_numpy()); dt[k] = np.inf
+        near = [j for j in np.argsort(dt)[:constants.QC_REF_PROFILES] if dt[j] <= max_gap and len(casts[j][1]) >= 2]
+        if len(near) < constants.QC_MIN_REF_PROFILES: continue
+        z, T = d.loc[idx, "depth"].to_numpy(float), d.loc[idx, "temperature"].to_numpy(float)
+        R = np.array([np.interp(z, casts[j][1], casts[j][2], left=np.nan, right=np.nan) for j in near])
+        n_ref = np.sum(~np.isnan(R), axis=0)
+        with np.errstate(all="ignore"):
+            med = np.nanmedian(R, axis=0)
+            spread = 1.4826 * np.nanmedian(np.abs(R - med), axis=0)        # natural cast-to-cast variability
+        thr = np.maximum(n_sigma * np.nan_to_num(spread), constants.QC_MIN_DELTA)
+        for p in np.where((n_ref >= constants.QC_MIN_REF_PROFILES) & (np.abs(T - med) > thr))[0]:
+            explained = 0
+            for j in near:
+                rz, rT = casts[j][1], casts[j][2]
+                lo_z, hi_z = max(z[p] - D, rz[0]), min(z[p] + D, rz[-1])
+                if lo_z > hi_z: continue
+                seg = np.concatenate([rT[(rz >= lo_z) & (rz <= hi_z)], np.interp([lo_z, hi_z], rz, rT)])
+                explained += seg.min() - tol <= T[p] <= seg.max() + tol
+            if explained * 2 < n_ref[p]: flag.at[idx[p]] = True
+    return flag
+
+def qc_observations(df: pd.DataFrame, time_col: str = "Time", n_sigma: float = constants.QC_N_SIGMA):
+    """
+    Quality control of raw observations (columns Time [UTC], temperature, depth).
+    Returns (clean, removed): clean has the input columns; removed adds 'reason' =
+    'range' (outside physical limits), 'vertical spike' (isolated point in a profile) or
+    'time spike' (isolated jump in the time series of one depth that the neighbouring depths do not show).
+    """
+    d = df[[time_col, "temperature", "depth"]].copy()
+    d["temperature"] = pd.to_numeric(d["temperature"], errors="coerce")
+    d["depth"] = pd.to_numeric(d["depth"], errors="coerce")
+    d[time_col] = pd.to_datetime(d[time_col], utc=True, errors="coerce")
+    d = d.dropna().sort_values(time_col, kind="stable").reset_index(drop=True)
+    reason = pd.Series("", index=d.index, dtype=object)
+    lo, hi = constants.QC_TEMP_RANGE
+    reason[(d["temperature"] < lo) | (d["temperature"] > hi) | (d["depth"] < 0)] = "range"
+    ok = reason == ""
+    reason[ok & _vertical_spikes(d[ok], time_col, n_sigma).reindex(d.index, fill_value=False)] = "vertical spike"
+    ok = reason == ""
+    reason[ok & _cast_outliers(d[ok], time_col, n_sigma).reindex(d.index, fill_value=False)] = "time spike"
+    clean = d[reason == ""][[time_col, "temperature", "depth"]].reset_index(drop=True)
+    removed = d[reason != ""].assign(reason=reason[reason != ""]).reset_index(drop=True)
+    return clean, removed
+
+def _profile_ids(d: pd.DataFrame, time_col: str) -> pd.Series:
+    """Same profile split as split_temp_from_depth: time gap > 1 h or the depth jumps back up."""
+    gap = d[time_col].diff() > pd.Timedelta(hours=1)
+    jump_up = d["depth"].diff() < -3.5
+    return (gap | jump_up).cumsum()
+
+def _vertical_spikes(d: pd.DataFrame, time_col: str, n_sigma: float) -> pd.Series:
+    """Point that differs from the median of its 5 depth-neighbours in the same profile.
+    A running median keeps a sharp (monotonic) thermocline, so only isolated spikes are flagged."""
+    flag = pd.Series(False, index=d.index)
+    for _, g in d.groupby(_profile_ids(d, time_col)):
+        if len(g) < constants.QC_MIN_POINTS: continue
+        g = g.sort_values("depth")
+        med = g["temperature"].rolling(5, center=True, min_periods=5).median()   # full window only: no test at the ends
+        res = g["temperature"] - med
+        s = 1.4826 * np.nanmedian(np.abs(res))
+        flag.loc[g.index] = np.abs(res) > max(n_sigma * s, constants.QC_MIN_DELTA_VERTICAL)
+    return flag
+
+def qc_message(removed: pd.DataFrame, total: int) -> str:
+    if removed is None or removed.empty: return f"Observation QC: no outlier in {total} values."
+    by = ", ".join(f"{n} {r}" for r, n in removed["reason"].value_counts().items())
+    return f"Observation quality control (QC): {len(removed)} of {total} values removed ({by})."
 
 def score_depths(df_sim: pd.DataFrame, obs_df: pd.DataFrame, depths: list, time_col: str = "Time") -> list:
     out, sim = [], df_sim.copy()
@@ -995,7 +1074,7 @@ def score_depths(df_sim: pd.DataFrame, obs_df: pd.DataFrame, depths: list, time_
             obs_series = obs_series.set_index(time_col).sort_index()
             obs_series = obs_series[~obs_series.index.duplicated(keep='first')]
             obs_series[obs_col] = obs_series[obs_col].astype(float)
-            obs_clean = _remove_rolling_outliers(obs_series, obs_col)
+            obs_clean = obs_series
             comb = sim[[sim_col]].reindex(sim.index.union(obs_clean.index)).sort_index()
             comb[sim_col] = comb[sim_col].interpolate(method="time", limit_area="inside")
             aligned = comb.loc[obs_clean.index, [sim_col]].join(obs_clean).dropna()
@@ -1125,7 +1204,7 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
                 cv_rmse, cv_r2 = float(np.sqrt(np.mean((y_cv - y) ** 2))), float(r2_score(y, y_cv))
                 fc(log_path, "="*70)
                 fc(log_path, f"Cross-validation ({type(cv).__name__}): RMSE = {cv_rmse:.4f}, "
-                    f"R² = {cv_r2:.3f} (target range {y.min():.4f} - {y.max():.4f})")
+                    f"R2 = {cv_r2:.3f} (target range {y.min():.4f} - {y.max():.4f})")
                 if cv_r2 < 0.5:
                     fc(log_path, "[WARNING] The surrogate explains < 50% of the variance: the optimum is "
                         "unreliable. Add samples or choose more influential parameters.")

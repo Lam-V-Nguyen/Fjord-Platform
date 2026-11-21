@@ -101,9 +101,15 @@ async def water_upload(projectName: str = Form(...), file: UploadFile = File(...
         with open(water_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         file.file.close()
+        water_gdf = gpd.read_file(water_path)
+        # Write catchment to 'others' directory
+        other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
+        os.makedirs(other_dir, exist_ok=True)
+        path = os.path.join(other_dir, 'lake.geojson')
+        water_gdf.to_file(path, driver='GeoJSON')
         content = {
             'message': 'Water area uploaded successfully.',
-            "water_area": json.loads(gpd.read_file(water_path).to_json())
+            "water_area": json.loads(water_gdf.to_json())
         }
         return JSONResponse({'status': 'ok', 'content': content})
     except Exception as e: functions.error('/water_upload', e)
@@ -183,6 +189,11 @@ async def clip_dem(request: Request, user=Depends(functions.basic_auth)):
             os.makedirs(catch_dir, exist_ok=True)
             catchment_path = os.path.normpath(os.path.join(catch_dir, 'catchment.geojson'))
             catchment_buffer.to_file(catchment_path, driver='GeoJSON')
+            # Write catchment to 'others' directory
+            other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
+            os.makedirs(other_dir, exist_ok=True)
+            catch_path = os.path.join(other_dir, 'catchment.geojson')
+            catchment_buffer.to_file(catch_path, driver='GeoJSON')
             # Write outlet
             point = gpd.GeoDataFrame([{'geometry': Point(lon, lat)}], crs='EPSG:4326')
             point_path = os.path.normpath(os.path.join(catch_dir, 'outlet.geojson'))

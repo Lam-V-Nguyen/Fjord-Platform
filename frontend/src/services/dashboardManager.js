@@ -24,7 +24,7 @@ const FILTER_KEY = 'dash-filters', STATE_KEY = 'dash-state-v2';
 const PERIOD_LABEL = { '1d': '1 day', '7d': '7 days', '30d': '30 days', all: 'whole simulation' };
 const KPI_TONES = { 
     surface_temperature: 'tone-pink', stratification: 'tone-blue', 
-    water_level: 'tone-violet', max_velocity: 'tone-amber', wqi: 'tone-green' 
+    water_level: 'tone-violet', max_velocity: 'tone-amber', quality: 'tone-green'
 };
 const SEV_ICON = { high: 'alert', medium: 'alert', low: 'check', info: 'info' };
 const STEP_ICONS = { data: 'clipboard', grid: 'grid', hyd: 'waves', waq: 'flask', calibration: 'sliders' };
@@ -80,6 +80,32 @@ function debounce(fn, ms) {
     return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
+// Hint tự động cho chữ bị cắt bằng dấu "…" (CSS text-overflow: ellipsis):
+//  - chỉ gắn title khi chữ THỰC SỰ bị cắt; giữ hint sẵn có của khối cha (vd. KPI) ở dòng sau
+//  - <select>: hint = nhãn gốc + mục đang chọn (tên biến dài bị cắt trong ô chọn)
+const HINT_SEL = ['.m-label', '.m-sub', '.m-value', '.panel-title', '.panel-sub', '.kpi-label', '.kpi-name', '.kpi-sub',
+    '.dl-name', '.q-name', '.b-name', '.alert-title', '.alert-meta', '.lf-title', '.lr-name', '.layer-name',
+    '.w-label', '#page-title', '#page-subtitle', '.project-chip .label', 'select'].join(',');
+export function initAutoHints(root = document) {
+    root.addEventListener('mouseover', (e) => {
+        const el = e.target.closest?.(HINT_SEL);
+        if (!el) return;
+        if (el.tagName === 'SELECT') {
+            if (el.dataset.baseTitle === undefined) el.dataset.baseTitle = el.title || '';
+            const cur = el.selectedOptions[0]?.textContent.trim() || '';
+            el.title = [el.dataset.baseTitle, cur].filter(Boolean).join(': ');
+            return;
+        }
+        if (el.title && !el.dataset.autoHint) return;          // phần tử đã có hint riêng
+        const text = el.textContent.replace(/\s+/g, ' ').trim();
+        if (text && el.scrollWidth > el.clientWidth + 1) {
+            const parent = el.parentElement?.closest('[title]:not([data-auto-hint])')?.title || '';
+            el.title = parent && !parent.includes(text) ? `${text}\n${parent}` : (parent || text);
+            el.dataset.autoHint = '1';
+        } else if (el.dataset.autoHint) { el.removeAttribute('title'); delete el.dataset.autoHint; }
+    });
+}
+
 function readJson(key) { 
     try { return JSON.parse(localStorage.getItem(key)) || null; } catch (e) { return null; } 
 }
@@ -125,6 +151,7 @@ export class Dashboard {
         this.map.registerExtra('wflow3d', (on) => this.toggleExtra('wflow3d', on), () => this.openLayerSettings('wflow3d'));
         this.map.registerExtra('pollution', (on) => this.toggleExtra('pollution', on), () => this.openLayerSettings('pollution'));
         this.renderSkeletons(); this.bindToolbar(); this.bindPanels(); this.weather.init();
+        initAutoHints();     // tên bị cắt (…) -> hint hiện đầy đủ khi rê chuột
         window.addEventListener('resize', () => this.resize());
         api('thresholds').then(t => { this.thresholds = t; }).catch(() => {});
         return this.refresh();
@@ -159,6 +186,7 @@ export class Dashboard {
         });
         $('end-date').addEventListener('change', (e) => { this.state.end = e.target.value || null; this.state.tIndex = null; this.refresh(); });
         $('btn-refresh').addEventListener('click', () => this.refresh(true));
+        $('waq-scenario').addEventListener('change', (e) => this.switchWaq(e.target.value));
         $('btn-share').addEventListener('click', () => this.share());
         const pop = $('filters-popover');
         $('btn-filters').addEventListener('click', (e) => {
@@ -225,10 +253,16 @@ export class Dashboard {
         try {
             const catalog = await api('catalog', this.body());
             const changed = force || !this.catalog || catalog.version !== this.catalog.version || catalog.project !== this.catalog.project;
-            this.catalog = catalog;
-            if (force) this.weather.load(true); else this.weather.onProjectChanged();
+            this.catalog = catalog; this.loadWaqScenarios();
+            if (force) {   // Refresh / Reload thresholds / Save: lấy ngưỡng mới cho biểu đồ
+                try { 
+                    this.thresholds = await api('thresholds'); 
+                    this.weather.load(true)
+                } catch (e) { /* giữ bản cũ */ }
+            } else this.weather.onProjectChanged();
             const [summary, alerts] = await Promise.all([api('summary', this.body()), api('alerts', this.body({ limit: 100 }))]);
             this.summary = summary; this.alerts = alerts.alerts || [];
+            if (force) this.contextLoaded = false;       // Refresh -> đọc lại lớp nền (file trong 'others' có thể vừa thêm)
             this.loadContext(); this.updateExtras();
             if (!catalog.has_results || summary.mode === 'empty') { this.renderEmpty(summary); return; }
             $('dash-overview').classList.remove('is-empty');
@@ -244,8 +278,52 @@ export class Dashboard {
             await Promise.all([this.loadField(), this.loadSeries(), this.loadProfile()]);
             this.updateUrl();
             if (force) toast('Dashboard refreshed');
-        } catch (err) { console.error(err); this.renderError(err);
+        } catch (err) {
+            console.error(err); this.renderError(err);
+            // Dự án không tồn tại / không đọc được: xoá bản đồ, mọi lớp mờ
+            this.catalog = null; this.meshVersion = null; this.contextLoaded = false;
+            this.map.setMesh(null); this.map.setStations([]); this.map.setAlerts([]); this.map.setContext(null);
+            this.updateExtras();
         } finally { this.loading = false; btn.classList.remove('spinning'); }
+    }
+
+    // Bộ chọn nhanh kịch bản WAQ (cách 2, song song với Visualization): danh sách từ /dashboard/waq_scenarios
+    async loadWaqScenarios() {
+        const field = $('waq-field'), sel = $('waq-scenario');
+        try {
+            const res = await api('waq_scenarios', this.body());
+            this.waqInfo = res;
+            const list = res.scenarios || [];
+            field.hidden = list.length === 0;
+            sel.innerHTML = list.map(s => `<option value="${esc(s.name)}" ${!s.his && !s.map ? 'disabled' : ''}>${esc(s.name)}</option>`).join('');
+            sel.value = list.some(s => s.name === res.current) ? res.current : '';
+            if (!sel.value && list.length) sel.insertAdjacentHTML('afterbegin', '<option value="" selected disabled>Select WAQ scenario</option>');
+        } catch (err) { console.warn('waq scenarios', err); field.hidden = true; }
+    }
+    // Đổi kịch bản WAQ: dùng đúng endpoint /setup_database như Visualization -> config.json, cache dự án,
+    // lớp WAQ… cập nhật giống hệt; sau đó dashboard tải lại toàn bộ.
+    async switchWaq(name) {
+        const sel = $('waq-scenario'), info = this.waqInfo || {};
+        const sc = (info.scenarios || []).find(s => s.name === name);
+        if (!sc || name === info.current) return;
+        sel.disabled = true; toast(`Opening WAQ scenario '${name}'…`);
+        try {
+            const res = await fetch('/setup_database', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ projectName: this.getProject(), params: [...info.hyd_params, sc.his, sc.map],
+                    waqName: name, waqModel: sc.model_type, gisChanged: false }),
+            }).then(r => r.json());
+            if (!res || res.status === 'error') throw new Error(res?.message || res?.detail || 'Cannot open the WAQ scenario');
+            // Lớp ô nhiễm giữ danh sách chất của kịch bản cũ -> dựng lại (tự bật lại nếu đang tick)
+            this.extraLayers.pollution?.destroy(); delete this.extraLayers.pollution;
+            this.closeLayerSettings('pollution'); this.map.setExtraLegend('pollution', null);
+            this.state.tIndex = null;
+            await this.refresh(true);
+            toast(`WAQ scenario: ${name}`);
+        } catch (err) {
+            console.warn(err); toast(`WAQ: ${err.message}`);
+            sel.value = info.current || '';
+        } finally { sel.disabled = false; }
     }
 
     async loadContext() {
@@ -254,7 +332,7 @@ export class Dashboard {
             const res = await api('layers', this.body());
             this.map.setContext(res.layers); this.contextLoaded = this.getProject();
             if (!this.catalog?.has_results) this.map.fit();
-        } catch (err) { console.warn('context layers', err); }
+        } catch (err) { console.warn('context layers', err); this.map.setContext(null); }   // lớp nền: mờ
     }
 
     async setupSimulation() {
@@ -684,13 +762,17 @@ export class Dashboard {
                 const arrow = k.delta > 0 ? '▲' : k.delta < 0 ? '▼' : '■';
                 sub = `<span class="${cls}">${arrow} ${Math.abs(k.delta).toFixed(1)} ${esc(k.delta_unit || '')}</span><span>${esc(k.delta_label || '')}</span>`;
             } else if (k.status) {
-                const sevCls = k.key === 'wqi' ? wqiSev(k.value) : k.key === 'risk' ? '' : '';
-                sub = `<span class="kpi-status ${sevCls}">${esc(k.status)}</span>${k.key === 'wqi' ? `<span>· ${esc(k.hint || '')}</span>` : ''}`;
+                const sevCls = k.key === 'quality' ? `sev-${k.severity || 'info'}` : '';
+                sub = `<span class="kpi-status ${sevCls}">${esc(k.status)}</span>`;
             } else sub = `<span>${esc(k.hint || '')}</span>`;
-            return `<div class="kpi-card ${tone}" title="${esc(k.hint || k.label)}">
+            // Ngưỡng vật lý (nhiệt độ, dòng chảy): nhãn nhỏ cạnh tên KPI khi vượt mức medium/high
+            const lim = k.limit, flagged = lim && (lim.severity === 'high' || lim.severity === 'medium');
+            const flag = flagged ? `<span class="kpi-flag sev-${lim.severity}">${lim.severity === 'high' ? 'High' : 'Medium'}</span>` : '';
+            const tip = [k.hint || k.label, lim?.text].filter(Boolean).join('\n');
+            return `<div class="kpi-card ${tone}" title="${esc(tip)}">
                 <div class="kpi-icon">${icon(k.icon, 20)}</div>
                 <div class="kpi-body">
-                    <div class="kpi-label">${esc(k.label)}</div>
+                    <div class="kpi-label"><span class="kpi-name">${esc(k.label)}</span>${flag}</div>
                     <div class="kpi-value ${k.key === 'risk' ? 'kpi-status' : ''} ${isText && String(k.value).length > 8 ? 'long' : ''}" ${k.key === 'risk' ? 'style="color:var(--tone)"' : ''}>${value}${k.unit && !isText && k.value !== null ? `<span class="unit">${esc(k.unit)}</span>` : ''}</div>
                     <div class="kpi-sub">${sub}</div>
                 </div></div>`;
@@ -701,11 +783,14 @@ export class Dashboard {
         const g = summary.gauges || {};
         const strat = g.stratification || {};
         const sevColor = (s) => ({ high: 'var(--sev-high)', medium: 'var(--sev-medium)', low: 'var(--sev-low)' }[s] || 'var(--text-2)');
+        const q = g.quality || {};
+        const qTip = q.total ? `${q.ok} of ${q.total} WAQ substances within limits`
+            + (q.high?.length ? ` · high: ${q.high.join(', ')}` : '') + (q.medium?.length ? ` · medium: ${q.medium.join(', ')}` : '') : (q.summary || '');
         const cells = [`
-            <div class="monitor-cell">
-                <span class="m-label">Water Quality Index</span>
+            <div class="monitor-cell" title="${esc(qTip)}">
+                <span class="m-label">Within limits</span>
                 <div id="gauge-wqi"></div>
-                <span class="m-sub" style="color:${g.wqi?.value >= 65 ? 'var(--sev-low)' : g.wqi?.value >= 45 ? 'var(--sev-medium)' : 'var(--sev-high)'}">${esc(g.wqi?.label || '--')}</span>
+                <span class="m-sub" style="color:${sevColor(q.severity)}">${q.total ? `${q.ok}/${q.total} · ${esc(q.label)}` : esc(q.label || '--')}</span>
             </div>`];
         const critical = (g.critical || []).slice(0, 2);
         if (critical.length < 2) {
@@ -717,7 +802,7 @@ export class Dashboard {
             </div>`);
         }
         critical.forEach(c => cells.push(`
-            <div class="monitor-cell" title="${esc(c.label)} at ${esc(c.location)}">
+            <div class="monitor-cell" title="${esc(c.label)}: ${esc(fmtVal(c.value))} ${esc(c.unit)} at ${esc(c.location)} (${esc(c.severity)})">
                 <span class="m-label">${esc(c.label)}</span>
                 <span class="m-icon" style="background:color-mix(in srgb, ${sevColor(c.severity)} 18%, transparent); color:${sevColor(c.severity)}">${icon(c.key === 'OXY' ? 'droplet' : 'flask', 18)}</span>
                 <span class="m-value">${fmtVal(c.value)}<small> ${esc(c.unit)}</small></span>
@@ -725,10 +810,10 @@ export class Dashboard {
             </div>`));
         while (cells.length < 3) cells.push('<div class="monitor-cell"></div>');
         $('monitor-grid').innerHTML = cells.join('');
-        if (g.wqi?.value !== null && g.wqi?.value !== undefined) renderGauge('gauge-wqi', g.wqi.value, { min: 0, max: 100 });
+        if (q.pct !== null && q.pct !== undefined) renderGauge('gauge-wqi', q.pct, { min: 0, max: 100, severity: q.severity, suffix: '%' });
         else showEmpty('gauge-wqi', 'No WAQ');
         $('monitor-sub').textContent = strat.surface !== undefined && strat.surface !== null
-            ? `Surface ${fmtNumber(strat.surface, 1)}°C · bottom ${fmtNumber(strat.bottom, 1)}°C · ΔT ${fmtNumber(strat.value, 1)}°C`
+            ? `Surface ${fmtNumber(strat.surface, 1)}°C · Bottom ${fmtNumber(strat.bottom, 1)}°C · ΔT ${fmtNumber(strat.value, 1)}°C`
             : 'Simulated lake condition';
     }
 
@@ -907,8 +992,6 @@ export class Dashboard {
         resizeCharts(['gauge-wqi', 'donut-chart', 'ts-chart', 'profile-chart', 'weather-chart']);
     }
 }
-
-function wqiSev(v) { return v >= 65 ? 'sev-low' : v >= 45 ? 'sev-medium' : 'sev-high'; }
 
 export function positionPopover(pop, anchor, align = 'left') {
     const r = anchor.getBoundingClientRect();

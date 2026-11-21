@@ -107,6 +107,10 @@
             <button class="btn project-chip" id="project-chip" title="Change project">
               <span data-icon="folder"></span><span class="label" id="project-chip-label">demo</span>
             </button>
+            <label class="date-field waq-field" id="waq-field" title="WAQ scenario options" hidden>
+              <span data-icon="flask"></span>
+              <select id="waq-scenario" aria-label="WAQ scenario"></select>
+            </label>
             <div class="segmented" id="period-select" role="tablist" aria-label="Analysis window">
               <button data-period="1d">1D</button>
               <button data-period="7d">7D</button>
@@ -161,7 +165,7 @@
                 </div>
               </div>
               
-              <div class="kpi-row" id="kpi-row"></div>
+              <div class="kpi-row" id="kpi-row"></div>  <!-- KPI  -->
               <div class="dash-grid">
                 <div class="panel panel-map" id="panel-map">
                   <div id="main-map"></div>
@@ -282,16 +286,14 @@
           <!-- WORKSPACE (công cụ cũ trên Gridstack) -->
           <section class="view" id="view-workspace">
             <div class="workspace-head">
-              <div>
-                <h2>Workspace</h2>
+              <div><h2>Workspace</h2>
                 <p>Modelling tools open as widgets. Drag by the header, resize from the edges.</p>
               </div>
               <div style="display:flex; gap:8px">
                 <button class="btn small" id="ws-close-all"><span data-icon="x"></span>Close all</button>
               </div>
             </div>
-            <div class="workspace-empty" id="workspace-empty">
-              <h3>No tools open</h3>
+            <div class="workspace-empty" id="workspace-empty"><h3>No tools open</h3>
               <div>Pick a modelling tool in the sidebar, or start with one of these:</div>
               <div class="quick-tools" id="quick-tools"></div>
             </div>
@@ -303,14 +305,12 @@
 
     <!-- POPOVERS / MODALS -->
     <div class="popover" id="filters-popover">
-      <div class="pop-section">
-        <h4>Alert severity</h4>
+      <div class="pop-section"><h4>Alert severity</h4>
         <label class="check-row"><input type="checkbox" data-sev="high" checked> High</label>
         <label class="check-row"><input type="checkbox" data-sev="medium" checked> Medium</label>
         <label class="check-row"><input type="checkbox" data-sev="info" checked> Info</label>
       </div>
-      <div class="pop-section">
-        <h4>Category</h4>
+      <div class="pop-section"><h4>Category</h4>
         <div id="filter-categories"></div>
       </div>
       <div class="pop-actions">
@@ -319,15 +319,17 @@
       </div>
     </div>
 
-    <div class="popover" id="settings-popover" style="width: 300px">
-      <div class="pop-section">
-        <h4>Time zone</h4>
+    <div class="popover" id="settings-popover" style="width: 300px;">
+      <div class="pop-section"><h4>Time zone</h4>
         <input type="text" class="tz-search" id="tz-search" placeholder="Search... (Oslo, New York, UTC)" autocomplete="off">
         <div id="tz-results" class="tz-results"></div>
         <div style="font-size:11px; color: var(--muted); margin-top:6px">IANA names. Default comes from the browser.</div>
       </div>
-      <div class="pop-section">
-        <h4>Maintenance</h4>
+      <div class="pop-section"><h4>Alert thresholds</h4>
+        <button class="btn small" id="edit-thresholds"><span data-icon="sliders"></span>Edit thresholds…</button>
+        <div style="font-size:11px; color: var(--muted); margin-top:6px">View and overwrite dashboard_thresholds.json.</div>
+      </div>
+      <div class="pop-section"><h4>Maintenance</h4>
         <div style="display:flex; flex-direction:column; gap:6px">
           <button class="btn small" id="reload-thresholds"><span data-icon="refresh"></span>Reload alert thresholds</button>
           <button class="btn small" id="reset-layout"><span data-icon="grid"></span>Reset workspace layout</button>
@@ -342,6 +344,22 @@
           <button class="btn icon-only ghost" data-close-modal title="Close"><span data-icon="x"></span></button>
         </div>
         <div class="modal-body" id="alerts-modal-body"></div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="thresholds-modal">
+      <div class="modal">
+        <div class="modal-head">
+          <span data-icon="sliders"></span><h3>Alert thresholds</h3>
+          <button class="btn icon-only ghost" data-close-modal title="Close"><span data-icon="x"></span></button>
+        </div>
+        <div class="modal-body" id="thresholds-modal-body"></div>
+        <div class="modal-foot">
+          <button class="btn small" id="thr-reload" title="Discard unsaved edits and read the file again">Reload from file</button>
+          <span style="flex:1"></span>
+          <button class="btn small" data-close-modal>Cancel</button>
+          <button class="btn small primary" id="thr-save">Save (overwrite)</button>
+        </div>
       </div>
     </div>
 

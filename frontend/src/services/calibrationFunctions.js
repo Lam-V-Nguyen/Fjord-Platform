@@ -3,7 +3,6 @@ import { jsonLoader, stringToUTC, numberFormatter } from "./commonFunctions.js";
 
 
 let activeProject = null, logInterval = null, lastOffsetHYD = 0, running = false;
-// true while a simulation / resampling / optimization is being polled
 export const isBusy = () => running;
 
 
@@ -21,9 +20,11 @@ export function fillOverrides(rows, table) {
     tbody.innerHTML = (rows && rows.length ? rows : [['', '', '']]).map(overrideRowHtml).join('');
 }
 
-export function updateLogSimulation(hydProject, key, logObject, progressBarObject, progressTextObject, seconds, logFile, startOffset = 0) {
+export function updateLogSimulation(hydProject, key, logObject, progressBarObject, progressTextObject, 
+    seconds, logFile, startOffset = 0, onFinish = null) {
     if (logInterval) { clearInterval(logInterval); logInterval = null; }
     activeProject = hydProject; lastOffsetHYD = startOffset; running = true;
+    lastOffsetHYD = Number.isFinite(startOffset) ? startOffset : 0;
     const fetchLog = async () => {
         const res = await fetch(`/calibration_log_tail/${hydProject}?offset=${lastOffsetHYD}&log_file=${logFile}`);
         if (!res.ok) { 
@@ -50,10 +51,12 @@ export function updateLogSimulation(hydProject, key, logObject, progressBarObjec
             if (statusRes.status !== "running") {
                 clearInterval(logInterval); logInterval = null; running = false; 
                 await fetchLog(); logObject.value += statusRes.message + "\n";
+                if (onFinish) await onFinish(statusRes);
             }
         } catch (error) {
             progressTextObject.innerText = `Error: ${error}`;
             clearInterval(logInterval); logInterval = null; running = false;
+            if (onFinish) await onFinish({ status: 'error', message: String(error) });
         }
     }, seconds * 1000);
 }
@@ -109,14 +112,52 @@ export async function initParameterContainer(container, addParamKey, addParamBtn
     });
 }
 
+// Open the observations removed by the quality control in a new browser tab (table + CSV download).
+// The tab is opened after a server request, so a pop-up blocker may stop it: the CSV is then downloaded.
+export function showRemovedObservations(rows, { title = 'Observations removed by the quality control (QC)',
+    fileName = 'obs_qc_removed.csv', note = '' } = {}) {
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    const cols = ['Time', 'depth', 'temperature', 'reason'];
+    const cell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const csv = [cols.join(','), ...rows.map(r => cols.map(c => cell(r[c])).join(','))].join('\n');
+    const csvUrl = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const counts = rows.reduce((m, r) => (m[r.reason] = (m[r.reason] || 0) + 1, m), {});
+    const fmtT = (v) => (v === null || v === undefined || v === '') ? '' : Number(v).toFixed(3);
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+        body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+        h2 { margin: 0 0 6px 0; } p { margin: 4px 0 12px 0; color: #555; }
+        table { border-collapse: collapse; font-size: 13px; }
+        th, td { border: 1px solid #ccc; padding: 4px 10px; text-align: left; }
+        th { background: #f0f0f0; position: sticky; top: 0; }
+        tr:nth-child(even) td { background: #fafafa; } td.num { text-align: right; }
+        a.btn { display: inline-block; padding: 6px 12px; background: #1f77b4; color: #fff; border-radius: 6px; text-decoration: none; }
+    </style></head><body>
+        <h2>${esc(title)}</h2>
+        <p>${esc(note || `${rows.length} value(s) removed`)} · ${Object.entries(counts).map(([k, n]) => `${esc(k)}: ${n}`).join(' · ')}</p>
+        <p><a class="btn" href="${csvUrl}" download="${esc(fileName)}">Download ${esc(fileName)}</a></p>
+        <table><thead><tr><th>#</th><th>Time</th><th>Depth (m)</th><th>Temperature (°C)</th><th>Reason</th></tr></thead><tbody>
+        ${rows.map((r, i) => `<tr><td class="num">${i + 1}</td><td>${esc(r.Time)}</td><td class="num">${esc(r.depth)}</td>
+            <td class="num">${fmtT(r.temperature)}</td><td>${esc(r.reason)}</td></tr>`).join('')}
+        </tbody></table></body></html>`;
+    const win = window.open(URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' })), '_blank');
+    if (!win) {
+        // pop-up blocked -> download the CSV instead
+        const a = document.createElement('a'); a.href = csvUrl; a.download = fileName;
+        document.body.appendChild(a); a.click(); a.remove();
+        alert(`The browser blocked the new tab, so the list of removed observations was downloaded as "${fileName}".\n` +
+            'Allow pop-ups for this site to see it in a new tab next time.'
+        );
+    }
+}
+
 export function plotComparison(container, data) {
     const dfSim = data.sim, dfObs = data.obs, merge = data.merge, minMax = data.min_max;
     const depths = data.depth, metrics = data.metrics, totalRMSE = data.rmse;
     const initial = data.initial || null;              // run before calibration (optional)
     const calLabel = initial ? 'Calibrated' : 'Simulation';
-    const fmtM = (m) => `RMSE = ${m?.[0] == null ? '–' : Number(m[0]).toFixed(3)}°C · ` +
-        `Bias = ${m?.[2] == null ? '–' : (m[2] > 0 ? '+' : '') + Number(m[2]).toFixed(2)}°C · ` +
-        `R² = ${m?.[1] == null ? '–' : Number(m[1]).toFixed(3)}`;
+    const fmtM = (m) => `RMSE = ${m?.[0] == null ? '--' : Number(m[0]).toFixed(3)}°C · ` +
+        `Bias = ${m?.[2] == null ? '--' : (m[2] > 0 ? '+' : '') + Number(m[2]).toFixed(2)}°C · ` +
+        `R² = ${m?.[1] == null ? '--' : Number(m[1]).toFixed(3)}`;
     const seriesOf = (rows, col) => {
         const x = [], y = [];
         (rows || []).forEach(row => {
@@ -163,14 +204,24 @@ export function plotComparison(container, data) {
                 });
             }
         }
-        // Initial scenario (before calibration)
+        // Observations removed by the quality control (shown, not used in the metrics)
+        const removedHere = (data.removed || []).filter(r => Math.abs(Number(r.depth) - Number(d)) <= 0.5);
+        if (removedHere.length) {
+            traces.push({
+                x: removedHere.map(r => stringToUTC(r.Time)), y: removedHere.map(r => Number(r.temperature)),
+                type: 'scatter', mode: 'markers', name: 'Removed (QC)', text: removedHere.map(r => `${r.depth} m, ${r.reason}`),
+                marker: { symbol: 'x', size: 7, color: '#7f7f7f' },
+                hovertemplate: 'Removed: %{y:.3f}°C (%{text})<extra></extra>',
+            });
+        }
+        // Original scenario (before calibration)
         if (initial) {
             const { x, y } = seriesOf(initial.sim, simCol);
             if (x.length > 0) {
                 traces.push({
-                    x, y, type: 'scatter', mode: 'lines', name: 'Initial',
+                    x, y, type: 'scatter', mode: 'lines', name: 'Original',
                     line: { color: '#7f7f7f', width: 1.3, dash: 'dash' }, opacity: 0.9,
-                    hovertemplate: 'Initial: %{y:.3f}°C<extra></extra>',
+                    hovertemplate: 'Original: %{y:.3f}°C<extra></extra>',
                 });
             }
         }
@@ -189,12 +240,13 @@ export function plotComparison(container, data) {
         // Layout
         const layout = {
             title: {
-                text: `<b>Temperature Comparation - Station: ${data.station}<br>Water Depth: ${d}m </b>`,
-                font: { size: 15, weight: "bold" }
+                text: `<b>Station: ${data.station} - Water Depth: ${d} m</b>`, font: { size: 16 },
+                x: 0.5, xref: 'paper', xanchor: 'center', y: 1, yref: 'paper', yanchor: 'bottom',
+                pad: { b: (initial ? 30 : 15) + 10 }                 // = height of the metrics lines + gap
             },
             xaxis: {
                 title: {text: `<b>Time<b>`, standoff: 15, 
-                    font: { size: 16, family: 'Arial', weight: 700}
+                    font: { size: 14, family: 'Arial', weight: 700}
                 },
                 type: 'date', showgrid: true, gridcolor: 'rgba(0,0,0,0.15)',
                 linewidth: 1, linecolor: 'black', ticks: 'outside',
@@ -202,7 +254,7 @@ export function plotComparison(container, data) {
             },
             yaxis: {
                 title: {text: `<b>Temperature (°C)<b>`, standoff: 10, 
-                    font: { size: 16, family: 'Arial', weight: 700}
+                    font: { size: 14, family: 'Arial', weight: 700}
                 },
                 showgrid: true, gridcolor: 'rgba(0,0,0,0.15)',
                 linecolor: 'black', ticks: 'outside', ticklen: 6, 
@@ -213,11 +265,11 @@ export function plotComparison(container, data) {
                 bordercolor: 'rgba(128,128,128,0.4)', borderwidth: 1, font: { size: 12 }
             },
             annotations: [{
-                x: 0.45, y: 1.03, xref: 'paper', yref: 'paper', xanchor: 'center', yanchor: 'top',
-                text: initial ? `Initial: ${fmtM(metricInit)}<br>Calibrated: ${fmtM(metric)}` : `(${fmtM(metric)})`,
-                showarrow: false, align: 'center', font: { size: 12 }, 
+                x: 0.5, y: 1, xref: 'paper', yref: 'paper', xanchor: 'center', yanchor: 'bottom', yshift: 2,
+                text: initial ? `Original: ${fmtM(metricInit)}<br>Calibrated: ${fmtM(metric)}` : fmtM(metric),
+                showarrow: false, align: 'center', font: { size: 12 }
             }],
-            margin: initial ? { ...margin, t: 85 } : margin, autosize: true, hovermode: 'x unified'
+            margin: { ...margin, t: (initial ? 30 : 15) + 40 }, autosize: true, hovermode: 'x unified'
         };
         const config = { responsive: true, displaylogo: false };
         Plotly.newPlot(chart, traces, layout, config).then(() => {
@@ -241,59 +293,97 @@ export function plotComparison(container, data) {
         });
         return { x, y };
     };
+    const traceDepth = [];
     depths.forEach((depth, index) => {
         const color = depthColors[index % depthColors.length];
         if (initial) {
             const { x, y } = pairsOf(initial.merge?.[String(depth)], depth);
-            if (x.length) traces.push({ x, y, type: 'scatter', mode: 'markers', name: `Initial ${depth} m`,
-                legendgroup: `d${index}`, marker: { color, size: 6, opacity: 0.6, symbol: 'circle-open' } });
+            if (x.length) { traces.push({ x, y, type: 'scatter', mode: 'markers', name: `Original ${depth} m`,
+                legendgroup: `d${index}`, marker: { color, size: 6, opacity: 0.6, symbol: 'circle-open' } }); traceDepth.push(index); }
         }
         const { x, y } = pairsOf(merge[String(depth)], depth);
-        if (x.length) traces.push({ x, y, type: 'scatter', mode: 'markers',
+        if (x.length) { traces.push({ x, y, type: 'scatter', mode: 'markers',
             name: initial ? `Calibrated ${depth} m` : `Depth ${depth} m`, legendgroup: `d${index}`,
-            marker: { color, size: 6, opacity: 0.5 } });
+            marker: { color, size: 6, opacity: 0.5 } }); traceDepth.push(index); }
     });
     // Add 1:1 line
     traces.push({
         x: [minValue, maxValue], y: [minValue, maxValue], 
         type: 'scatter', mode: 'lines', name: 'Line 1:1', showlegend: false,
         line: { color: 'black', dash: 'dash', width: 1.5 }, hoverinfo: 'skip'
-    });
+    }); traceDepth.push(-1);
+    // Depth combobox: one depth (default: the first) or all depths. The legend sits under the plot in two
+    // columns (Original | Calibrated), so it never covers points; the bottom margin grows with its rows.
+    const shownDepths = depths.map((_, k) => k).filter(k => traceDepth.includes(k));
+    const visibleFor = (k) => traceDepth.map(t => t === -1 || k === null || t === k);
+    // Own margins for this chart: narrower sides leave more room for a 4-column legend
+    const pm = { ...margin, l: 52, r: 6 };
+    const plotWidth = Math.max(200, (parityChart.clientWidth || 600) - pm.l - pm.r);
+    const legendCols = 4;
+    const colW = Math.floor(plotWidth / legendCols);
+    const legendTextW = Math.max(30, colW - 44);          // entrywidth = text only (symbol ≈ 40 px in front)
+    if (colW < 120) {                                     // narrow chart: short names so the text fits its column
+        traces.forEach(t => { if (t.name) t.name = t.name.replace(/^Original /, 'Orig. ').replace(/^Calibrated /, 'Cal. '); });
+    }
+    const legendRows = (k) => Math.ceil(traceDepth.filter(t => t !== -1 && (k === null || t === k)).length / legendCols);
+    const bottomFor = (k) => 52 + 16 * legendRows(k);
+    const firstDepth = shownDepths.length ? shownDepths[0] : null;
+    traces.forEach((t, i) => { t.visible = visibleFor(firstDepth)[i]; });
+    const depthButtons = [
+        ...shownDepths.map(k => ({ label: `Depth ${depths[k]} m`, method: 'update',
+            args: [{ visible: visibleFor(k) }, { 'margin.b': bottomFor(k) }] })),
+        { label: 'All depths', method: 'update', args: [{ visible: visibleFor(null) }, { 'margin.b': bottomFor(null) }] },
+    ];
     // Plotly layout
     const layout = {
         title: {
-            text:
-                `<b>Simulation vs. Observation (Station: ${data.station})</b><br>` +
-                (initial ? `Total RMSE: initial = ${initial.rmse == null ? '–' : Number(initial.rmse).toFixed(3)}°C → ` +
-                    `calibrated = ${totalRMSE == null ? '–' : Number(totalRMSE).toFixed(3)}°C`
-                    : `Total RMSE = ${totalRMSE == null ? '–' : Number(totalRMSE).toFixed(3)}°C`),
-            font: { size: 15, weight: "bold" }
+            text: `<b>Simulation vs. Observation (Station: ${data.station})</b>`, font: { size: 16 },
+            x: 0.5, xref: 'paper', xanchor: 'center', y: 1, yref: 'paper', yanchor: 'bottom', pad: { b: 25 }
         },
         xaxis: {
             title: {text: `<b>Observation (°C)<b>`, standoff: 15, 
-                font: { size: 16, family: 'Arial', weight: 700}
+                font: { size: 14, family: 'Arial', weight: 700}
             }, 
             range: [minValue, maxValue], showline: true, 
             linewidth: 1, linecolor: 'black', ticks: 'outside',
             ticklen: 6, tickwidth: 1, tickcolor: 'black', showgrid: true,
         },
         yaxis: {
-            title: {text: `<b>Simulation (°C)<b>`, standoff: 10, 
-                font: { size: 16, family: 'Arial', weight: 700}
+            title: {text: `<b>Simulation (°C)<b>`, standoff: 4, 
+                font: { size: 14, family: 'Arial', weight: 700}
             },
             range: [minValue, maxValue], showline: true, linewidth: 1, 
             linecolor: 'black', ticks: 'outside', ticklen: 6, 
             tickwidth: 1, tickcolor: 'black',
         },
         legend: {
-            x: 0.03, y: 0.95, xanchor: 'left', yanchor: 'top', 
-            bgcolor: 'rgba(228, 221, 221, 0.5)',
-            bordercolor: 'gray', borderwidth: 1, font: { size: 12 }
+            orientation: 'h', entrywidth: legendTextW, entrywidthmode: 'pixels', itemwidth: 30,
+            x: 0, xanchor: 'left', y: 0, yref: 'container', yanchor: 'bottom', tracegroupgap: 0,
+            bgcolor: 'rgba(0,0,0,0)', font: { size: 10 }, traceorder: 'normal'
         },
-        margin: margin, autosize: true, hovermode: 'closest'
+        annotations: [{
+            x: 0.5, y: 1, xref: 'paper', yref: 'paper', xanchor: 'center', yanchor: 'bottom', yshift: 2,
+            text: initial
+                ? `Total RMSE: Original = ${initial.rmse == null ? '--' : Number(initial.rmse).toFixed(3)}°C → ` +
+                  `Calibrated = ${totalRMSE == null ? '--' : Number(totalRMSE).toFixed(3)}°C`
+                : `Total RMSE = ${totalRMSE == null ? '--' : Number(totalRMSE).toFixed(3)}°C`,
+            showarrow: false, align: 'center', font: { size: 12 }
+        }],
+        updatemenus: [{
+            type: 'dropdown', buttons: depthButtons, active: 0, showactive: true,
+            x: 0.01, xanchor: 'left', y: 0.99, yanchor: 'top',                   // top-left corner, over the plot
+            pad: { r: 0, t: 0, b: 0, l: 0 },
+            bgcolor: 'rgba(255,255,255,0.9)', bordercolor: 'rgba(128,128,128,0.6)', font: { size: 12 }
+        }],
+        margin: { ...pm, t: 49, b: bottomFor(firstDepth) }, autosize: true, hovermode: 'closest'
     };
     const config = { responsive: true, displaylogo: false };
+    // Plotly puts legend text 40 px after the entry start even with the minimum itemwidth (30):
+    // move it closer to the marker after every redraw (also after a depth is chosen in the combobox)
+    const tightenLegend = () => parityChart.querySelectorAll('.legend .legendtext')
+        .forEach(t => t.setAttribute('x', 26));
     Plotly.newPlot(parityChart, traces, layout, config).then(() => {
+        parityChart.on('plotly_afterplot', tightenLegend); tightenLegend();
         requestAnimationFrame(() => { Plotly.Plots.resize(parityChart)})
     });
 }
@@ -449,7 +539,8 @@ export function plotOptuna(container, trials, importance, key) {
     );
     const bestParamValue = Number(bestTrial[sensitivityColumn]);
     const xLabel = calibrationParams.find(
-        param => param.value === mostImportantParam)?.name ?? mostImportantParam;
+        param => param.value === mostImportantParam
+    )?.name ?? mostImportantParam;
     Plotly.newPlot(
         'optuna-sensitivity',
         [{
@@ -657,16 +748,13 @@ export async function sensitivityRender(container, data, key) {
         height: Math.max(500, sensitivityRows * rowHeight),
         margin: { l: 20, r: 30, t: 80, b: 60 },
         title: {
-            text: "Correlation Analysis",
-            font: { size: 24, weight: "bold" }
+            text: "Correlation Analysis", font: { size: 24, weight: "bold" }
         },
         xaxis: {
-            domain: [0.00, 0.28], tickangle: 0, 
-            automargin: true, showgrid: false, fixedrange: true
+            domain: [0.00, 0.28], tickangle: 0, automargin: true, showgrid: false, fixedrange: true
         },
         yaxis: {
-            domain: [0.20, 0.80], tickangle: -90,
-            automargin: true, showgrid: false, fixedrange: true
+            domain: [0.20, 0.80], tickangle: -90, automargin: true, showgrid: false, fixedrange: true
         }, annotations: []
     };
     parameters.forEach((parameter, index) => {

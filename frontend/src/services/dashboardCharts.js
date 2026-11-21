@@ -50,16 +50,16 @@ function clearEmpty(node) {
 }
 
 // Gauge
-export function renderGauge(id, value, { min = 0, max = 100, label = '' } = {}) {
+export function renderGauge(id, value, { min = 0, max = 100, label = '', severity = null, suffix = '' } = {}) {
     const node = el(id);
     if (!node) return;
     if (value === null || value === undefined) { showEmpty(node, '-'); return; }
     clearEmpty(node);
     const sev = SEV_COLORS();
-    const color = value >= 65 ? sev.low : value >= 45 ? sev.medium : sev.high;
+    const color = sev[severity] || (value >= 65 ? sev.low : value >= 45 ? sev.medium : sev.high);
     const data = [{
         type: 'indicator', mode: 'gauge+number', value,
-        number: { font: { size: 22, color: cssVar('--text') }, valueformat: '.0f' },
+        number: { font: { size: 22, color: cssVar('--text') }, valueformat: '.0f', suffix },
         gauge: {
             shape: 'angular', axis: { range: [min, max], visible: false },
             bar: { color, thickness: 0.32 }, bgcolor: 'rgba(148,170,200,0.12)', borderwidth: 0,

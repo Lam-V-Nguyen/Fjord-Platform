@@ -1,5 +1,5 @@
 {
-    "_comment": "Ngưỡng cảnh báo cho Dashboard (áp dụng cho kết quả HYD/WAQ). 'direction': 'above' = vượt ngưỡng trên là xấu, 'below' = thấp hơn ngưỡng là xấu. Khóa trong 'substances' là tên biến WAQ (không có tiền tố mesh2d_). Đây là ngưỡng minh hoạ – cần hiệu chỉnh theo quy chuẩn áp dụng.",
+    "_comment": "Ngưỡng cảnh báo cho Dashboard (áp dụng cho kết quả HYD/WAQ). 'direction': 'above' = vượt ngưỡng trên là xấu, 'below' = thấp hơn ngưỡng là xấu. 'medium' / 'high' = mức cảnh báo vừa / cao. Khóa trong 'substances' là tên biến WAQ (không có tiền tố mesh2d_); ô 'Water Quality' = số chất WAQ nằm trong ngưỡng. 'physics' (khóa cố định) hiển thị trên KPI nhiệt độ mặt / vận tốc dòng chảy và trong Alerts. Đây là ngưỡng minh hoạ – cần hiệu chỉnh theo quy chuẩn áp dụng.",
     "substances": {
         "EColi": {
             "label": "E. coli",
@@ -7,8 +7,7 @@
             "direction": "above",
             "medium": 100,
             "high": 500,
-            "category": "Microbiology",
-            "weight": 25
+            "category": "Microbiology"
         },
         "ZNWTOT": {
             "label": "Zinc (total)",
@@ -16,8 +15,7 @@
             "direction": "above",
             "medium": 0.05,
             "high": 0.2,
-            "category": "Metals",
-            "weight": 15
+            "category": "Metals"
         },
         "Zn": {
             "label": "Zinc",
@@ -25,8 +23,7 @@
             "direction": "above",
             "medium": 0.05,
             "high": 0.2,
-            "category": "Metals",
-            "weight": 15
+            "category": "Metals"
         },
         "Cd": {
             "label": "Cadmium",
@@ -34,8 +31,7 @@
             "direction": "above",
             "medium": 0.0002,
             "high": 0.001,
-            "category": "Metals",
-            "weight": 15
+            "category": "Metals"
         },
         "IM1": {
             "label": "Suspended sediment 1",
@@ -43,8 +39,7 @@
             "direction": "above",
             "medium": 0.4,
             "high": 1.0,
-            "category": "Sediment",
-            "weight": 10
+            "category": "Sediment"
         },
         "IM2": {
             "label": "Suspended sediment 2",
@@ -52,8 +47,7 @@
             "direction": "above",
             "medium": 0.4,
             "high": 1.0,
-            "category": "Sediment",
-            "weight": 10
+            "category": "Sediment"
         },
         "IM3": {
             "label": "Suspended sediment 3",
@@ -61,8 +55,7 @@
             "direction": "above",
             "medium": 0.4,
             "high": 1.0,
-            "category": "Sediment",
-            "weight": 10
+            "category": "Sediment"
         },
         "OXY": {
             "label": "Dissolved oxygen",
@@ -70,8 +63,7 @@
             "direction": "below",
             "medium": 6.0,
             "high": 4.0,
-            "category": "Oxygen",
-            "weight": 25
+            "category": "Oxygen"
         },
         "BOD5": {
             "label": "BOD5",
@@ -79,8 +71,7 @@
             "direction": "above",
             "medium": 3.0,
             "high": 6.0,
-            "category": "Organic",
-            "weight": 15
+            "category": "Organic"
         },
         "NH4": {
             "label": "Ammonium",
@@ -88,8 +79,7 @@
             "direction": "above",
             "medium": 0.2,
             "high": 0.5,
-            "category": "Nutrients",
-            "weight": 10
+            "category": "Nutrients"
         },
         "Chlfa": {
             "label": "Chlorophyll-a",
@@ -97,8 +87,7 @@
             "direction": "above",
             "medium": 0.008,
             "high": 0.02,
-            "category": "Nutrients",
-            "weight": 10
+            "category": "Nutrients"
         },
         "TotP": {
             "label": "Total phosphorus",
@@ -106,8 +95,7 @@
             "direction": "above",
             "medium": 0.011,
             "high": 0.02,
-            "category": "Nutrients",
-            "weight": 10
+            "category": "Nutrients"
         },
         "cTR1": {
             "label": "Conservative tracer 1",
@@ -115,8 +103,7 @@
             "direction": "above",
             "medium": 0.1,
             "high": 0.5,
-            "category": "Tracer",
-            "weight": 5
+            "category": "Tracer"
         }
     },
     "physics": {
@@ -126,8 +113,7 @@
             "direction": "above",
             "medium": 15.0,
             "high": 20.0,
-            "category": "Temperature",
-            "weight": 10
+            "category": "Temperature"
         },
         "current_speed": {
             "label": "Max current speed",
@@ -135,8 +121,7 @@
             "direction": "above",
             "medium": 0.3,
             "high": 0.6,
-            "category": "Hydrodynamics",
-            "weight": 5
+            "category": "Hydrodynamics"
         }
     }
 }

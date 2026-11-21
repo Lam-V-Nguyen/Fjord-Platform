@@ -69,7 +69,7 @@ async def copy_project(request: Request, user=Depends(functions.basic_auth)):
             # Optional: auto-extend lock if deletion may take long
             extend_task = asyncio.create_task(functions.auto_extend(lock))
             if not os.path.exists(project_folder): 
-                return JSONResponse({"status": 'error', "message": f"Project '{old_name}' does not exist."})
+                return JSONResponse({"status": 'error', "message": f"Scenario '{old_name}' does not exist."})
             shutil.copytree(project_folder, os.path.normpath(os.path.join(PROJECT_ROOT, new_name)))
             return JSONResponse({"message": f"HYD scenario '{new_name}' was cloned successfully!"})
     except Exception as e: functions.error('/copy_project', e)

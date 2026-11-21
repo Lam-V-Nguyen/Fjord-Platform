@@ -178,7 +178,7 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* Comparison tab: [label 200px] [input = rest] [button / select 300px] – every row lines up */
+/* Comparison tab*/
 .tile .cmp-form {
   --label-w: 150px; --btn-w: 200px; --ctl-h: 38px;
   display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
@@ -193,7 +193,13 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tile .cmp-form .field-inline > label ~ label { flex: 0 0 auto; width: auto; }   /* 2nd label in a row: text width */
+.tile .cmp-form .field-inline > input,
 .tile .cmp-form .field-inline > .project-name-wrapper { flex: 1 1 0; width: auto; min-width: 0; }
+/* The scenario input fills its wrapper; the wrapper anchors the drop-down list */
+.tile .cmp-form .project-name-wrapper { position: relative; display: flex; align-items: center; }
+.tile .cmp-form .project-name-wrapper > input { flex: 1 1 auto; width: 100%; min-width: 0; }
+/* flowPreparation.css sets #project-name { width: 300px; height: 25px } – an id beats the class rules above */
+.tile .cmp-form .project-name-wrapper > #project-name { width: 100%; height: var(--ctl-h); }
 .tile .cmp-form .field-inline > button,
 .tile .cmp-form .field-inline > select {
   flex: 0 0 var(--btn-w); width: var(--btn-w);
@@ -204,6 +210,8 @@
 }
 
 
+.tile .cmp-form .project-name-wrapper { position: relative; }
+.tile .cmp-form #project-list { position: absolute; top: calc(100% + 4px); padding: 6px; font-size: inherit; }
 /* Scenario picker: the list drops down over the content instead of pushing the rows down */
 .tile .cmp-form .project-list {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 1000;

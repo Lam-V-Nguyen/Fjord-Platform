@@ -42,7 +42,7 @@ function ensureCss() {
     document.head.appendChild(l);
 }
 
-// ----------------------------------------------------------------- data helpers
+// ---- data helpers
 async function post(path, body) {
     const res = await fetch(`/dashboard/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
@@ -100,7 +100,7 @@ function lut(palette, n = 256) {
 }
 const SPEED_STOPS = ['#93c5fd', '#67e8f9', '#a7f3d0', '#fef08a', '#fdba74', '#fca5a5'];
 
-// ----------------------------------------------------------------- textures
+// ---- textures
 function lon2x(lon, z) { return (lon + 180) / 360 * 2 ** z; }
 function lat2y(lat, z) { const r = lat * Math.PI / 180; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 2 ** z; }
 
@@ -173,7 +173,7 @@ function hillshadeCanvas(elev, nx, ny, res, plain = false) {
     return c;
 }
 
-// ----------------------------------------------------------------- camera controls (orbit / pan / zoom)
+// ---- camera controls (orbit / pan / zoom)
 class Orbit {
     constructor(THREE, camera, el, onChange) {
         this.T = THREE; this.camera = camera; this.el = el; this.onChange = onChange;
@@ -222,7 +222,7 @@ class Orbit {
     tick(dt) { if (this.autoRotate && !this.ptrs.size) { this.theta += dt * 0.08; this.apply(); } }
 }
 
-// ----------------------------------------------------------------- main view
+// ---- main view
 export class Wflow3DView {
     constructor(map, { projectName }) {
         this.lmap = map; this.projectName = projectName;
@@ -237,7 +237,7 @@ export class Wflow3DView {
         return `projectName=${encodeURIComponent(this.projectName)}&flowName=${encodeURIComponent(this.info.flow)}&v=${encodeURIComponent(this.info.version || '')}${extra}`;
     }
 
-    // ------------------------------------------------------------- init / data
+    //  init / data
     async init(opts = {}) {
         ensureCss();
         const [THREE] = await Promise.all([loadThree()]);
@@ -342,7 +342,7 @@ export class Wflow3DView {
         return true;
     }
 
-    // ------------------------------------------------------------- DOM
+    //  DOM
     buildDom() {
         this.root?.remove();
         const r = this.root = document.createElement('div');
@@ -410,7 +410,7 @@ export class Wflow3DView {
         r.querySelector('[data-a="play"]').classList.toggle('playing', this.playing);
     }
 
-    // ------------------------------------------------------------- 3D scene
+    //  3D scene
     buildScene() {
         const THREE = this.THREE, g = this.g, canvas = this.root.querySelector('.w3d-canvas');
         this.renderer?.dispose();
@@ -545,7 +545,7 @@ export class Wflow3DView {
         this.terrainMat.map?.dispose(); this.terrainMat.map = tex; this.terrainMat.needsUpdate = true;
     }
 
-    // ------------------------------------------------------------- rivers (dải băng, bề rộng & màu theo giá trị)
+    //  rivers (dải băng, bề rộng & màu theo giá trị)
     buildRivers() {
         const THREE = this.THREE, g = this.g;
         this.riverCell = new Uint8Array(g.nx * g.ny);
@@ -614,7 +614,7 @@ export class Wflow3DView {
         this.riverMesh.visible = !!this.riverVar;
     }
 
-    // ------------------------------------------------------------- basin outlines, outlets
+    //  basin outlines, outlets
     buildBasins() {
         const THREE = this.THREE;
         this.basinLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: '#f8fafc', transparent: true, opacity: 0.75, depthWrite: false }));
@@ -686,7 +686,7 @@ export class Wflow3DView {
         this.layoutPoints();
     }
 
-    // ------------------------------------------------------------- điểm hydrograph do người dùng thêm (P1..P6)
+    //  điểm hydrograph do người dùng thêm (P1..P6)
     rebuildPoints() {                                  // đánh số & tô màu lại sau khi thêm / xoá
         if (!this.pointGroup) return;
         this.extraSeries.forEach((s) => { this.disposePin(s._pin, this.pointGroup); s._pin = null; });
@@ -709,7 +709,7 @@ export class Wflow3DView {
         this.renderHydro();
     }
 
-    // ------------------------------------------------------------- particles (dòng chảy) & rain
+    //  particles (dòng chảy) & rain
     buildParticles() {
         const THREE = this.THREE;
         for (const o of [this.flowLines, this.flowPts, this.rainLines]) { if (o) { this.scene.remove(o); o.geometry.dispose(); } }
@@ -877,7 +877,7 @@ export class Wflow3DView {
         this.rainLines.geometry.attributes.position.needsUpdate = true;
     }
 
-    // ------------------------------------------------------------- grid overlay
+    //  grid overlay
     paintOverlay() {
         const v = this.gridVar ? this.varCache.get(`${this.gridVar}:${Math.floor(this.t)}`) : null;
         this.overlay.visible = !!v;
@@ -894,7 +894,7 @@ export class Wflow3DView {
         this.overlayTex.needsUpdate = true; this.overlay.material.opacity = this.S.gridOpacity;
     }
 
-    // ------------------------------------------------------------- time
+    //  time
     applyTime(t) {
         this.t = Math.max(0, Math.min(this.T - 1, t));
         const i0 = Math.floor(this.t);
@@ -946,7 +946,7 @@ export class Wflow3DView {
         return this.info?.times?.[Math.floor(this.t)] || null;
     }
 
-    // ------------------------------------------------------------- hydrograph (Plotly)
+    //  hydrograph (Plotly)
     renderHydro() {
         const box = this.$('hydro'), el = this.$('plot');
         const outs = this.scene3d?.outlets || [];
@@ -998,7 +998,7 @@ export class Wflow3DView {
         window.Plotly.relayout(this.$('plot'), { shapes: [this.cursorShape()] });
     }
 
-    // ------------------------------------------------------------- hover / pick
+    //  hover / pick
     gridAt(e) {
         const rect = this.renderer.domElement.getBoundingClientRect();
         const m = new this.THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
@@ -1076,7 +1076,7 @@ export class Wflow3DView {
         n.textContent = msg; n.hidden = false; clearTimeout(this._flashT); this._flashT = setTimeout(() => { n.hidden = true; }, 5000);
     }
 
-    // ------------------------------------------------------------- legend (trong khung 3D)
+    //  legend (trong khung 3D)
     renderLegend() {
         const items = [];
         const bar = (title, css, lo, hi, note = '') => `<div class="w3d-lg"><div class="w3d-lg-t">${esc(title)}</div>
@@ -1090,7 +1090,7 @@ export class Wflow3DView {
         this.$('legend').innerHTML = items.join('');
     }
 
-    // ------------------------------------------------------------- loop
+    //  loop
     resize() {
         if (!this.renderer || !this.root || this.root.hidden) return;
         const w = this.root.clientWidth, h = this.root.clientHeight;
@@ -1119,12 +1119,15 @@ export class Wflow3DView {
         this.renderer.render(this.scene, this.camera);
     };
 
-    // ------------------------------------------------------------- show / hide / destroy
+    //  show / hide / destroy
     show() {
         if (!this.root) return;
+        // Nhớ khung nhìn bản đồ 2D trước khi ẩn (khôi phục khi tắt 3D)
+        if (!this.visible && this.lmap) this._savedView = { center: this.lmap.getCenter(), zoom: this.lmap.getZoom() };
         this.host.classList.add('w3d-on');
         this.root.hidden = false; this.visible = true;
         this.resize(); this.renderLegend(); this.renderHydro();
+        if (this.g && this.orbit) this.resetView();       // bật 3D -> camera bao trọn mô hình
         if (!this.raf) { this._lastNow = performance.now(); this.raf = requestAnimationFrame(this.loop); }
     }
     hide() {
@@ -1132,7 +1135,12 @@ export class Wflow3DView {
         if (this.raf) { cancelAnimationFrame(this.raf); this.raf = null; }
         if (this.root) this.root.hidden = true;
         this.host.classList.remove('w3d-on');
-        setTimeout(() => this.lmap?.invalidateSize(), 40);
+        const saved = this._savedView; this._savedView = null;
+        setTimeout(() => {                                  // bản đồ có kích thước lại -> trả về đúng khung nhìn cũ
+            if (!this.lmap) return;
+            this.lmap.invalidateSize({ pan: false });
+            if (saved) this.lmap.setView(saved.center, saved.zoom, { animate: false });
+        }, 40);
     }
     destroy() {
         this.hide(); this.ro?.disconnect();
@@ -1151,7 +1159,7 @@ export class Wflow3DView {
         return `${alive.toLocaleString()} flow particles · ${drops.toLocaleString()} rain drops · step ${Math.floor(this.t) + 1}/${this.T}`;
     }
 
-    // ------------------------------------------------------------- settings (bảng ⚙)
+    //  settings (bảng ⚙)
     renderSettings(el, ctx) {
         if (el._bound) { const n = el.cloneNode(false); n.classList.remove('busy'); el.replaceWith(n); el = n; }
         el._bound = true;

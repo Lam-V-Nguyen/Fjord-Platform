@@ -10,20 +10,21 @@
 import { pdfOpener, projectModifier } from "./projectManager.js";
 import { initGrid, addWidget, loadWidget, saveWidget, hasWidget } from "./widgetFunctions.js";
 import { startLoading, stopLoading, jsonLoader } from "./commonFunctions.js";
-import { setPendingRequest, clearPendingRequest, origin, getLastProject,
-    getLastTimeZone, setLastTimeZone } from "./constant.js";
+import { setPendingRequest, clearPendingRequest, origin,
+    getLastProject, getLastTimeZone, setLastTimeZone 
+} from "./constant.js";
 import { renderPreview, currentMap } from "./mapManager.js";
 import { TOOL_GROUPS, QUICK_TOOLS, getTool, groupOf, standaloneLabel } from "./toolRegistry.js";
 import { icon } from "./icons.js";
+import { initThresholdEditor } from "./thresholdEditor.js";
 import { Dashboard, toast, initSidebarResize } from "./dashboardManager.js";
 
 const app = document.getElementById('app');
 const githubCache = {}, pendingRequests = new Map();
 const VIEW_KEY = 'ui-view', SIDEBAR_KEY = 'ui-sidebar-collapsed';
 const VIEW_TITLES = {
-    overview: 'HydroAI Water Intelligence Dashboard',
-    map: 'Map View', workspace: 'Modelling Workspace',
-    subtitle: 'Catchment, lake and fjord modelling - Hydrodynamics, water quality and calibration'
+    overview: 'HydroAI Water Intelligence Dashboard', map: 'Map View', workspace: 'Modelling Workspace',
+    subtitle: 'Catchment, lake and fjord modelling - Hydrodynamics, water quality and water surface runoff'
 };
 
 let userName = null, prevSource = null, currentTimeZone = null, selectedTimeZone = null;
@@ -201,6 +202,10 @@ function bindShell() {
     });
     settings.addEventListener('click', (e) => e.stopPropagation());
     bindTimezoneSearch();
+    initThresholdEditor({
+        toast, beforeOpen: () => settings.classList.remove('show'),
+        onSaved: () => dashboard?.refresh(true),          // tính lại cảnh báo / WQI theo ngưỡng mới
+    });
     document.getElementById('reset-layout').addEventListener('click', () => {
         if (!confirm('Close all widgets and reset the workspace layout?')) return;
         closeAllWidgets(); localStorage.removeItem('grid-layout'); settings.classList.remove('show');
@@ -324,6 +329,8 @@ function updateComponent() {
             renderPreview({ requestId: msg.type });
         } else if (msg.type === 'clearBoundary') {
             renderPreview({ requestId: msg.type });
+        } else if (msg.type === 'drawScenario') {     // vẽ đối tượng của kịch bản HYD đã có
+            renderPreview({ requestId: msg.type, content: msg.content });
         } else if (msg.type === 'waqPoint' || msg.type === 'loadsPoint') {
             renderPreview({ requestId: msg.type, content: msg.content });
         } else if (msg.id === 'clearGridMap') {

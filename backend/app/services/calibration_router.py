@@ -1,4 +1,4 @@
-import os, shutil, json
+import os, shutil, json, asyncio
 from fastapi import APIRouter, Request, Depends, Query
 from fastapi import UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -61,6 +61,7 @@ async def calibration_project(request: Request, user=Depends(functions.basic_aut
         try: mdu_path = calibration_functions.find_mdu(input_dir)
         except FileNotFoundError:
             return JSONResponse({'status': 'error', 'message': f"MDU file not found in project '{project_name}'."})
+        
         if not body.get('key') == '':
             calibration_dir = os.path.join(PROJECT_ROOT, project_name, "calibration")
             os.makedirs(calibration_dir, exist_ok=True)
@@ -71,7 +72,7 @@ async def calibration_project(request: Request, user=Depends(functions.basic_aut
         start_date = functions.utc_to_local(info["start"], time_zone)
         end_date = functions.utc_to_local(info["stop"], time_zone)
         content = {'start': start_date, 'end': end_date}
-        return JSONResponse({'content': content})
+        return JSONResponse({'status': 'ok', 'content': content})
     except Exception as e: functions.error("/calibration_project", e)
 
 @router.post("/load_log_calibration")
@@ -130,10 +131,11 @@ async def initial_check_calibration(request: Request, user=Depends(functions.bas
         body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         project_dir, time_zone = os.path.join(PROJECT_ROOT, project_name), body.get('timeZone')
-        measured = calibration_functions.measured_utc(body.get('obsData') or [], time_zone)
+        measured, removed, qc = calibration_functions.observations(body.get('obsData'), time_zone)
         content = calibration_functions.initial_check(
             project_dir, project_name, measured, body.get('station'), time_zone
         )
+        if not removed.empty: content["warnings"].insert(0, qc)
         return JSONResponse({"status": "ok", "content": content})
     except Exception as e: functions.error("/initial_check_calibration", e)
 
@@ -355,6 +357,8 @@ async def start_calibration_iteration(request: Request, background_tasks: Backgr
     body = await request.json()
     try:
         project_name, _ = functions.project_definer(body.get('projectName'), user)
+        calibration_path = os.path.join(PROJECT_ROOT, project_name, "input", 'calibration.json')
+        if os.path.exists(calibration_path): functions.safe_remove(calibration_path)
         directory = os.path.join(PROJECT_ROOT, project_name)
         iterations, key_process = int(body.get("iterationNumber")), f"{project_name}:{body.get('key')}"
         if iterations <= 0: 
@@ -387,7 +391,7 @@ async def evaluate_baseline_calibration(request: Request, user=Depends(functions
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         time_col, time_zone, station = 'Time', body.get('timeZone'), body.get('station')
         depths = [x.strip() for x in str(body.get('depthSelection') or '').split(",") if x.strip()]
-        measured = calibration_functions.measured_utc(body.get('obsData') or [], time_zone)
+        measured, _, qc = calibration_functions.observations(body.get('obsData'), time_zone)
         obs_df = calibration_functions.split_temp_from_depth(measured, depths, time_col)
         if obs_df.empty: return JSONResponse({"status": "error", "message": "No observation profiles for the selected depths."})
         obs_df[time_col] = pd.to_datetime(obs_df[time_col], utc=True)
@@ -410,7 +414,7 @@ async def evaluate_baseline_calibration(request: Request, user=Depends(functions
             return JSONResponse({
                 "status": "error", "message": "Baseline output not found – run the baseline first.", "content": content
             })
-        return JSONResponse({"status": "ok", "content": content})
+        return JSONResponse({"status": "ok", "content": content, "qc": qc})
     except Exception as e: functions.error("/evaluate_baseline_calibration", e)
 
 @router.post("/get_stations_calibration")
@@ -466,8 +470,13 @@ async def summarize_calibration(request: Request, user=Depends(functions.basic_a
         summary_list, target_method, weight_method = [], body.get('targetValue'), body.get('weightValue')
         df_params = pd.read_csv(param_samples_path, index_col=0)
         # Process measured data
-        measured_df = pd.DataFrame(data=body.get('obsData'), columns=[time_col, 'temperature', 'depth'])
-        measured_df[time_col] = functions.local_to_utc(measured_df[time_col], time_zone)
+        measured_df, removed, qc = calibration_functions.observations(body.get('obsData'), time_zone)
+        qc_path, qc_rows = os.path.join(calibration_dir, 'obs_qc_removed.csv'), []
+        if not removed.empty:                      # removed values, for review (file + list for the browser tab)
+            rem = removed.copy(); rem[time_col] = functions.utc_to_local(rem[time_col], time_zone)
+            rem.to_csv(qc_path, index=False)
+            qc_rows = rem.round({"temperature": 3}).replace({np.nan: None}).to_dict(orient="records")
+        elif os.path.exists(qc_path): os.remove(qc_path)      # no stale list from an earlier summary
         # Detect measurement periods
         measured_df = measured_df[(measured_df[time_col] >= t_start) & (measured_df[time_col] <= t_end)]
         obs_df = calibration_functions.split_temp_from_depth(measured_df, depths_selected, time_col)
@@ -504,7 +513,9 @@ async def summarize_calibration(request: Request, user=Depends(functions.basic_a
         bias = pd.DataFrame(metric_rows).groupby("depth", sort=False)["bias"].mean()
         bias_txt = "\n   - ".join(f"{d} (m): {b:+.2f}" for d, b in bias.items() if np.isfinite(b))
         return JSONResponse({'status': 'ok', 'message': f'Calibration summary completed ({len(summary_df)} scenarios). '
-            f'\nMean bias (sim - obs, °C):\n\n   - {bias_txt}'})
+            f'\nMean bias (sim - obs, °C):\n\n   - {bias_txt}\n\n{qc}',
+            'qc': {'message': qc, 'file': 'obs_qc_removed.csv', 'removed': qc_rows}
+        })
     except Exception as e: functions.error("/summarize_calibration", e)
 
 @router.post("/correlation_calibration")
@@ -716,8 +727,7 @@ async def comparison_plot(request: Request, user=Depends(functions.basic_auth)):
             start_sim, end_sim = body.get('simStart'), body.get('simEnd')
             start_obs, end_obs = body.get('obsStart'), body.get('obsEnd')
             depths_selected = [x.strip() for x in body.get('depthSelection').split(",") if x.strip()]
-            measured_df = pd.DataFrame(data=obs_data, columns=[time_col, 'temperature', 'depth'])
-            measured_df[time_col] = functions.local_to_utc(measured_df[time_col], time_zone)
+            measured_df, removed, qc = calibration_functions.observations(obs_data, time_zone)
             sim_start, sim_end = functions.local_to_utc(start_sim, time_zone), functions.local_to_utc(end_sim, time_zone)
             obs_start, obs_end = functions.local_to_utc(start_obs, time_zone), functions.local_to_utc(end_obs, time_zone)
             t_start, t_end = max(sim_start, obs_start), min(sim_end, obs_end)
@@ -743,10 +753,52 @@ async def comparison_plot(request: Request, user=Depends(functions.basic_auth)):
             ranges = [r["min_max"] for r in (calibrated, initial) if r and r["min_max"][0] is not None]
             min_max = [min(r[0] for r in ranges), max(r[1] for r in ranges)] if ranges else [0, 1]
             obs_df[time_col] = functions.utc_to_local(obs_df[time_col], time_zone)
+            # Values removed by the QC in the comparison period: plotted (grey x), not used in the metrics
+            removed = removed[(removed[time_col] >= t_start) & (removed[time_col] <= t_end)].copy()
+            removed[time_col] = functions.utc_to_local(removed[time_col], time_zone)
             content = {
                 'sim': calibrated["sim"], 'depth': depths_selected, 'obs': obs_df.replace({np.nan: None}).to_dict(orient="records"),
                 'metrics': calibrated["metrics"], 'station': station, "rmse": calibrated["rmse"], "merge": calibrated["merge"],
                 "min_max": min_max, "project": body.get('projectName'), "initial": initial, "note": note,
+                "removed": removed.replace({np.nan: None}).to_dict(orient="records"), "qc": qc
             }
             return JSONResponse({"status": "ok", "content": content})
     except Exception as e: functions.error("/comparison_plot", e)
+
+@router.post("/finish_calibration")
+async def finish_calibration(request: Request, user=Depends(functions.basic_auth)):
+    extend_task = None
+    try:
+        body = await request.json()
+        old_project, new_project = body.get('oldName'), body.get('newName')
+        project_old, _ = functions.project_definer(old_project, user)
+        project_new, _ = functions.project_definer(new_project, user)
+        checked = body.get('delete', False)
+        old_dir = os.path.join(PROJECT_ROOT, project_old)
+        new_dir = os.path.join(PROJECT_ROOT, project_new)
+        redis = request.app.state.redis
+        lock = redis.lock(f"{project_old}:copy_project", timeout=30)
+        async with lock:
+            # Optional: auto-extend lock if deletion may take long
+            extend_task = asyncio.create_task(functions.auto_extend(lock))
+            calibration_dir = os.path.join(new_dir, 'calibration')
+            if os.path.exists(calibration_dir): functions.safe_remove(calibration_dir)
+            folders = ['DFM_DELWAQ', 'input', 'output/HYD']
+            for item in folders:
+                temp_dir = os.path.join(new_dir, item)
+                if os.path.exists(temp_dir): functions.safe_remove(temp_dir)
+                shutil.copytree(os.path.join(old_dir, item), temp_dir)
+            log_file = os.path.join(old_dir, 'logs', 'log_hyd.txt')
+            if os.path.exists(log_file): 
+                shutil.copy2(log_file, os.path.join(new_dir, 'logs', 'log_hyd.txt'))
+        if checked == True: functions.safe_remove(old_dir)
+        calibration_path = os.path.join(PROJECT_ROOT, project_new, "input", 'calibration.json')
+        with open(calibration_path, 'w', encoding='utf-8') as f:
+            json.dump({'calibration': True}, f)
+        return JSONResponse({"status": "ok", 'message': f"Scenario '{new_project}' is overwritten successfully."})
+    except Exception as e: functions.error("/finish_calibration", e)
+    finally:
+        if extend_task:
+            extend_task.cancel()
+            try: await extend_task
+            except asyncio.CancelledError: pass

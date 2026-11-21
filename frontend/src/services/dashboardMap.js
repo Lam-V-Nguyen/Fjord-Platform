@@ -49,11 +49,11 @@ export const LAYER_DEFS = [
     { key: 'field', label: 'Simulation field', kind: 'gradient', on: true },
     { key: 'stations', label: 'Observation stations', kind: 'point', color: '#e879f9', icon: 'eye', on: true },
     { key: 'alerts', label: 'Alert zones', kind: 'zone', color: '#f43f5e', on: true },
-    // context: true -> chỉ hiện trong danh sách khi backend trả dữ liệu (file .geojson / depth.csv tồn tại)
-    { key: 'lake', label: 'Lake boundary', kind: 'polygon', color: '#38bdf8', on: true, context: true },
-    { key: 'catchment', label: 'Catchment', kind: 'polygon-dashed', color: '#a3e635', on: false, context: true },
-    { key: 'rivers', label: 'River network', kind: 'line', color: '#60a5fa', on: false, context: true },
-    { key: 'bathymetry', label: 'Bathymetry points', kind: 'gradient', palette: 'bathymetry', on: false, context: true },
+    // context: true -> luôn có trong danh sách, chỉ sáng khi dự án có file tương ứng trong <project>/others
+    { key: 'lake', label: 'Lake boundary', kind: 'polygon', color: '#38bdf8', on: true, context: true, file: 'lake.geojson' },
+    { key: 'catchment', label: 'Catchment', kind: 'polygon-dashed', color: '#a3e635', on: false, context: true, file: 'catchment.geojson' },
+    { key: 'rivers', label: 'River network', kind: 'line', color: '#60a5fa', on: false, context: true, file: 'river.geojson' },
+    { key: 'bathymetry', label: 'Bathymetry points', kind: 'gradient', palette: 'bathymetry', on: false, context: true, file: 'depth.csv' },
     // Lớp bổ sung: chỉ bật được khi dự án có dữ liệu (xem setAvailability / registerExtra)
     { key: 'movement', label: 'Flow movement (HYD)', kind: 'gradient', palette: 'speed_light', on: false, extra: true },
     { key: 'pollution', label: 'Pollutant spread (WAQ)', kind: 'gradient', palette: 'quality', on: false, extra: true },
@@ -110,6 +110,7 @@ export class DashboardMap {
         this.scaleMode = localStorage.getItem('dash-scale-mode') || 'fixed';
         this.extraHandlers = {};          // key -> async (on) => {...}  (lớp bổ sung)
         this.availability = {};           // key -> {available, ready, reason}
+        this.baseAvail = {};              // key -> {available, reason}  (field, stations, alerts, lớp nền)
         this.extraLegends = {};           // key -> {title, palette, min, max, note} | [ ... ]
         this.settingsHandlers = {};       // key -> (btn) => mở bảng cài đặt
         this.loadingKeys = new Set();
@@ -180,7 +181,12 @@ export class DashboardMap {
     // Mesh + field
     setMesh(mesh) {
         this.meshLayers = [];
-        if (!mesh || !mesh.features?.length) { this._addGroup('field', L.layerGroup()); return; }
+        const ok = !!mesh?.features?.length;
+        this._setBase('field', ok, 'No map results (HYD/WAQ *_map) in this project');
+        if (!ok) {
+            this.field = null; this.rawField = null; this.meshBounds = null;
+            this._addGroup('field', L.layerGroup()); this.renderLayerList(); this.renderLegend(); return;
+        }
         const group = L.layerGroup();
         mesh.features.forEach((f, i) => {
             const ring = f.geometry.coordinates[0];
@@ -204,7 +210,7 @@ export class DashboardMap {
         });
         this._addGroup('field', group);
         this.meshBounds = L.latLngBounds(mesh.bounds);
-        this.renderLegend();
+        this.renderLayerList(); this.renderLegend();
     }
 
     setField(field) {
@@ -247,6 +253,7 @@ export class DashboardMap {
             g.addLayer(m);
         });
         this._addGroup('stations', g);
+        this._setBase('stations', Object.keys(this.stationMarkers).length > 0, 'No observation stations with coordinates');
         this.groups.alerts = this.groups.alerts || L.layerGroup();
         if ((this.state.alerts ?? true) && !this.map.hasLayer(this.groups.alerts)) this.groups.alerts.addTo(this.map);
         this.renderLayerList(); this.renderLegend();
@@ -267,14 +274,16 @@ export class DashboardMap {
 
     // context layers
     setContext(layers) {
-        const parts = [];
+        const parts = []; layers = layers || {};  // null = dự án không tồn tại / không đọc được -> tất cả mờ
         const hasGeo = (gj) => !!(gj && (gj.features ? gj.features.length : gj.type));
         this.contextAvail = {
             lake: hasGeo(layers.lake), catchment: hasGeo(layers.catchment), rivers: hasGeo(layers.rivers),
             bathymetry: Array.isArray(layers.bathymetry) && layers.bathymetry.length > 0,
         };
-        // Lớp không còn dữ liệu (vd. file bị xoá): gỡ khỏi bản đồ
+        // Cập nhật trạng thái MỌI lớp nền (có dữ liệu -> bật được; không có -> mờ + lý do), gỡ lớp không còn dữ liệu
         Object.entries(this.contextAvail).forEach(([k, ok]) => {
+            const file = this.defs.find(d => d.key === k)?.file;
+            this._setBase(k, ok, `No ${file} in the project folder 'others'`);
             if (!ok && this.groups[k]) { this.map.removeLayer(this.groups[k]); delete this.groups[k]; }
         });
         if (this.contextAvail.lake) {
@@ -300,6 +309,10 @@ export class DashboardMap {
                 renderer: r, radius: 2.4, stroke: false, fillOpacity: 0.85, fillColor: paletteColor(d / maxD, 'bathymetry'),
             }).bindTooltip(`${d.toFixed(0)} m`, { className: 'dash-tooltip' }))));
         }
+        // Remove previous GIS layers
+        Object.keys(this.groups).filter(k => k.startsWith('gis:')).forEach(k => {
+            this.map.removeLayer(this.groups[k]); delete this.groups[k];
+        });
         this.defs = this.defs.filter(d => !d.key.startsWith('gis:'));
         const palette = seriesColors();
         Object.entries(layers.gis || {}).forEach(([name, gj], i) => {
@@ -342,7 +355,9 @@ export class DashboardMap {
             g.addLayer(circle);
             items.forEach(i => { this.alertMarkers[i.id] = circle; });
         });
-        this.renderLegend();
+        this._setBase('alerts', Object.keys(byLoc).length > 0, Object.keys(this.stationMarkers).length
+            ? 'No alerts for the selected period / filters' : 'No observation stations - no alert zones');
+        this.renderLayerList(); this.renderLegend();
     }
 
     focusAlert(alert) {
@@ -355,18 +370,23 @@ export class DashboardMap {
         return true;
     }
 
-    // Lớp nền chưa tải xong (contextAvail chưa có) hoặc không có file -> không hiện trong danh sách
-    isListed(d) { return !d.context || !!this.contextAvail?.[d.key]; }
+    // Có dữ liệu để bật/tắt? Lớp bổ sung: theo /dashboard/extras; lớp GIS: luôn có (chỉ tạo khi có file);
+    // còn lại: theo dữ liệu đã nạp (chưa nạp xong -> mờ, "Checking data…")
+    _setBase(key, available, reason) { this.baseAvail[key] = { available: !!available, reason: available ? '' : reason }; }
+    isAvailable(d) {
+        if (d.extra) return !!this.availability[d.key]?.available;
+        if (d.key.startsWith('gis:')) return true;
+        return !!this.baseAvail[d.key]?.available;
+    }
+    reasonOf(d) { return (d.extra ? this.availability[d.key]?.reason : this.baseAvail[d.key]?.reason) || 'Checking data…'; }
     // list & legend
     renderLayerList() {
         if (!this.layerListEl) return;
-        this.layerListEl.innerHTML = this.defs.filter(d => this.isListed(d)).map(d => {
-            const av = this.availability[d.key];
-            const disabled = d.extra && !(av && av.available);
-            const on = !disabled && (this.state[d.key] ?? d.on);
-            const loading = this.loadingKeys.has(d.key);
+        this.layerListEl.innerHTML = this.defs.map(d => {
+            const av = this.availability[d.key]; const disabled = !this.isAvailable(d);
+            const on = !disabled && (this.state[d.key] ?? d.on); const loading = this.loadingKeys.has(d.key);
             const sw = d.kind === 'gradient' ? paletteCss(d.palette || this.field?.palette || 'thermal') : d.color;
-            const tip = disabled ? (av?.reason || 'Checking data…') : (d.extra && av?.reason ? `${d.label} – ${av.reason}` : d.label);
+            const tip = disabled ? this.reasonOf(d) : (d.extra && av?.reason ? `${d.label} – ${av.reason}` : d.label);
             return `<label class="layer-item${disabled ? ' disabled' : ''}${loading ? ' loading' : ''}" title="${esc(tip)}">
                 <input type="checkbox" data-layer="${esc(d.key)}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
                 <span class="layer-check"></span><span class="layer-name">${esc(d.label)}</span>
@@ -430,6 +450,7 @@ export class DashboardMap {
             if (h) h(on);
             return;
         }
+        if (!this.isAvailable(def || { key })) return;     // mờ: không đổi trạng thái đã lưu
         this.state[key] = on; saveState(this.state);
         const g = this.groups[key];
         if (g) { on ? g.addTo(this.map) : this.map.removeLayer(g); }
@@ -440,7 +461,7 @@ export class DashboardMap {
 
     toggleAll() {
         // Lớp bổ sung (nặng) không bật/tắt hàng loạt
-        const base = this.defs.filter(d => !d.extra && this.isListed(d));
+        const base = this.defs.filter(d => !d.extra && this.isAvailable(d));
         const anyOff = base.some(d => !(this.state[d.key] ?? d.on));
         base.forEach(d => this.toggle(d.key, anyOff));
     }
@@ -456,10 +477,10 @@ export class DashboardMap {
             return `<span class="pg" style="border-color:${d.color}; border-style:${dash}; background:${d.color}22"></span>`;
         };
         const hasContent = (g) => !g.getLayers || g.getLayers().length > 0;
-        const active = this.defs.filter(d => d.key !== 'field' && (this.state[d.key] ?? d.on) && this.groups[d.key] && hasContent(this.groups[d.key]));
+        const active = this.defs.filter(d => d.key !== 'field' && this.isAvailable(d) && (this.state[d.key] ?? d.on) && this.groups[d.key] && hasContent(this.groups[d.key]));
         let html = '';
-        if (this.field && (this.state.field ?? true)) {
-            const x = (this.field.min + this.field.max) / 2;
+        if (this.field && this.isAvailable({ key: 'field' }) && (this.state.field ?? true)) {
+            const x = this.field;
             html += `<div class="legend-field">
                 <div class="lf-title">${esc(this.field.label)}${this.field.unit ? ` (${esc(this.field.unit)})` : ''}</div>
                 <div class="lf-mode">Scale: <button data-scale="fixed" class="${this.scaleMode === 'fixed' ? 'active' : ''}">all times</button><button data-scale="frame" class="${this.scaleMode === 'frame' ? 'active' : ''}">this frame</button></div>
@@ -476,19 +497,29 @@ export class DashboardMap {
                 ${x.note ? `<div class="lf-note">${esc(x.note)}</div>` : ''}
             </div>`; });
         });
-        html += active.map(d => `<div class="legend-row"><span class="legend-sym">${sym(d)}</span>${esc(d.label)}</div>`).join('');
+        html += active.map(d => `<div class="legend-row"><span class="legend-sym">${sym(d)}</span><span class="lr-name">${esc(d.label)}</span></div>`).join('');
         this.legendEl.style.display = html ? '' : 'none';
         this.legendEl.innerHTML = html ? `<h5>Legend</h5>${html}` : '';
         this.legendEl.querySelectorAll('[data-scale]').forEach(b => b.addEventListener('click', () => this.setScaleMode(b.dataset.scale)));
     }
 
     // utils
+    // Bản đồ đang bị ẩn (vd. khung Wflow 3D che, kích thước 0×0)? Khi đó Leaflet tính zoom sai
+    // (fitBounds trên khung 0×0 -> zoom tối đa) nên bỏ qua.
+    isShown() {
+        const c = this.map?.getContainer();
+        return !!(c && c.offsetWidth > 0 && c.offsetHeight > 0);
+    }
     fit() {
+        if (!this.isShown()) return;
         const b = this.meshBounds || this.contextBounds;
         if (b && b.isValid()) this.map.fitBounds(b, { padding: [28, 28] });
     }
-
     invalidate(refit = false) {
-        setTimeout(() => { this.map?.invalidateSize(); if (refit) this.fit(); }, 60);
+        setTimeout(() => {
+            if (!this.isShown()) return;
+            this.map?.invalidateSize();
+            if (refit) this.fit();
+        }, 60);
     }
 }

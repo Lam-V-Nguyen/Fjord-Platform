@@ -6,7 +6,7 @@
     grid-template-rows: auto auto minmax(260px, 1fr) auto;
 }
 
-/* ------------------------------------------------------------ KPI cards */
+/*  KPI cards */
 .kpi-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--gap); }
 .kpi-card {
     display: flex; gap: 12px; align-items: center; min-width: 0;
@@ -53,8 +53,8 @@
     display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
     padding: 12px 14px 6px;
 }
-.panel-title { font-size: 13.5px; font-weight: 650; }
-.panel-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.panel-title { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel-body { flex: 1; min-height: 0; padding: 6px 14px 12px; position: relative; }
 .panel-foot { padding: 0 14px 12px; display: flex; justify-content: center; }
 .panel-foot a, .link-btn {
@@ -149,10 +149,10 @@
 
 .monitor-grid { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 6px; padding: 4px 10px 12px; }
 .monitor-cell { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; min-width: 0; }
-.monitor-cell .m-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.monitor-cell .m-value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.monitor-cell .m-label { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.monitor-cell .m-value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .monitor-cell .m-value small { font-size: 11px; color: var(--muted); font-weight: 500; }
-.monitor-cell .m-sub { font-size: 11px; font-weight: 600; }
+.monitor-cell .m-sub { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .monitor-cell .m-icon { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; margin: 4px 0 2px; }
 #gauge-wqi { width: 100%; height: 96px; }
 
@@ -179,7 +179,7 @@
 
 .donut-wrap { display: grid; grid-template-columns: 1fr 112px; align-items: center; gap: 6px; height: 100%; }
 #donut-chart { height: 100%; min-height: 110px; }
-.donut-legend { display: flex; flex-direction: column; gap: 9px; font-size: 12px; }
+.donut-legend .dl-name { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .donut-legend .dl-row { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 7px; }
 .donut-legend .dl-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--sev); }
 .donut-legend .dl-name { color: var(--text-2); }
@@ -201,14 +201,14 @@
 .alert-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .sev-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 650; background: var(--sev-soft); color: var(--sev); text-transform: capitalize; }
 
-/* ------------------------------------------------------------ Map View mode */
+/*  Map View mode */
 .overview.map-mode { grid-template-rows: 1fr; }
 .overview.map-mode .kpi-row, .overview.map-mode .side-col, .overview.map-mode .bottom-row,
 .overview.map-mode .weather-row, .overview.map-mode .empty-card { display: none; }
 .overview.map-mode .dash-grid { grid-template-columns: 1fr; }
 .overview.map-mode .panel-map { min-height: calc(100vh - var(--topbar-h) - 32px); }
 
-/* ------------------------------------------------------------ Responsive */
+/*  Responsive */
 @media (max-width: 1500px) {
     .kpi-value { font-size: 19px; }
     .kpi-icon { width: 34px; height: 34px; }
@@ -268,8 +268,8 @@ select option { background: var(--panel); color: var(--text); }
 .tb-label { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); white-space: nowrap; min-width: 118px; text-align: right; }
 
 /* Chú giải: thang màu của trường */
-.legend-field { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.legend-field .lf-title { font-weight: 650; color: var(--text); margin-bottom: 5px; }
+.legend-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; color: var(--text-2); min-width: 0; }
+.legend-field .lf-title { font-weight: 650; color: var(--text); margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .legend-field .lf-bar { height: 9px; border-radius: 5px; }
 .legend-field .lf-scale { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
 
@@ -491,3 +491,41 @@ select option { background: var(--panel); color: var(--text); }
     .weather-body { grid-template-columns: 1fr; }
     .weather-chart-wrap { height: 160px; }
 }
+
+/* Alert thresholds editor */
+#thresholds-modal .modal { width: min(1100px, 100%); }
+.modal-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); }
+.thr-title { margin: 14px 0 2px; font-size: 13px; }
+.thr-title:first-child { margin-top: 0; }
+.thr-note { font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.thr-table td { padding: 4px; }
+.thr-table input, .thr-table select {
+    width: 100%; box-sizing: border-box; height: 28px; padding: 0 6px; font-size: 12.5px;
+    background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+}
+.thr-table input[readonly] { opacity: 0.7; }
+.thr-table td:nth-child(1) { width: 110px; } .thr-table td:nth-child(3) { width: 80px; }
+.thr-table td:nth-child(4) { width: 100px; } .thr-table td:nth-child(5), .thr-table td:nth-child(6) { width: 84px; }
+.thr-table td:nth-child(8) { width: 64px; } .thr-table td:nth-child(9) { width: 32px; }
+.thr-table tr.thr-bad input, .thr-table tr.thr-bad select { border-color: var(--sev-high); }
+.thr-error { color: var(--sev-high); font-size: 12px; margin-top: 8px; }
+
+.kpi-card.tone-green .kpi-status.sev-high   { color: var(--sev-high); }
+.kpi-card.tone-green .kpi-status.sev-medium { color: var(--sev-medium); }
+.kpi-card.tone-green .kpi-status.sev-low    { color: var(--sev-low); }
+.kpi-flag {
+    display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 10px; font-weight: 700;
+    line-height: 16px; vertical-align: 1px; color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent);
+}
+.kpi-flag.sev-high { --c: var(--sev-high); }
+.kpi-flag.sev-medium { --c: var(--sev-medium); }
+
+/* Tên dài: cắt bằng "…" thay vì chồng lấn (hint đầy đủ do initAutoHints gắn khi rê chuột) */
+.panel-head > div:first-child { min-width: 0; flex: 1 1 auto; }       /* khối tiêu đề co lại, nhường chỗ ô chọn */
+.panel-head > .mini-selects, .panel-head > .tabs { flex: 0 0 auto; }
+.monitor-grid > .monitor-cell { overflow: hidden; }
+.legend-row .lr-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-selects select { text-overflow: ellipsis; }
+.kpi-label { display: flex; align-items: center; min-width: 0; }
+.kpi-label .kpi-flag { flex: 0 0 auto; }
+.kpi-label .kpi-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

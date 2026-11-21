@@ -22,6 +22,7 @@ import numpy as np, pandas as pd, xarray as xr
 from config import PROJECT_ROOT
 from services import constants
 from pyproj import Transformer
+from scipy.spatial import KDTree
 
 _LOCK = threading.Lock()
 _MESH_CACHE: dict[str, tuple[float, dict]] = {}
@@ -108,48 +109,119 @@ def _to_wgs84(x, y, crs):
         traceback.print_exc()
         return x, y
 
-def _face_centroids(ds: xr.Dataset):
-    """Face centres in the file's own coordinates (no reprojection), or None."""
-    for xk, yk in (("mesh2d_face_x", "mesh2d_face_y"), ("FlowElem_xcc", "FlowElem_ycc")):
-        if xk in ds.variables and yk in ds.variables:
-            return np.asarray(ds[xk].values, float).ravel(), np.asarray(ds[yk].values, float).ravel()
+def _face_geometry(ds: xr.Dataset):
+    """(node_x, node_y, faces) – faces: (nFaces, nMax) chỉ số nút 0-based, -1 = trống; None nếu file không có."""
     for nxk, nyk, fk in (("mesh2d_node_x", "mesh2d_node_y", "mesh2d_face_nodes"),
                          ("NetNode_x", "NetNode_y", "NetElemNode")):
-        if fk in ds.variables:
-            nx, ny = np.asarray(ds[nxk].values, float), np.asarray(ds[nyk].values, float)
+        if fk in ds.variables and nxk in ds.variables:
+            nx, ny = np.asarray(ds[nxk].values, float).ravel(), np.asarray(ds[nyk].values, float).ravel()
             fn = np.asarray(ds[fk].values, float)
             start = int(ds[fk].attrs.get("start_index", 1))
             valid = np.isfinite(fn) & (fn >= start) & (fn < start + len(nx))
-            idx = np.where(valid, fn - start, 0).astype(int)
-            n = np.maximum(valid.sum(axis=1), 1)
-            return (np.where(valid, nx[idx], 0).sum(axis=1) / n, np.where(valid, ny[idx], 0).sum(axis=1) / n)
+            return nx, ny, np.where(valid, fn - start, -1).astype(np.int64)
     return None
+
+def _vertex_mean(geom):
+    nx, ny, faces = geom
+    valid = faces >= 0
+    idx, n = np.where(valid, faces, 0), np.maximum(valid.sum(axis=1), 1)
+    return (np.where(valid, nx[idx], 0).sum(axis=1) / n, np.where(valid, ny[idx], 0).sum(axis=1) / n)
+
+def _face_centroids(ds: xr.Dataset):
+    """Face centres in the file's own coordinates (no reprojection), or None.
+    Ưu tiên trung bình đỉnh (cách tính GIỐNG NHAU cho mọi file). mesh2d_face_x/y của D-Flow FM là TÂM ĐƯỜNG
+    TRÒN NGOẠI TIẾP (có thể nằm ngoài tam giác) – không so được với trung bình đỉnh của file khác."""
+    geom = _face_geometry(ds)
+    if geom is not None: return _vertex_mean(geom)
+    for xk, yk in (("mesh2d_face_x", "mesh2d_face_y"), ("FlowElem_xcc", "FlowElem_ycc")):
+        if xk in ds.variables and yk in ds.variables:
+            return np.asarray(ds[xk].values, float).ravel(), np.asarray(ds[yk].values, float).ravel()
+    return None
+
+def _same_frame(display_ds: xr.Dataset, value_ds: xr.Dataset, a, b):
+    """Đưa hai bộ toạ độ về cùng hệ: nếu khác CRS (hoặc một file độ, một file mét) -> cả hai về WGS84."""
+    ca, cb = _crs_of(display_ds), _crs_of(value_ds)
+    geo = lambda xy: np.nanmax(np.abs(xy[0])) <= 360 and np.nanmax(np.abs(xy[1])) <= 90
+    if (ca and cb and ca != cb) or geo(a) != geo(b):
+        a = _to_wgs84(a[0], a[1], None if geo(a) else (ca or cb))
+        b = _to_wgs84(b[0], b[1], None if geo(b) else (cb or ca))
+    return (np.asarray(a[0], float), np.asarray(a[1], float)), (np.asarray(b[0], float), np.asarray(b[1], float))
+
+def _vertex_keys(geom, q):
+    """Khoá hình học của mỗi ô: tập toạ độ đỉnh (lượng tử hoá theo q, sắp xếp) – không phụ thuộc thứ tự ô/đỉnh."""
+    nx, ny, faces = geom
+    qx, qy = np.round(nx / q).astype(np.int64), np.round(ny / q).astype(np.int64)
+    return [tuple(sorted(zip(qx[r[r >= 0]].tolist(), qy[r[r >= 0]].tolist()))) for r in faces]
 
 def face_order(display_ds: xr.Dataset, value_ds: xr.Dataset):
     """
     Cell order of `value_ds` (e.g. DELWAQ map, written on the waqgeom grid) relative to the mesh drawn
-    from `display_ds` (e.g. D-Flow FM map). Returns idx so that values_of_value_ds[..., idx] is in display
-    order, or None when both files already use the same order. Raises if the grids do not match cell by cell.
+    from `display_ds` (e.g. D-Flow FM map). Returns idx (len = số ô hiển thị) so that values_of_value_ds[..., idx]
+    is in display order, or None when both files already use the same order.
+    Các bước (dừng ở bước đầu tiên thành công):
+      1. Khớp CHÍNH XÁC theo toạ độ đỉnh của ô (không phụ thuộc thứ tự ô, thứ tự đỉnh, cách tính tâm)
+      2. Khớp 1–1 theo tâm ô (trung bình đỉnh, cùng cách tính cho cả hai file) trong 1/4 kích thước ô
+      3. Lưới WAQ gộp / khác lưới: mỗi ô hiển thị lấy ô WAQ CHỨA tâm của nó (thiếu thì ô gần nhất trong 2 ô)
+    Raises chỉ khi hai lưới gần như không chồng lên nhau.
     """
-    ch, cw = _face_centroids(display_ds), _face_centroids(value_ds)
-    if ch is None or cw is None:
+    gd, gv = _face_geometry(display_ds), _face_geometry(value_ds)
+    cd, cv = _face_centroids(display_ds), _face_centroids(value_ds)
+    if cd is None or cv is None:
         raise ValueError("Cannot read face coordinates of the HYD/WAQ map files to align the grids")
-    if len(ch[0]) != len(cw[0]):
-        raise ValueError(f"WAQ map has {len(cw[0])} cells but the HYD mesh has {len(ch[0])} "
-            "(aggregated WAQ grid?) - cannot draw WAQ results on the HYD mesh"
+    cd, cv = _same_frame(display_ds, value_ds, cd, cv)
+    n_d, n_v = len(cd[0]), len(cv[0])
+    ext = max(np.nanmax(cd[0]) - np.nanmin(cd[0]), np.nanmax(cd[1]) - np.nanmin(cd[1]), 1e-12)
+    cell = ext / max(np.sqrt(n_v), 1.0)                      # kích thước ô điển hình
+    ident = np.arange(n_d)
+    # 1. Khớp theo đỉnh
+    if gd is not None and gv is not None:
+        (dx, dy), (vx, vy) = _same_frame(display_ds, value_ds, gd[:2], gv[:2])
+        q = 1e-5 * ext
+        kv = {k: i for i, k in enumerate(_vertex_keys((vx, vy, gv[2]), q))}
+        hits = [kv.get(k, -1) for k in _vertex_keys((dx, dy, gd[2]), q)]
+        order = np.asarray(hits, np.int64)
+        if (order >= 0).all() and len(np.unique(order)) == n_d:
+            if n_d == n_v and (order == ident).all(): 
+                print(f"[results] WAQ and HYD map grids are identical ({n_d} cells, same order) - no reordering")
+                return None
+            print(f"[results] WAQ cells matched to the HYD mesh by vertices "
+                f"({int((order != ident[:len(order)]).sum()) if n_d == n_v else n_d} of {n_d} cells reordered)")
+            return order
+    
+    ok_v = np.isfinite(cv[0]) & np.isfinite(cv[1])
+    tree, vid = KDTree(np.column_stack([cv[0][ok_v], cv[1][ok_v]])), np.nonzero(ok_v)[0]
+    pd_ = np.column_stack([np.nan_to_num(cd[0]), np.nan_to_num(cd[1])])
+    dist, j = tree.query(pd_)
+    order = vid[j].astype(np.int64)
+    # 2. 1–1 theo tâm ô
+    if n_d == n_v and len(np.unique(order)) == n_d and np.nanmax(dist) < 0.25 * cell:
+        if (order == ident).all(): return None
+        print(f"[results] WAQ cells matched to the HYD mesh by centroids ({int((order != ident).sum())} of {n_d} reordered)")
+        return order
+    # 3. Ô chứa tâm (lưới gộp / khác lưới)
+    inside = np.zeros(n_d, bool)
+    if gv is not None:
+        try:
+            from shapely import points, polygons, STRtree
+            vx, vy = _same_frame(display_ds, value_ds, cd, gv[:2])[1]
+            rings = [np.column_stack([vx[r[r >= 0]], vy[r[r >= 0]]]) for r in gv[2]]
+            ok = [len(r) >= 3 for r in rings]
+            polys = polygons([r if k else np.zeros((3, 2)) for r, k in zip(rings, ok)])
+            pi, fi = STRtree(polys).query(points(pd_), predicate="within")
+            sel = np.asarray(ok)[fi]
+            first = {}
+            for p_, f_ in zip(pi[sel], fi[sel]): first.setdefault(int(p_), int(f_))
+            for p_, f_ in first.items(): order[p_], inside[p_] = f_, True
+        except Exception as e:
+            print(f"[results] polygon matching unavailable ({e}) - using nearest WAQ cells")
+    near = inside | (dist < 2 * cell)
+    if near.mean() < 0.9:
+        raise ValueError(f"HYD and WAQ map grids do not overlap ({int(near.sum())} of {n_d} HYD cells lie inside "
+            f"or next to a WAQ cell; HYD {n_d} cells, WAQ {n_v} cells) - cannot align WAQ results."
         )
-    scale = max(np.nanmax(ch[0]) - np.nanmin(ch[0]), np.nanmax(ch[1]) - np.nanmin(ch[1]), 1e-12)
-    tol = 1e-6 * scale
-    if np.allclose(ch[0], cw[0], atol=tol) and np.allclose(ch[1], cw[1], atol=tol): return None
-    from scipy.spatial import cKDTree
-    ptw = np.column_stack([np.nan_to_num(cw[0]), np.nan_to_num(cw[1])])
-    pth = np.column_stack([np.nan_to_num(ch[0]), np.nan_to_num(ch[1])])
-    dist, idx = cKDTree(ptw).query(pth)
-    if len(np.unique(idx)) != len(idx) or np.nanmax(dist) > 1e-3 * scale:
-        raise ValueError("HYD and WAQ map grids do not match cell by cell - cannot align WAQ results")
-    order = idx.astype(np.int64)
-    print(f"[results] WAQ map faces are ordered differently from the HYD mesh - reordering "
-        f"({int((order != np.arange(len(order))).sum())} of {len(order)} cells moved)")
+    print(f"[results] WAQ grid ({n_v} cells) differs from the HYD mesh ({n_d} cells) - approximate mapping: "
+        f"{int(inside.sum())} HYD cells inside a WAQ cell, {int((~inside).sum())} by nearest WAQ cell"
+    )
     return order
 
 def surface_index(source: str, n_layers: int) -> int:
@@ -158,17 +230,31 @@ def surface_index(source: str, n_layers: int) -> int:
 def bottom_index(source: str, n_layers: int) -> int:
     return 0 if source == "hyd" else n_layers - 1
 
+def _edge_layer(da, ld: str, source: str, which: str):
+    """Lớp mặt/đáy CÓ GIÁ TRỊ tại từng điểm & thời điểm.
+    z-layers (Layertype = 2): lớp dưới đáy / trên mặt nước là NaN -> chỉ số cố định (0 hoặc n-1) cho NaN
+    ở hầu hết trạm -> Stratification ΔT, nhiệt độ đáy rỗng."""
+    n = da.sizes[ld]
+    fixed = bottom_index(source, n) if which == "bottom" else surface_index(source, n)
+    try:
+        idx = xr.DataArray(np.arange(n), dims=ld)
+        pos = idx.where(da.notnull())
+        pos = pos.min(ld) if fixed == 0 else pos.max(ld)        # tìm từ phía chỉ số cố định vào trong
+        pos = pos.fillna(fixed).astype(int).compute()
+        return da.isel({ld: pos})
+    except Exception:
+        return da.isel({ld: fixed})
+
 def select_layer(da, source: str, layer: str):
     """layer: 'surface' | 'bottom' | 'average' | order."""
     ld = layer_dim(da, exclude=[d for d in (time_dim(da), station_dim(da), face_dim(da)) if d])
     if ld is None or ld not in da.dims: return da
-    n = da.sizes[ld]
     if layer == "average": return da.mean(dim=ld, skipna=True)
-    if layer == "bottom": return da.isel({ld: bottom_index(source, n)})
+    if layer == "bottom": return _edge_layer(da, ld, source, "bottom")
     if layer not in (None, "", "surface"):
         try: return da.isel({ld: int(layer)})
         except Exception: pass
-    return da.isel({ld: surface_index(source, n)})
+    return _edge_layer(da, ld, source, "surface")
 
 def var_meta(source: str, name: str) -> dict:
     if source == "hyd":
@@ -705,6 +791,28 @@ class ProjectResults:
         meta = os.path.join(self.waq_dir, f"{self.waq_name}.json") if self.waq_name else None
         try: return bool(meta and os.path.exists(meta) and json.load(open(meta)).get("synthetic"))
         except Exception: return False
+
+def waq_scenarios(project_name: str) -> dict:
+    """Kịch bản WAQ có kết quả (output/WAQ/<name>_his|_map.zarr|.nc + <name>.json) để chọn nhanh trên dashboard.
+    hyd_params = [HYD his, HYD map] – cùng tham số mà Visualization gửi cho /setup_database."""
+    pr = ProjectResults(project_name)
+    out = []
+    if os.path.isdir(pr.waq_dir):
+        files = set(os.listdir(pr.waq_dir))
+        names = sorted({f.rsplit("_", 1)[0] for f in files
+                        if f.endswith(("_his.zarr", "_map.zarr", "_his.nc", "_map.nc"))})
+        for n in names:
+            meta = os.path.join(pr.waq_dir, f"{n}.json")
+            if not os.path.exists(meta): continue                 # Visualization cũng chỉ liệt kê kịch bản có <name>.json
+            try: model = json.load(open(meta, encoding="utf-8")).get("model_type", "")
+            except Exception: model = ""
+            out.append({"name": n, "model_type": model,
+                "his": f"{n}_his.zarr" if f"{n}_his.zarr" in files else "",
+                "map": f"{n}_map.zarr" if f"{n}_map.zarr" in files else ""})
+    hyd = sorted(f for f in os.listdir(pr.hyd_dir) if f.endswith(".zarr")) if os.path.isdir(pr.hyd_dir) else []
+    his = next((f for f in hyd if f.endswith("_his.zarr")), "")
+    mp = next((f for f in hyd if f.endswith("_map.zarr")), "")
+    return {"scenarios": out, "current": pr.waq_name, "hyd_params": [his, mp]}
 
 def catalog(project_name: str) -> dict:
     pr = ProjectResults(project_name); info = pr.info()

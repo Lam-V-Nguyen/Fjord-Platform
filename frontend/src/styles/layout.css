@@ -7,7 +7,7 @@
 }
 .app.sidebar-collapsed { grid-template-columns: 68px 1fr; }
 
-/* ------------------------------------------------------------ Sidebar */
+/*  Sidebar */
 .sidebar {
     background: linear-gradient(180deg, #0a1322 0%, #08101d 100%);
     border-right: 1px solid var(--border); position: relative;
@@ -120,7 +120,7 @@
 .app.sidebar-collapsed .nav-item { justify-content: center; padding: 10px; }
 .app.sidebar-collapsed .brand { justify-content: center; padding: 16px 8px; }
 
-/* ------------------------------------------------------------ Main + Topbar */
+/*  Main + Topbar */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .topbar {
     height: var(--topbar-h); flex: 0 0 auto;
@@ -174,10 +174,17 @@
 }
 .date-field input::-webkit-calendar-picker-indicator { filter: invert(0.8); cursor: pointer; }
 
+.waq-field select {
+    background: transparent; border: none; outline: none; color: var(--text); font-size: 13px;
+    max-width: 210px; text-overflow: ellipsis; cursor: pointer;
+}
+.waq-field select option { background: var(--panel); color: var(--text); }
+.waq-field select:disabled { opacity: 0.6; cursor: wait; }
+
 .project-chip { max-width: 190px; }
 .project-chip .label { overflow: hidden; text-overflow: ellipsis; }
 
-/* ------------------------------------------------------------ Views */
+/*  Views */
 .views { position: relative; flex: 1; min-height: 0; }
 /* Dùng visibility thay vì display:none để Leaflet/Gridstack/Plotly luôn giữ kích thước */
 .view {
@@ -202,7 +209,7 @@
 .workspace-empty h3 { all: unset; display: block; color: var(--text); font-size: 16px; font-weight: 600; margin-bottom: 6px; }
 .quick-tools { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
 
-/* ------------------------------------------------------------ Popover / modal / toast */
+/*  Popover / modal / toast */
 .popover {
     position: absolute; z-index: 1500; min-width: 240px;
     background: var(--panel); border: 1px solid var(--border-strong);
@@ -238,7 +245,7 @@
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-/* ------------------------------------------------------------ Responsive */
+/*  Responsive */
 @media (max-width: 1280px) {
     .toolbar .btn .label-optional { display: none; }
     .title-block p { display: none; }
@@ -278,10 +285,10 @@
     .map-legend { display: none; }
 }
 
-/* ---------------------------------------------------------------------
+/* ---------
    Hộp thoại chọn dự án (projectManager.js -> .pm-overlay / .pm-modal)
    Định nghĩa đầy đủ tại đây để luôn nằm giữa màn hình, không phụ thuộc index.css
-   --------------------------------------------------------------------- */
+   --------- */
 .pm-overlay {
     position: fixed; inset: 0; z-index: 5000;
     display: flex; align-items: center; justify-content: center; padding: 20px;
