@@ -22,12 +22,12 @@ async def get_scenario(request: Request, user=Depends(functions.basic_auth)):
             "avgLat": "", "avgLon": "", "gridPath": "", "nLayers": "10", "startDate": "", "stopDate": "",
             "obsPointTable": [], "crossSectionTable": [], "boundaryTable": [], "weatherPath": [],
             "userTimestepDate": "0", "userTimestepTime": "12:00:00", "nodalTimestepDate": "0", 
-            "nodalTimestepTime": "12:00:00", "wqIntervalDate": "1", "wqIntervalTime": "00:00:00", 
+            "nodalTimestepTime": "12:00:00", "wqIntervalDate": "0", "wqIntervalTime": "06:00:00", 
             "wqStart": "", "wqStop": "", "hisIntervalDate": "0", "hisIntervalTime": "06:00:00", 
             "hisStart": "", "hisStop": "", "mapIntervalDate": "0", "mapIntervalTime": "06:00:00", 
             "mapStart": "", "mapStop": "", "statisticDate": "1", "statisticTime": "00:00:00", 
-            "timingDate": "1", "timingTime": "00:00:00", "initWaterLevel": "0", "initSalinity": "0.02", 
-            "initTemperature": "5", "weatherName": "", "meteoName": "", "weatherType": "", "meteoPath": []
+            "timingDate": "1", "timingTime": "00:00:00", "initWaterLevel": "0.0", "initSalinity": "0.02", 
+            "initTemperature": "3.0", "weatherName": "", "meteoName": "", "weatherType": "", "meteoPath": []
         }
         if os.path.exists(mdu_path):
             ref_date: datetime | None = None

@@ -356,11 +356,15 @@ export function updateLog(currentProject, info, seconds, key, onFinish, log_file
                     } else {
                         for (const line of data.lines) { info.value += line + "\n"; }
                     }
+                    info.scrollTop = info.scrollHeight;
                 }
                 if (!reloadLog) { lastOffset = data.offset; }
             }
             if (statusRes.status !== "running") {
-                if (statusRes.message) { info.value += "\n" + statusRes.message + "\n"; }
+                if (statusRes.message) { 
+                    info.value += "\n" + statusRes.message + "\n"; 
+                    info.scrollTop = info.scrollHeight;
+                }
                 if (statusRes.status === 'finished' && onFinish) { await onFinish(); }
                 return;
             }
@@ -518,10 +522,8 @@ export function pointUpdate(target, table, isExist=true, objList=[]){
             objList.forEach(text => {
                 const td = document.createElement('td');
                 const input = document.createElement('input');
-                input.type = 'text';
-                input.placeholder = text;
-                td.appendChild(input);
-                tr.appendChild(td);
+                input.type = 'text'; input.placeholder = text;
+                td.appendChild(input); tr.appendChild(td);
             });
             newTbody.appendChild(tr); tbody.replaceWith(newTbody);
         }
@@ -583,14 +585,12 @@ export async function initOptions(comboBox, key, projectName) {
                 // Add hint to the velocity object
                 const hint = document.createElement('option');
                 hint.value = ''; hint.selected = true;
-                hint.text = '- No Selection -'; 
-                comboBox.add(hint);
+                hint.text = '- No Selection -'; comboBox.add(hint);
             }
             // Add options
             data.content.forEach(item => {
                 const option = document.createElement('option');
-                option.value = item[0]; option.text = item[1];
-                comboBox.add(option);
+                option.value = item[0]; option.text = item[1]; comboBox.add(option);
             });
             // Select the first option
             if (key !== 'vector' && key !== 'thermocline_waq') {comboBox.value = -1;}
@@ -624,8 +624,7 @@ export function updateMapByTime(setFunction, getFunction, layerMap, values, vmin
         if (getFunction().lastFeatureColors[id] === colorKey) continue;
         getFunction().lastFeatureColors[id] = colorKey;
         layerMap.setFeatureStyle(id, { 
-            fill: true, fillColor: `rgb(${r},${g},${b})`, 
-            fillOpacity: a, weight: 0, opacity: 1 
+            fill: true, fillColor: `rgb(${r},${g},${b})`, fillOpacity: a, weight: 0, opacity: 1 
         });
     }
     setFunction({ lastFeatureColors: getFunction().lastFeatureColors });
@@ -648,8 +647,7 @@ export function initRequestListener() {
         if (type === 'updateReturn' && requestId) {
             const pending = pendingRequests.get(requestId);
             if (pending) {
-                pending.resolve(content);
-                pendingRequests.delete(requestId);
+                pending.resolve(content); pendingRequests.delete(requestId);
             }
         }
     });

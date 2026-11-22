@@ -25,6 +25,18 @@ _SKIP_EXACT = {
     "Greenwich", "Universal", "UCT", "Zulu",
 }
 
+def encoding_detect(file_path: str) -> str:
+    encoding = 'utf-8'
+    if not os.path.exists(file_path) or not os.path.isfile(file_path): return encoding
+    with open(file_path, 'rb') as f:
+        raw_data = f.read()
+        result = chardet.detect(raw_data)
+        detected = result.get('encoding')
+        if detected: encoding = detected
+    return encoding
+
+USERS = json.load(open(ALLOWED_USERS, "r", encoding=encoding_detect(ALLOWED_USERS)))
+
 @lru_cache(maxsize=1)
 def _all_timezones() -> list[str]:
     return [
@@ -39,18 +51,6 @@ def error(where: str, e: Exception, code: int = 500):
     print(f"{where}:\n==============")
     traceback.print_exc()
     return JSONResponse({"status": "error", "message": f"Error: {e}"}, status_code=code)
-
-def encoding_detect(file_path: str) -> str:
-    encoding = 'utf-8'
-    if not os.path.exists(file_path) or not os.path.isfile(file_path): return encoding
-    with open(file_path, 'rb') as f:
-        raw_data = f.read()
-        result = chardet.detect(raw_data)
-        detected = result.get('encoding')
-        if detected: encoding = detected
-    return encoding
-
-USERS = json.load(open(ALLOWED_USERS, "r", encoding=encoding_detect(ALLOWED_USERS)))
 
 def encode_array(arr: np.ndarray) -> str:
     arr = arr.astype(np.float32)

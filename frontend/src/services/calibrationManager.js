@@ -357,8 +357,10 @@ function initialCheckManager() {
             if (start.status === 'running') { attachToRun(currentProject, key, start, logFile); return; }
             obj.progressText.innerText = 'Running the baseline simulation...'; isBaseRunning = true;
             updateLogSimulation(currentProject, key, obj.calibrationLog, obj.progressBar, obj.progressText, 5, logFile,
-                0, async () => { isBaseRunning = false; alert(st.status === 'finished' ? 'Running baseline simulation completed.'
-                    : `Baseline simulation ${st.status}: ${st.message || ''}`); }
+                0, async (result) => { isBaseRunning = false; 
+                    alert(result?.status === 'finished' ? 'Running baseline simulation completed.'
+                    : `Baseline simulation ${result?.status}: ${result?.message || ''}`); 
+                }
             );
         } catch (error) { alert(`Running baseline simulation failed: ${error.message}`); isBaseRunning = false; }
     });

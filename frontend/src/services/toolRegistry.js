@@ -20,6 +20,12 @@ export const TOOL_GROUPS = [
         ],
     },
     {
+        id: 'calibration', title: 'Model Calibration', icon: 'sliders',
+        tools: [
+            { id: 'calibration', title: 'Model Calibration', url: '/src_frontend/htmls/calibration.html', w: 12, h: 11, icon: 'sliders' },
+        ],
+    },
+    {
         id: 'waq', title: 'Water Quality (WAQ)', icon: 'flask',
         tools: [
             { id: 'new-waq', title: 'Create WAQ Scenario', url: '/src_frontend/htmls/waqCreator.html', w: 12, h: 9, icon: 'plus' },
@@ -38,12 +44,6 @@ export const TOOL_GROUPS = [
         id: 'visualization', title: 'Visualization', icon: 'chart',
         tools: [
             { id: 'visualization', title: 'Visualization', url: '/src_frontend/htmls/visualization.html', w: 12, h: 9, icon: 'chart' },
-        ],
-    },
-    {
-        id: 'calibration', title: 'Model Calibration', icon: 'sliders',
-        tools: [
-            { id: 'calibration', title: 'Model Calibration', url: '/src_frontend/htmls/calibration.html', w: 12, h: 11, icon: 'sliders' },
         ],
     },
 ];

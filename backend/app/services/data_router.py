@@ -51,8 +51,7 @@ async def check_download_status(request: Request, user=Depends(functions.basic_a
         status, message = "failed", "Previous download stopped responding. You can start again."
     return JSONResponse({
         "status": status, "message": message, "results": info.get("results", []),
-        "cancelled": bool(info.get("cancelled")),
-        "cancelling": status == "running" and bool(info.get("cancel")),
+        "cancelled": bool(info.get("cancelled")), "cancelling": status == "running" and bool(info.get("cancel")),
     })
 
 @router.post("/save_client")
@@ -60,7 +59,7 @@ async def save_client(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
-        path = os.path.join(PROJECT_ROOT, project_name, 'credentials.json')
+        path = os.path.join(PROJECT_ROOT, project_name.split('/')[0], 'credentials.json')
         if not os.path.exists(path):
             with open(path, 'w', encoding='utf-8', errors='ignore') as f:
                 json.dump({}, f)
@@ -79,7 +78,7 @@ async def save_client(request: Request, user=Depends(functions.basic_auth)):
 async def load_client(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
     project_name, _ = functions.project_definer(body.get('projectName'), user)
-    path = os.path.join(PROJECT_ROOT, project_name, 'credentials.json')
+    path = os.path.join(PROJECT_ROOT, project_name.split('/')[0], 'credentials.json')
     temp = {'client_id': '', 'client_secret': '', 'client_username': '', 'client_password': ''}
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
@@ -223,10 +222,10 @@ async def download_era5(request: Request, user=Depends(functions.basic_auth)):
         threading.Thread(
             target=data_functions.era5_downloader, 
             args=(key, body["apiKey"], project_dir, processes, key_process, body["variables"], body.get("rh", False),
-                lat, lon, body["startTime"], body["endTime"], body["timeZone"], body["logFile"]),
-            kwargs={"elevation": elevation, "auto_elevation": bool(body.get("autoElevation", True)),
+                lat, lon, body["startTime"], body["endTime"], body["timeZone"], body["logFile"]
+            ), kwargs={"elevation": elevation, "auto_elevation": bool(body.get("autoElevation", True)),
                 "elevation_correction": bool(body.get("elevationCorrection", True))
-                }, name=f"era5:{key_process}", daemon=True
+            }, name=f"era5:{key_process}", daemon=True
         ).start()
     return JSONResponse({"status": "ok", "message": "Weather downloading started."})
 
