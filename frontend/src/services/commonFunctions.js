@@ -3,6 +3,26 @@ import { origin, setLastProject } from "./constant.js";
 import { getColorFromValue, updateColorbar } from "./unstructuredGrid.js";
 
 
+// =====================================================================
+// Session expired (401 from the PLATFORM's own API) -> go to the sign-in page.
+// Wraps window.fetch once per page / widget iframe (every widget imports this module).
+// =====================================================================
+if (!window.__authFetchWrapped) {
+    window.__authFetchWrapped = true;
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+        const res = await nativeFetch(...args);
+        if (res.status === 401) {
+            const raw = args[0] instanceof Request ? args[0].url : String(args[0]);
+            const url = new URL(raw, location.href);
+            if (url.origin === location.origin && !url.pathname.startsWith('/auth/')) {
+                const top = window.top || window;
+                top.location.href = `/login?expired=1&next=${encodeURIComponent(top.location.pathname + top.location.search)}`;
+            }
+        }
+        return res;
+    };
+}
 const pendingRequests = new Map();
 
 let zIndex = 3000, activeProject = null;

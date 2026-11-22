@@ -8,9 +8,11 @@ import numpy as np, xarray as xr
 router = APIRouter()
 
 @router.post("/auth_check")
-async def auth_check(user=Depends(functions.basic_auth)):
+async def auth_check(request: Request, user=Depends(functions.basic_auth)):
+    u = functions.current_user(request)
     output = 'ok' if user == 'admin' else 'error'
-    return {"user": user, "output": output}
+    return {"user": user, "output": output, "role": u.role if u else None,
+            "full_name": u.full_name if u else "", "is_admin": bool(u and u.is_admin)}
 
 @router.post("/get_timezone")
 async def get_timezone(request: Request):
@@ -319,9 +321,11 @@ async def setup_database(request: Request, user=Depends(functions.basic_auth)):
             except asyncio.CancelledError: pass
 
 @router.post("/get_config_files")
-async def get_config_files(request: Request):
+async def get_config_files(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
-    user_name, project = body.get('userName').strip(), body.get('project').strip()
+    # User comes from the SESSION, never from 'userName' in the body (it allowed reading other users' projects)
+    user_name = '' if user == 'admin' else user
+    project = functions.safe_project_name((body.get('project') or '').strip() or 'demo')
     original_project, warning = project, None
     try: result = functions.project_reader(user_name, project)
     except:

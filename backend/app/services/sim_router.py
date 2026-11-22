@@ -47,7 +47,7 @@ async def check_sim_status_hyd(request: Request, user=Depends(functions.basic_au
     return JSONResponse({"status": info["status"], "progress": info["progress"], "message": complete})
 
 # Start a hydrodynamic simulation
-@router.post("/start_sim_hyd")
+@router.post("/start_sim_hyd", dependencies=[Depends(functions.require_sim_slot)])
 async def start_sim_hyd(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
     project_name, _ = functions.project_definer(body.get('projectName'), user)
@@ -189,7 +189,7 @@ async def check_sim_status_waq(request: Request, user=Depends(functions.basic_au
         "message": f"WAQ simulation completed: {info['progress']}%"})
 
 # Start a waq simulation
-@router.post("/start_sim_waq")
+@router.post("/start_sim_waq", dependencies=[Depends(functions.require_sim_slot)])
 async def start_sim_waq(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
     project_name, _ = functions.project_definer(body.get('projectName'), user)

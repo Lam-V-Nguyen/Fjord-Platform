@@ -228,7 +228,7 @@ async def create_baseline_calibration(request: Request, user=Depends(functions.b
         })
     except Exception as e: functions.error("/create_baseline_calibration", e)
 
-@router.post("/start_sim_calibration")
+@router.post("/start_sim_calibration", dependencies=[Depends(functions.require_sim_slot)])
 async def start_sim_calibration(request: Request, background_tasks: BackgroundTasks, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
