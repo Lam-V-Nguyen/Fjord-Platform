@@ -343,3 +343,7 @@
 /* Trong lúc kéo: con trỏ ↔ toàn trang, không bôi đen chữ, iframe/bản đồ không "nuốt" chuột */
 body.sash-dragging { cursor: col-resize !important; user-select: none; }
 body.sash-dragging iframe, body.sash-dragging .leaflet-container { pointer-events: none; }
+
+/* Settings: danh sách múi giờ thấp hơn; bảng không vượt quá chiều cao màn hình */
+#settings-popover { max-height: calc(100vh - 20px); overflow-y: auto; box-sizing: border-box; }
+#settings-popover .tz-results { max-height: 132px; }          /* ~5 dòng, cuộn khi nhiều hơn */

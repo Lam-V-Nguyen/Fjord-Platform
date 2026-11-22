@@ -194,12 +194,15 @@ function bindShell() {
         e.stopPropagation();
         const r = e.currentTarget.getBoundingClientRect();
         settings.style.left = `${Math.min(r.right + 8, window.innerWidth - 310)}px`;
-        settings.style.top = `${Math.max(10, r.top - 220)}px`;
         settings.classList.toggle('show');
         if (settings.classList.contains('show')) {
             const input = document.getElementById('tz-search');
-            input.value = ''; input.focus();
+            input.value = '';
             await renderTimezoneList(document.getElementById('tz-results'), '');
+            // Đặt theo chiều cao THẬT của bảng: đáy bảng ngang đáy nút, không tràn khỏi màn hình
+            const h = settings.offsetHeight;
+            settings.style.top = `${Math.max(10, Math.min(r.bottom - h, window.innerHeight - h - 10))}px`;
+            input.focus();
         }
     });
     settings.addEventListener('click', (e) => e.stopPropagation());
