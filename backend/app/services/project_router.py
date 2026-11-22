@@ -39,6 +39,7 @@ async def reset_config(request: Request, user=Depends(functions.basic_auth)):
             if os.path.exists(movement_dir): shutil.rmtree(movement_dir, onexc=functions.remove_readonly)
             # Delete config in Redis
             await redis.hdel(project_name, "config", "layer_reverse_hyd", "layer_reverse_waq")
+            await redis.hdel(functions.cache_key(project_name), "config", "layer_reverse_hyd", "layer_reverse_waq")
             return JSONResponse({"status": "ok", "message": "Configuration reset successfully!"})
     except Exception as e: functions.error('/reset_config', e)
     
@@ -189,10 +190,13 @@ async def setup_database(request: Request, user=Depends(functions.basic_auth)):
             if not isinstance(cache_root, dict):
                 cache_root = {}
                 request.app.state.project_cache = cache_root
-            project_cache = cache_root.get(project_name)
+            ck = functions.cache_key(project_name)                  # per user on sample / shared projects
+            project_cache = cache_root.get(ck)
             if not isinstance(project_cache, dict):
-                project_cache = {}
-                cache_root[project_name] = project_cache
+                base = cache_root.get(project_name) if ck != project_name else None
+                # reuse the (user-independent) HYD datasets and grid already loaded for the project
+                project_cache = {k: v for k, v in (base or {}).items() if k in ('hyd_his', 'hyd_map', 'grid')}
+                cache_root[ck] = project_cache
             dm, waq_his, waq_map = request.app.state.dataset_manager, None, None
             # Assign datasets
             if params[0] == '' or params[1] == '':
@@ -217,7 +221,7 @@ async def setup_database(request: Request, user=Depends(functions.basic_auth)):
                 print('Creating grid for hydrodynamic simulation...')
                 project_cache['grid'] = functions.unstructuredGridCreator(hyd_map)
             # Load or init config
-            config_path, obs, waq_model = os.path.normpath(os.path.join(config_dir, 'config.json')), {}, ''
+            config_path, obs, waq_model = os.path.normpath(functions.user_config_path(project_name)), {}, ''
             config = {
                 "hyd": {}, "waq": {}, "meta": {"hyd_scanned": False, "waq_scanned": False},
                 "model_type": '', "model_name": '', 'gis_layers': []
@@ -323,8 +327,8 @@ async def setup_database(request: Request, user=Depends(functions.basic_auth)):
                 'gis_layers': msgpack.packb(config['gis_layers'], use_bin_type=True)
             }
             # Save to Redis
-            await redis.delete(project_name)
-            await redis.hset(project_name, mapping=redis_mapping)
+            await redis.delete(ck)
+            await redis.hset(ck, mapping=redis_mapping)
             print('Configuration loaded successfully.')
             return JSONResponse({"user": project_name, "content": result})
     except Exception as e: functions.error('/setup_database', e)

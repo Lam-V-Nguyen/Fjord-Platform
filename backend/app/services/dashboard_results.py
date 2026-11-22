@@ -294,7 +294,9 @@ class ProjectResults:
                 self.paths["hyd_map"] = os.path.join(self.hyd_dir, pref[0])
                 self.hyd_name = self.hyd_name or pref[0].rsplit("_map", 1)[0]
         # WAQ: use selected scenarioin: output/config/config.json
-        cfg_path = os.path.join(out, "config", "config.json")
+        # per-user copy on sample / shared projects: another user's WAQ choice does not change this one
+        from services.functions import user_config_path
+        cfg_path = user_config_path(self.project)
         if os.path.exists(cfg_path):
             try:
                 cfg = json.load(open(cfg_path, encoding="utf-8"))

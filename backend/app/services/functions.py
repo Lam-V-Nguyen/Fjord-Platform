@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from redis.asyncio.lock import Lock
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt, gaussian_filter
-from config import PROJECT_ROOT, COOKIE_NAME, SHOW_ERROR_DETAILS, MAX_SOLVER_PROCESSES, PUBLIC_PROJECTS
+from config import PROJECT_ROOT, COOKIE_NAME, SHOW_ERROR_DETAILS, MAX_SOLVER_PROCESSES, PUBLIC_PROJECTS, DATA_DIR
 from uuid import uuid4
 from shapely.geometry import Polygon, MultiPolygon
 import numpy as np, xarray as xr, pandas as pd
@@ -181,6 +181,36 @@ def project_definer(old_name, username='admin', for_copy: bool = False):
     name_id = f'{new_name}/{uuid4()}'
     return new_name, name_id
 
+# ---------------------------------------------------------------- per-user view state of other people's projects
+def _viewer_of_other(project_path: str):
+    """The signed-in user when `project_path` (relative to PROJECT_ROOT) is a sample project or a project shared
+    with them – i.e. not their own; None otherwise (own project, administrators on samples, no request)."""
+    req = _CURRENT_REQUEST.get()
+    user = current_user(req) if req is not None else None
+    if user is None or user.username == 'admin': return None
+    owner = project_path.split('/')[0] if '/' in project_path else PUBLIC_OWNER
+    if owner == user.username or (owner == PUBLIC_OWNER and user.is_admin): return None
+    return user
+
+def user_config_path(project_path: str) -> str:
+    """config.json that stores the selected WAQ scenario (+ scanned variables) of a project.
+    Owners (and administrators on sample projects) use the project's own output/config/config.json. Anyone else
+    – sample or shared project – gets a private copy under DATA_DIR/user_state/<user>/, so choosing another WAQ
+    scenario does not change what other users see. The copy starts from the project's current config."""
+    base = os.path.join(PROJECT_ROOT, project_path, 'output', 'config', 'config.json')
+    user = _viewer_of_other(project_path)
+    if user is None: return base
+    path = os.path.join(DATA_DIR, 'user_state', user.username, project_path.replace('/', '__'), 'config.json')
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(base) and os.path.getsize(base) > 0: shutil.copyfile(base, path)
+    return path
+
+def cache_key(project_path: str) -> str:
+    """Key of the Redis hash / in-memory project cache: per user for sample and shared projects (see user_config_path)."""
+    user = _viewer_of_other(project_path)
+    return project_path if user is None else f"{project_path}#{user.username}"
+
 def require_owner(project_path: str, username: str):
     """Deleting / renaming / copying INTO a project is for its owner only (not for users it is shared with)."""
     if username != 'admin' and project_path.split('/')[0] != username:
@@ -196,7 +226,7 @@ def project_reader(user_name, project_name):
         raise ValueError(
             f"Project '{project_name}' does not contain enough HYD configuration files."
         )
-    config_path = os.path.join(output_dir, 'config', 'config.json')
+    config_path = user_config_path(os.path.join(user_name, project_name).replace(os.sep, '/').strip('/'))
     waq_name, waq_model = '', ''
     if os.path.exists(config_path):
         with open(config_path, 'r', encoding=encoding_detect(config_path)) as f:
