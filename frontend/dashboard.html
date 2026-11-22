@@ -328,6 +328,7 @@
         </div>
         <div style="display:flex; flex-wrap:wrap; gap:6px">
           <button class="btn small" id="btn-change-password"><span data-icon="lock"></span>Change password</button>
+          <button class="btn small" id="btn-share-project"><span data-icon="share"></span>Share project</button>
           <button class="btn small" id="btn-admin-users" hidden><span data-icon="users"></span>Manage users</button>
           <button class="btn small danger" id="btn-logout"><span data-icon="logout"></span>Sign out</button>
         </div>
@@ -349,6 +350,13 @@
       </div>
     </div>
 
+    <div class="modal-backdrop" id="share-modal">
+      <div class="modal" style="width:min(560px,100%)">
+        <div class="modal-head"><span data-icon="share"></span><h3 id="share-modal-title">Share project</h3>
+          <button class="btn icon-only ghost" data-close-modal title="Close"><span data-icon="x"></span></button></div>
+        <div class="modal-body" id="share-modal-body"></div>
+      </div>
+    </div>
     <div class="modal-backdrop" id="password-modal">
       <div class="modal" style="width:min(420px,100%)">
         <div class="modal-head"><span data-icon="lock"></span><h3>Change password</h3>

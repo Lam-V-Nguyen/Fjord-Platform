@@ -64,6 +64,7 @@ async def copy_project(request: Request, user=Depends(functions.basic_auth)):
         body = await request.json()
         old_name, _ = functions.project_definer(body.get('oldName'), user)
         new_name, _ = functions.project_definer(body.get('newName'), user)
+        functions.require_owner(new_name, user)          # copies always go into the user's own folder
         project_folder = os.path.normpath(os.path.join(PROJECT_ROOT, old_name))
         redis = request.app.state.redis
         lock = redis.lock(f"{old_name}:copy_project", timeout=600)
@@ -88,6 +89,7 @@ async def delete_project(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
+        functions.require_owner(project_name, user)      # shared users cannot delete the owner's project
         redis = request.app.state.redis
         name = project_name if '/' not in project_name else project_name.split('/')[-1]
         lock = redis.lock(f"{project_name}:delete_project", timeout=600)
@@ -97,6 +99,9 @@ async def delete_project(request: Request, user=Depends(functions.basic_auth)):
             if not os.path.exists(project_folder): 
                 return JSONResponse({"status": 'error', "message": f"Project '{project_name}' does not exist."})
             shutil.rmtree(project_folder, onerror=functions.remove_readonly)
+            if '/' in project_name:                      # forget the shares of the deleted project
+                from services import auth_store
+                auth_store.drop_project_shares(*project_name.split('/', 1))
             if hasattr(request.app.state, "project_cache"): request.app.state.project_cache.pop(project_name, None)
             return JSONResponse({"status": "ok", "message": f"Project '{name}' was deleted successfully."})
     except Exception as e: functions.error('/delete_project', e)
@@ -120,9 +125,15 @@ async def select_project(request: Request, user=Depends(functions.basic_auth)):
             project_dir = os.path.normpath(os.path.join(project_dir, 'flows'))
             os.makedirs(project_dir, exist_ok=True)
         if key == 'getProjects':
-            project = [p.name for p in os.scandir(project_dir) if p.is_dir()]
+            project = [p.name for p in os.scandir(project_dir) if p.is_dir()] if os.path.isdir(project_dir) else []
             project = [p for p in project if os.path.exists(os.path.normpath(os.path.join(project_dir, p, folder_check)))]
             data = sorted(project)
+            if not name and user != 'admin' and key_checker != 'flows':    # + projects shared with this user
+                from services import auth_store
+                for s in auth_store.list_shares(grantee=user):
+                    folder = os.path.normpath(os.path.join(PROJECT_ROOT, s["owner"], s["project"]))
+                    if os.path.isdir(folder) and os.path.exists(os.path.join(folder, folder_check or '')):
+                        data.append(f'{s["owner"]}{functions.SHARE_SEP}{s["project"]}')
         elif key == 'getWAQs': # List the scenarios for water quality
             scenario_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, 'output', 'scenarios'))
             if not os.path.exists(scenario_dir):
@@ -324,18 +335,26 @@ async def setup_database(request: Request, user=Depends(functions.basic_auth)):
 async def get_config_files(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
     # User comes from the SESSION, never from 'userName' in the body (it allowed reading other users' projects)
-    user_name = '' if user == 'admin' else user
-    project = functions.safe_project_name((body.get('project') or '').strip() or 'demo')
-    original_project, warning = project, None
-    try: result = functions.project_reader(user_name, project)
+    # "<owner>:<project>" = project shared with this user (project_definer checks the share)
+    ref = (body.get('project') or '').strip() or 'demo'
+    original_project, warning = ref, None
+    def read(ref_):
+        if user == 'admin': return functions.project_reader('', 'demo')
+        path, _ = functions.project_definer(ref_, user)
+        owner, name = path.split('/', 1)
+        res = functions.project_reader(owner, name)
+        res["current_project"] = name if owner == user else f"{owner}{functions.SHARE_SEP}{name}"
+        res["owner"], res["shared"] = owner, owner != user
+        return res
+    try: result = read(ref)
     except:
-        project = 'demo'; traceback.print_exc()
+        ref = 'demo'; traceback.print_exc()
         # Store warning for frontend
         warning = (
             f"Project '{original_project}' does not contain enough HYD configuration files." + 
             f"\nPlease rerun the simulation and try again.\nUsing default project 'demo'."
         )
-        try: result = functions.project_reader(user_name, project)
+        try: result = read(ref)
         except Exception: functions.error('/get_config_files', f"Could not load project '{original_project}' or fallback project 'demo'.")
     if warning: result["status"], result["message"] = "warning", warning
     else: result["status"] = "ok"

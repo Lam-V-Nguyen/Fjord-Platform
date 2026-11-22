@@ -660,6 +660,7 @@ async def save_scenario_calibration(request: Request, user=Depends(functions.bas
         body = await request.json()
         project_old, _ = functions.project_definer(body.get('oldProject'), user)
         project_new, _ = functions.project_definer(body.get('newProject'), user)
+        functions.require_owner(project_new, user)       # new scenario always goes into the user's own folder
         redis, key = request.app.state.redis, f"{project_old}:{project_new}"
         lock = redis.lock(key, timeout=1000, blocking_timeout=10)
         async with lock:

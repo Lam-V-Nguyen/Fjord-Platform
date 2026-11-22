@@ -18,6 +18,7 @@ import { TOOL_GROUPS, QUICK_TOOLS, getTool, groupOf, standaloneLabel } from "./t
 import { icon } from "./icons.js";
 import { initThresholdEditor } from "./thresholdEditor.js";
 import { initAccountMenu } from "./accountMenu.js";
+import { initShareDialog, projectLabel } from "./shareDialog.js";
 import { Dashboard, toast, initSidebarResize } from "./dashboardManager.js";
 
 const app = document.getElementById('app');
@@ -54,7 +55,7 @@ async function login() {
     }
     const project = getLastProject();
     showNotes(`${userName}/${project}`);
-    document.getElementById('project-chip-label').textContent = project;
+    document.getElementById('project-chip-label').textContent = projectLabel(project);
     selectedTimeZone = getLastTimeZone(); showTimeZone(currentTimeZone, selectedTimeZone);
 }
 
@@ -203,7 +204,8 @@ function bindShell() {
     });
     settings.addEventListener('click', (e) => e.stopPropagation());
     bindTimezoneSearch();
-    initAccountMenu({ toast, beforeOpen: () => settings.classList.remove('show') });
+    initAccountMenu({ toast, beforeOpen: () => settings.classList.remove('show') })
+        .then(me => initShareDialog({ toast, me, beforeOpen: () => settings.classList.remove('show') }));
     initThresholdEditor({
         toast, beforeOpen: () => settings.classList.remove('show'),
         onSaved: () => dashboard?.refresh(true),          // tính lại cảnh báo / WQI theo ngưỡng mới
@@ -342,7 +344,7 @@ function updateComponent() {
         } else if (msg.type === 'showNote') {
             showNotes(msg.content);
             const proj = String(msg.content || '').split('/').pop();
-            if (proj) document.getElementById('project-chip-label').textContent = proj;
+            if (proj) document.getElementById('project-chip-label').textContent = projectLabel(proj);
         } else if (msg.type === 'updateUIState') {
             const { requestId } = msg.content;
             if (requestId && pendingRequests.has(requestId)) {

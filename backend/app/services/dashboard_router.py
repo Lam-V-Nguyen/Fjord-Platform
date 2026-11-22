@@ -75,6 +75,9 @@ async def dashboard_projects(request: Request, user=Depends(functions.basic_auth
         body = await _body(request)
         user_dir, _ = functions.project_definer("", user)
         projects = await asyncio.to_thread(dfn.list_projects, user_dir) if user != "admin" else ["demo"]
+        if user != "admin":                                   # + projects shared with this user ("<owner>:<project>")
+            from services import auth_store
+            projects += [f'{s["owner"]}{functions.SHARE_SEP}{s["project"]}' for s in auth_store.list_shares(grantee=user)]
         current = _project(body, user) if body.get("projectName") else None
         return {"status": "ok", "user": user, "projects": projects, "current": current}
     except Exception as e: functions.error("/dashboard/projects", e)

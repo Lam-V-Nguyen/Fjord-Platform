@@ -65,15 +65,40 @@ New files: `services/auth_store.py`, `services/auth_router.py`, `services/mailer
   answer 503 "server is busy".
 - **Process termination** uses `psutil`, so it works on both Windows and Linux (`functions.kill_process_tree`).
 - `deploy/`: `.env.example`, `Caddyfile` (HTTPS), Windows (NSSM) and Linux (systemd) services, backup scripts.
-- `backend/tests/test_auth.py` (6 tests) and `.github/workflows/ci.yml` (GitHub Actions).
+- `backend/tests/test_auth.py` (7 tests) and `.github/workflows/ci.yml` (GitHub Actions).
 
-### A.4. Behaviour changes to be aware of
+### A.4. Project sharing
+
+Every user works in their own folder `projects/<username>/`. An owner can share a project with other accounts:
+
+| | Owner | *edit* share | *view* share |
+|---|:-:|:-:|:-:|
+| Open the project, dashboard, Visualization, results | ✓ | ✓ | ✓ |
+| Change inputs, create / run HYD, WAQ, Wflow, calibration | ✓ | ✓ | ✗ |
+| Delete the project, manage its sharing | ✓ | ✗ | ✗ |
+| Copy it into their own folder (*copy project*) | ✓ | ✓ | ✗ |
+
+- Share: **Settings → Share project** (for the project currently open). Type a username (suggestions appear after 2
+  letters), choose *view* or *edit*, click *Share*. The other user gets an e-mail when SMTP is configured.
+- The shared project appears in the other user's **Open Project** list as *"lake1 (shared by lam)"*. Internally it is
+  referenced as `lam:lake1` (`<owner>:<project>`); the project chip shows *"lake1 · lam · view only"*.
+- The receiver can remove it from their list with **Leave this project**; the owner or an admin can revoke it at any
+  time; `/admin` lists every share.
+- The account role still applies: a `viewer` account stays read-only even with an *edit* share.
+- Each user's own `credentials.json` (data-download passwords) is never shared.
+- Shares are stored in the `project_shares` table of `auth.sqlite3`; deleting a project or an account removes its shares.
+
+Note: opening a scenario in Visualization records it as the project's "current WAQ scenario" (`output/config/config.json`),
+also for users with a *view* share – the same file the owner's dashboard reads.
+
+### A.5. Behaviour changes to be aware of
 
 - A **missing** `projectName` (`None`) in a request body used to become the folder `user/None`; it is now
   **400 Project name is required**.
 - The legacy account named `admin` still uses the shared `demo` project as before. New accounts cannot be called `admin`.
-- The `viewer` role can only call read APIs (prefix list in `functions._VIEWER_PREFIXES`). If a viewing feature is
-  blocked for viewers, add its route prefix to that list.
+- The `viewer` role and users with a *view* share can only call read APIs (`functions._READ_PREFIXES` and
+  `functions._READ_ROUTES`: dashboard, Visualization, status checks…). If a viewing feature is blocked for them, add
+  its route to `_READ_ROUTES`.
 - Invitation and password-reset links use `PUBLIC_URL`, so it must be the address users actually open.
 
 ---
@@ -166,7 +191,7 @@ Open http://localhost:8000; it redirects to `/login`. Check:
    ```powershell
    cd backend
    pip install pytest httpx
-   python -m pytest -q tests          # 6 passed
+   python -m pytest -q tests          # 7 passed
    ```
 
 When everything works, merge the pull request into `main`.
@@ -328,7 +353,8 @@ The backup script covers:
 | Approve an access request | Account with status **pending** → *Approve* (the user receives an e-mail) |
 | Forgotten password | The user clicks *Forgot password*, or the admin clicks *Reset password* and sends the link |
 | Suspend | Set the status to **disabled**: all of that user's sessions are signed out immediately |
-| Read-only access | Role **viewer** |
+| Read-only access | Role **viewer**, or a *view* share of a single project (Settings → Share project) |
+| Review shares | Card *Shared projects*: every share, with *Revoke* |
 | Delete | *Delete*: **project files are kept** in `projects/<username>`. Remove them manually if the user asks (GDPR). |
 | Audit | *Recent activity*: sign-ins, failed sign-ins, invitations, approvals, role changes (with IP) |
 
