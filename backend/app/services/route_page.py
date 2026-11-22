@@ -81,7 +81,7 @@ async def load_popupMenu(request: Request, data: str, project_name: str = '', us
     if not os.path.exists(path):
         return HTMLResponse(f"<p>Popup menu template not found</p>", status_code=404)
     # Get config from Redis, if not found scan files to get variables
-    config_raw = await redis.hget(project_name, "config")
+    config_raw = await redis.hget(functions.cache_key(project_name), "config")
     # If config already exists → no race → render
     if config_raw:
         config = msgpack.unpackb(config_raw, raw=False)
@@ -89,10 +89,10 @@ async def load_popupMenu(request: Request, data: str, project_name: str = '', us
     lock = redis.lock(f"{project_name}:init_config", timeout=10)  # 10s lock
     async with lock:
         # Create config the first time
-        project_cache = request.app.state.project_cache.setdefault(project_name)
+        project_cache = request.app.state.project_cache.setdefault(functions.cache_key(project_name))
         files = [project_cache.get("hyd_his"), project_cache.get("hyd_map"),
             project_cache.get("waq_his"), project_cache.get("waq_map")]
-        waq_model_raw = await redis.hget(project_name, "waq_model")
+        waq_model_raw = await redis.hget(functions.cache_key(project_name), "waq_model")
         waq_model = waq_model_raw.decode() if waq_model_raw else "unknown"
         config_obj = functions.getVariablesNames(files, waq_model)
         # Restructure configuration
@@ -100,5 +100,5 @@ async def load_popupMenu(request: Request, data: str, project_name: str = '', us
         for k, v in config_obj.items():
             if k not in ("hyd", "waq", "meta"): config[k] = v
         # Save updated project data back to Redis
-            await redis.hset(project_name, "config", msgpack.packb(config, use_bin_type=True))
+            await redis.hset(functions.cache_key(project_name), "config", msgpack.packb(config, use_bin_type=True))
     return htmls.TemplateResponse(request=request, name=htmlFile, context={'configuration': config})

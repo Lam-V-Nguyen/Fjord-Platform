@@ -133,3 +133,30 @@ def test_sample_project_read_only(client):
     login(c, "boss", "Correct-horse-9")                                   # administrator may edit the sample
     assert c.post("/project", json={"projectName": "public:demo"}).json()["project"] == "demo"
     assert c.post("/auth/shares/add", json={"project": "public:demo", "username": "carl"}).status_code == 400
+
+
+def test_per_user_waq_choice_on_sample_and_shared_projects(client):
+    """Choosing a WAQ scenario on someone else's project (sample / shared) is stored per user."""
+    import json, types
+    _, store = client
+    from services import functions
+    import config as cfg
+    def as_user(name):
+        req = types.SimpleNamespace(state=types.SimpleNamespace(user=store.get_user(name)), method="POST",
+                                    url=types.SimpleNamespace(path="/setup_database"))
+        functions._CURRENT_REQUEST.set(req)
+    base = os.path.join(cfg.PROJECT_ROOT, "demo", "output", "config", "config.json")
+    os.makedirs(os.path.dirname(base), exist_ok=True)
+    json.dump({"model_name": "A"}, open(base, "w"))
+    as_user("carl")                                               # ordinary user on the sample project
+    mine = functions.user_config_path("demo")
+    assert mine != base and json.load(open(mine))["model_name"] == "A"     # starts from the sample's choice
+    json.dump({"model_name": "B"}, open(mine, "w"))                         # carl switches to scenario B
+    assert functions.cache_key("demo") == "demo#carl"
+    assert json.load(open(base))["model_name"] == "A"                       # nobody else is affected
+    as_user("boss")                                               # administrators edit the sample itself
+    assert functions.user_config_path("demo") == base and functions.cache_key("demo") == "demo"
+    assert functions.user_config_path("boss/lake1").startswith(cfg.PROJECT_ROOT)    # owner: own project config
+    as_user("carl")
+    assert "user_state" in functions.user_config_path("boss/lake1")        # shared project: private copy
+    functions._CURRENT_REQUEST.set(None)

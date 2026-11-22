@@ -65,7 +65,7 @@ New files: `services/auth_store.py`, `services/auth_router.py`, `services/mailer
   answer 503 "server is busy".
 - **Process termination** uses `psutil`, so it works on both Windows and Linux (`functions.kill_process_tree`).
 - `deploy/`: `.env.example`, `Caddyfile` (HTTPS), Windows (NSSM) and Linux (systemd) services, backup scripts.
-- `backend/tests/test_auth.py` (8 tests) and `.github/workflows/ci.yml` (GitHub Actions).
+- `backend/tests/test_auth.py` (9 tests) and `.github/workflows/ci.yml` (GitHub Actions).
 
 ### A.4. Project sharing
 
@@ -88,8 +88,11 @@ Every user works in their own folder `projects/<username>/`. An owner can share 
 - Each user's own `credentials.json` (data-download passwords) is never shared.
 - Shares are stored in the `project_shares` table of `auth.sqlite3`; deleting a project or an account removes its shares.
 
-Note: opening a scenario in Visualization records it as the project's "current WAQ scenario" (`output/config/config.json`),
-also for users with a *view* share – the same file the owner's dashboard reads.
+**Per-user WAQ scenario.** On a sample or shared project, choosing a WAQ scenario (Visualization or the dashboard
+picker) is stored per user in `DATA_DIR/user_state/<user>/<project>/config.json`, starting from the project's own
+choice; the Redis / in-memory caches are per user too. Other users – and the owner – are not affected. Owners (and
+administrators on sample projects) still change the project's own `output/config/config.json`, which is the default
+that new viewers start from.
 
 ### A.5. Sample project (read only for everyone)
 
@@ -102,7 +105,8 @@ The folder `PROJECT_ROOT/demo` is a **sample project** that every signed-in user
 - **Administrators** (role `admin`) can change it, e.g. to refresh the sample results.
 - Users can make their own copy to experiment: *Create HYD Scenario → select "public:demo" → Clone Scenario*.
 - More sample projects: `PUBLIC_PROJECTS=demo,fjord2` in `.env` (folders directly under `PROJECT_ROOT`).
-- Opening a WAQ scenario in Visualization/dashboard records it as the sample's "current WAQ scenario" (shared by everyone).
+- Each user picks the WAQ scenario of the sample independently (see A.4); an administrator's choice sets the default
+  that new users start from.
 
 ### A.6. Behaviour changes to be aware of
 
@@ -204,7 +208,7 @@ Open http://localhost:8000; it redirects to `/login`. Check:
    ```powershell
    cd backend
    pip install pytest httpx
-   python -m pytest -q tests          # 8 passed
+   python -m pytest -q tests          # 9 passed
    ```
 
 When everything works, merge the pull request into `main`.
