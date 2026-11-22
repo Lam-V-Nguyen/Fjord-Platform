@@ -1,13 +1,11 @@
 import os, json, chardet, asyncio, stat, time, re, shapely
-import shutil, base64, signal, subprocess, gc, traceback
-from config import ALLOWED_USERS
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi import Depends, HTTPException, status
+import shutil, base64, signal, subprocess, gc, traceback, logging, secrets as _secrets
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from redis.asyncio.lock import Lock
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt, gaussian_filter
-from config import PROJECT_ROOT
+from config import PROJECT_ROOT, COOKIE_NAME, SHOW_ERROR_DETAILS, MAX_SOLVER_PROCESSES
 from uuid import uuid4
 from shapely.geometry import Polygon, MultiPolygon
 import numpy as np, xarray as xr, pandas as pd
@@ -35,7 +33,7 @@ def encoding_detect(file_path: str) -> str:
         if detected: encoding = detected
     return encoding
 
-USERS = json.load(open(ALLOWED_USERS, "r", encoding=encoding_detect(ALLOWED_USERS)))
+_log = logging.getLogger("fjord")
 
 @lru_cache(maxsize=1)
 def _all_timezones() -> list[str]:
@@ -47,10 +45,26 @@ _ALL_TZ = sorted(_all_timezones())
 
 variablesNames, units = constants.VARIABLES_NAME, constants.UNITS
 
+class AppError(Exception):
+    """Route error -> answered as JSON {"status": "error", "message", "error_id"} with HTTP status `code`."""
+    def __init__(self, where: str, message: str, code: int = 500, error_id: str = ""):
+        super().__init__(message)
+        self.where, self.message, self.code, self.error_id = where, message, code, error_id
+
+def log_error(where: str, e: Exception) -> str:
+    """Log the error with its traceback; return a short id that matches the message the user sees."""
+    error_id = _secrets.token_hex(4)
+    if not isinstance(e, BaseException): e = Exception(str(e))       # some callers pass a string instead of an exception
+    _log.error("%s [%s]: %s", where, error_id, e, exc_info=(type(e), e, e.__traceback__))
+    return error_id
+
 def error(where: str, e: Exception, code: int = 500):
-    print(f"{where}:\n==============")
-    traceback.print_exc()
-    return JSONResponse({"status": "error", "message": f"Error: {e}"}, status_code=code)
+    """Call inside a route's except block: logs, then RAISES AppError. (It used to return a JSONResponse that
+    no route returned, so the browser received `null` with status 200 instead of an error.)"""
+    if isinstance(e, HTTPException): raise e               # 400/401/403… raised on purpose: keep as is
+    error_id = log_error(where, e)
+    msg = f"Error: {e}" if (SHOW_ERROR_DETAILS or code < 500) else f"Internal error (id {error_id}). Please contact the administrator."
+    raise AppError(where, msg, code, error_id)
 
 def encode_array(arr: np.ndarray) -> str:
     arr = arr.astype(np.float32)
@@ -60,19 +74,60 @@ def decode_array(b64_str: str, shape, dtype=np.float32) -> np.ndarray:
     arr = np.frombuffer(base64.b64decode(b64_str), dtype=dtype)
     return arr.reshape(shape)
 
-def basic_auth(credentials: HTTPBasicCredentials=Depends(HTTPBasic())):
-    username, password = credentials.username, credentials.password
-    if username not in USERS or USERS[username] != password:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authorized", headers={"WWW-Authenticate": "Basic"}
-        )
-    return username
+# ---------------------------------------------------------------- authentication (cookie session)
+def current_user(request: Request):
+    """Signed-in user (services.auth_store.User) or None; cached on request.state."""
+    if hasattr(request.state, "user"): return request.state.user
+    from services import auth_store
+    request.state.user = auth_store.session_user(request.cookies.get(COOKIE_NAME))
+    return request.state.user
+
+def basic_auth(request: Request) -> str:
+    """Keeps the OLD NAME so ~180 routes need no change: returns the session's username, 401 when not signed in.
+    (Previously: HTTP Basic + allowed_users.json.)"""
+    user = current_user(request)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if not user.can_write and request.method not in ("GET", "HEAD") and not _viewer_allowed(request.url.path):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Read-only account (viewer)")
+    return user.username
+
+# Viewer role: may only call read APIs (POST endpoints that do not write) – extend the list when needed
+_VIEWER_PREFIXES = ("/dashboard/", "/auth/", "/auth_check", "/get_timezone", "/get_config_files", "/load_",
+                    "/check_", "/get_", "/calibration_log_tail", "/plot_station")
+def _viewer_allowed(path: str) -> bool:
+    return path.startswith(_VIEWER_PREFIXES)
+
+def require_admin(request: Request) -> str:
+    user = current_user(request)
+    if user is None: raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if not user.is_admin: raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator only")
+    return user.username
+
+# ---------------------------------------------------------------- safe project names
+_BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+def safe_project_name(name) -> str:
+    """Valid project name: no path characters, not '.'/'..', at most 100 characters. 400 otherwise."""
+    if name is None: raise HTTPException(status_code=400, detail="Project name is required")
+    name = str(name).strip()
+    if "/" in name: name = name.rstrip("/").split("/")[-1]     # legacy "user/project" form -> keep the project name only
+    if name in (".", "..") or name.startswith(".") or len(name) > 100 or _BAD_NAME.search(name):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+    return name
 
 def project_definer(old_name, username='admin'):
-    new_name = f'{username}/{old_name}' if username!='admin' else 'demo'
+    """'<username>/<project>' (legacy account 'admin' -> shared demo project). The name is validated and the real
+    path must stay inside the user's folder -> blocks '../other_user/project'."""
+    if username == 'admin': new_name = 'demo'
+    else:
+        old_name = '' if old_name == '' else safe_project_name(old_name)
+        user_dir = os.path.realpath(os.path.join(PROJECT_ROOT, username))
+        target = os.path.realpath(os.path.join(user_dir, old_name))
+        if os.path.commonpath([user_dir, target]) != user_dir:
+            raise HTTPException(status_code=403, detail="Forbidden project path")
+        new_name = f'{username}/{old_name}'.rstrip('/')
     name_id = f'{new_name}/{uuid4()}'
-    if old_name == '': new_name = new_name.rstrip('/')
     return new_name, name_id
 
 def project_reader(user_name, project_name):
@@ -471,9 +526,7 @@ def kill_process(process):
             process.wait(timeout=5)
             return {"status": "ok", "message": "Simulation terminated."}
         except Exception: pass
-        # Force kill for Windows
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        kill_process_tree(process.pid)              # Windows & Linux
         return {"status": "ok", "message": "Simulation force killed"}
     except Exception as e: 
         return {"status": "error", "message": str(e)}
@@ -1101,3 +1154,42 @@ def clean_json_value(value):
     if isinstance(value, np.integer):
         return int(value)
     return value
+
+def kill_process_tree(pid: int) -> bool:
+    """Kill a process and all its children (Windows & Linux) with psutil; falls back to taskkill / SIGKILL."""
+    try:
+        import psutil
+        p = psutil.Process(int(pid))
+        for c in p.children(recursive=True):
+            try: c.kill()
+            except psutil.Error: pass
+        p.kill(); return True
+    except ImportError: pass
+    except Exception: return False
+    try:
+        if os.name == "nt":
+            return subprocess.run(["taskkill", "/F", "/T", "/PID", str(int(pid))], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, check=False).returncode == 0
+        os.killpg(os.getpgid(int(pid)), signal.SIGKILL); return True
+    except Exception: return False
+
+
+# ---------------------------------------------------------------- server resource limits
+SOLVER_NAMES = ("dflowfm", "dimr", "delwaq", "wflow_cli")
+
+def running_solvers() -> int:
+    """Number of simulation processes running on this machine (all users)."""
+    try: import psutil
+    except ImportError: return 0
+    n = 0
+    for p in psutil.process_iter(["name"]):
+        name = (p.info.get("name") or "").lower()
+        if any(s in name for s in SOLVER_NAMES): n += 1
+    return n
+
+def require_sim_slot():
+    """Dependency for routes that START a simulation: server at capacity -> 503 (try again later)."""
+    n = running_solvers()
+    if n >= MAX_SOLVER_PROCESSES:
+        raise HTTPException(status_code=503, detail=f"The server is busy: {n} simulation process(es) running "
+                            f"(limit {MAX_SOLVER_PROCESSES}). Please try again later.")

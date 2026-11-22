@@ -1,0 +1,28 @@
+# /etc/systemd/system/fjord-backend.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now fjord-backend
+#   journalctl -u fjord-backend -f        # follow the log
+[Unit]
+Description=Fjord Platform backend (FastAPI/uvicorn)
+After=network.target redis-server.service
+Requires=redis-server.service
+
+[Service]
+User=fjord
+Group=fjord
+WorkingDirectory=/opt/fjord/backend
+EnvironmentFile=/opt/fjord/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/fjord/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=5
+# Simulations are child processes: stop only uvicorn, do not kill running simulations on a service restart
+KillMode=process
+TimeoutStopSec=30
+LimitNOFILE=65536
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
