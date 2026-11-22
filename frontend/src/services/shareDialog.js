@@ -4,7 +4,7 @@ import { getLastProject } from './constant.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-export const SHARE_SEP = ':';
+export const SHARE_SEP = ':', PUBLIC_OWNER = 'public';
 
 async function api(url, body) {
     const res = await fetch(url, body === undefined ? {} : {
@@ -23,6 +23,7 @@ export function parseProjectRef(ref) {
 
 export function projectLabel(ref) {
     const { owner, name } = parseProjectRef(ref);
+    if (owner === PUBLIC_OWNER) return `${name} (sample)`;
     return owner ? `${name} (shared by ${owner})` : name;
 }
 
@@ -34,9 +35,10 @@ export async function initShareDialog({ toast = () => {}, beforeOpen = () => {},
     if (owner) {
         let access = '';
         try { access = (await api(`/auth/shares?project=${encodeURIComponent(project)}`)).my_access; } catch (e) { /* ignore */ }
-        const chip = $('project-chip-label');
-        if (chip) chip.textContent = `${name} · ${owner}${access === 'view' ? ' · view only' : ''}`;
-        $('project-chip')?.setAttribute('title', `Project '${name}' shared by ${owner} (${access || '?'} access)`);
+        const chip = $('project-chip-label'), pub = owner === PUBLIC_OWNER;
+        if (chip) chip.textContent = `${name} · ${pub ? 'sample' : owner}${access === 'view' ? ' · read only' : ''}`;
+        $('project-chip')?.setAttribute('title', pub ? `Sample project '${name}' – visible to everyone, read only (administrators can edit it)`
+            : `Project '${name}' shared by ${owner} (${access || '?'} access)`);
     }
     if (me && me.role === 'viewer') { $('btn-share-project').hidden = true; }
 
@@ -45,6 +47,12 @@ export async function initShareDialog({ toast = () => {}, beforeOpen = () => {},
         let d;
         try { d = await api(`/auth/shares?project=${encodeURIComponent(project)}`); }
         catch (e) { body.innerHTML = `<div class="empty-state error-state">${esc(e.message)}</div>`; return; }
+        if (d.public) {
+            body.innerHTML = `<p><b>${esc(d.project)}</b> is the <b>sample project</b>: every user can open it and look at its
+                results, but only administrators can change it${d.my_access === 'edit' ? ' (you are an administrator)' : ''}.</p>
+                <p style="color:var(--muted); font-size:12.5px">To experiment with it, copy it to your own projects and work on the copy.</p>`;
+            return;
+        }
         if (!d.can_manage) {
             body.innerHTML = `<p>Project <b>${esc(d.project)}</b> is shared with you by <b>${esc(d.owner)}</b>
                 with <b>${esc(d.my_access)}</b> access${d.my_access === 'view' ? ' (read only: you can view results but not change or run it)' : ''}.</p>
@@ -108,7 +116,7 @@ export async function initShareDialog({ toast = () => {}, beforeOpen = () => {},
     }
 
     $('btn-share-project')?.addEventListener('click', () => {
-        beforeOpen(); $('share-modal-title').textContent = owner ? 'Shared project' : 'Share project';
+        beforeOpen(); $('share-modal-title').textContent = owner === PUBLIC_OWNER ? 'Sample project' : owner ? 'Shared project' : 'Share project';
         modal.classList.add('show'); render();
     });
     modal?.addEventListener('click', (e) => { if (e.target === modal || e.target.closest('[data-close-modal]')) modal.classList.remove('show'); });

@@ -62,7 +62,7 @@ async def copy_project(request: Request, user=Depends(functions.basic_auth)):
     extend_task = None
     try:
         body = await request.json()
-        old_name, _ = functions.project_definer(body.get('oldName'), user)
+        old_name, _ = functions.project_definer(body.get('oldName'), user, for_copy=True)   # sample may be the source
         new_name, _ = functions.project_definer(body.get('newName'), user)
         functions.require_owner(new_name, user)          # copies always go into the user's own folder
         project_folder = os.path.normpath(os.path.join(PROJECT_ROOT, old_name))
@@ -128,7 +128,10 @@ async def select_project(request: Request, user=Depends(functions.basic_auth)):
             project = [p.name for p in os.scandir(project_dir) if p.is_dir()] if os.path.isdir(project_dir) else []
             project = [p for p in project if os.path.exists(os.path.normpath(os.path.join(project_dir, p, folder_check)))]
             data = sorted(project)
-            if not name and user != 'admin' and key_checker != 'flows':    # + projects shared with this user
+            if not name and user != 'admin' and key_checker != 'flows':    # + sample projects + projects shared with this user
+                for ref_ in functions.public_refs():
+                    folder = os.path.normpath(os.path.join(PROJECT_ROOT, ref_.split(functions.SHARE_SEP, 1)[1]))
+                    if os.path.exists(os.path.join(folder, folder_check or '')): data.insert(0, ref_)
                 from services import auth_store
                 for s in auth_store.list_shares(grantee=user):
                     folder = os.path.normpath(os.path.join(PROJECT_ROOT, s["owner"], s["project"]))
@@ -336,11 +339,16 @@ async def get_config_files(request: Request, user=Depends(functions.basic_auth))
     body = await request.json()
     # User comes from the SESSION, never from 'userName' in the body (it allowed reading other users' projects)
     # "<owner>:<project>" = project shared with this user (project_definer checks the share)
-    ref = (body.get('project') or '').strip() or 'demo'
+    sample = (functions.public_refs() or ['demo'])[0]           # fallback: the sample project ("public:demo")
+    ref = (body.get('project') or '').strip() or sample
     original_project, warning = ref, None
     def read(ref_):
         if user == 'admin': return functions.project_reader('', 'demo')
         path, _ = functions.project_definer(ref_, user)
+        if '/' not in path:                                      # sample project directly under PROJECT_ROOT
+            res = functions.project_reader('', path)
+            res["current_project"], res["owner"], res["shared"] = f"{functions.PUBLIC_OWNER}{functions.SHARE_SEP}{path}", functions.PUBLIC_OWNER, True
+            return res
         owner, name = path.split('/', 1)
         res = functions.project_reader(owner, name)
         res["current_project"] = name if owner == user else f"{owner}{functions.SHARE_SEP}{name}"
@@ -348,11 +356,11 @@ async def get_config_files(request: Request, user=Depends(functions.basic_auth))
         return res
     try: result = read(ref)
     except:
-        ref = 'demo'; traceback.print_exc()
+        ref = sample; traceback.print_exc()
         # Store warning for frontend
         warning = (
             f"Project '{original_project}' does not contain enough HYD configuration files." + 
-            f"\nPlease rerun the simulation and try again.\nUsing default project 'demo'."
+            f"\nPlease rerun the simulation and try again.\nUsing the sample project."
         )
         try: result = read(ref)
         except Exception: functions.error('/get_config_files', f"Could not load project '{original_project}' or fallback project 'demo'.")
