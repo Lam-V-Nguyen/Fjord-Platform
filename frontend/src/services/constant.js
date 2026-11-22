@@ -34,7 +34,7 @@ const saveState = (projectId, state) => {
 
 const LAST_PROJECT_KEY = 'demo', LAST_TIMEZONE = "";
 export const getLastProject = () => {
-    return localStorage.getItem(LAST_PROJECT_KEY) || 'demo';
+    return localStorage.getItem(LAST_PROJECT_KEY) || 'public:demo';     // new users start on the read-only sample project
 }
 export const setLastProject = (projectId) => {
     localStorage.setItem(LAST_PROJECT_KEY, projectId);

@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from redis.asyncio.lock import Lock
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt, gaussian_filter
-from config import PROJECT_ROOT, COOKIE_NAME, SHOW_ERROR_DETAILS, MAX_SOLVER_PROCESSES
+from config import PROJECT_ROOT, COOKIE_NAME, SHOW_ERROR_DETAILS, MAX_SOLVER_PROCESSES, PUBLIC_PROJECTS
 from uuid import uuid4
 from shapely.geometry import Polygon, MultiPolygon
 import numpy as np, xarray as xr, pandas as pd
@@ -118,6 +118,11 @@ def require_admin(request: Request) -> str:
 # ---------------------------------------------------------------- safe project names
 _BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 SHARE_SEP = ":"          # a shared project is referenced as "<owner>:<project>" (":" is never part of a folder name)
+PUBLIC_OWNER = "public"  # sample projects: "public:<name>" -> PROJECT_ROOT/<name>, read only except for administrators
+
+def public_refs() -> list[str]:
+    """References of the sample projects that exist on disk, e.g. ['public:demo']."""
+    return [f"{PUBLIC_OWNER}{SHARE_SEP}{p}" for p in PUBLIC_PROJECTS if os.path.isdir(os.path.join(PROJECT_ROOT, p))]
 
 def safe_project_name(name) -> str:
     """Valid project name: no path characters, not '.'/'..', at most 100 characters. 400 otherwise."""
@@ -139,17 +144,28 @@ def split_project_ref(ref, username: str) -> tuple[str, str]:
         return owner, safe_project_name(project)
     return username, safe_project_name(ref)
 
-def project_definer(old_name, username='admin'):
+def project_definer(old_name, username='admin', for_copy: bool = False):
     """'<owner>/<project>' path relative to PROJECT_ROOT (legacy account 'admin' -> shared demo project).
     - own project: '<project>' (or '<username>:<project>')
     - shared project: '<owner>:<project>' -> allowed only when shared with `username`; a 'view' share
       refuses write requests (403). The real path must stay inside the owner's folder (no '../').
+    - sample project: 'public:<name>' -> PROJECT_ROOT/<name>; everyone may read it, only administrators may change it
+      (for_copy=True: reading it as the SOURCE of a copy into the user's own folder is allowed).
     Raises 400 / 403 HTTPException."""
     if username == 'admin':
         new_name = 'demo'
     else:
         if old_name == '': owner, project = username, ''
         else: owner, project = split_project_ref(old_name, username)
+        if owner == PUBLIC_OWNER:
+            if project not in PUBLIC_PROJECTS:
+                raise HTTPException(status_code=404, detail=f"Sample project '{project}' not found")
+            req = _CURRENT_REQUEST.get()
+            user = current_user(req) if req is not None else None
+            if is_write_request(req) and not for_copy and not (user is not None and user.is_admin):
+                raise HTTPException(status_code=403, detail="The sample project is read-only. "
+                                    "Copy it to your own projects to make changes.")
+            return project, f'{project}/{uuid4()}'
         if owner != username:
             from services import auth_store
             access = auth_store.share_access(owner, project, username)

@@ -28,7 +28,8 @@ export async function projectModifier(user) {
         const option = document.createElement("option"); option.value = project;
         // "<owner>:<project>" = shared with you by <owner>
         const i = project.indexOf(':');
-        option.textContent = i > 0 ? `${project.slice(i + 1)}  (shared by ${project.slice(0, i)})` : project;
+        option.textContent = i < 0 ? project : project.startsWith('public:') ? `${project.slice(i + 1)}  (sample project, read only)`
+            : `${project.slice(i + 1)}  (shared by ${project.slice(0, i)})`;
         projectList.appendChild(option);
     });
     if (data.content.length > 0) { projectList.selectedIndex = 1; }

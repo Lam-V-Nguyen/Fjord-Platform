@@ -41,6 +41,7 @@ def client(tmp_path_factory):
                            allow_reserved=True)
     import config as cfg
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "boss", "lake1"), exist_ok=True)
+    os.makedirs(os.path.join(cfg.PROJECT_ROOT, "demo"), exist_ok=True)          # sample project
     return TestClient(app, base_url="http://localhost:8000"), auth_store
 
 def login(c, u, p): return c.post("/auth/login", json={"username": u, "password": p})
@@ -118,3 +119,17 @@ def test_project_sharing(client):
     # revoke
     c.post("/auth/shares/remove", json={"project": "lake1", "username": "carl"})
     assert carl.post("/dashboard/read", json={"projectName": "boss:lake1"}).status_code == 403
+
+
+def test_sample_project_read_only(client):
+    c, store = client
+    from fastapi.testclient import TestClient
+    u = TestClient(c.app, base_url="http://localhost:8000"); login(u, "carl", "Green-lake-tide-7")
+    assert u.post("/dashboard/read", json={"projectName": "public:demo"}).json()["project"] == "demo"
+    r = u.post("/project", json={"projectName": "public:demo"})
+    assert r.status_code == 403 and "read-only" in r.json()["message"]
+    assert u.get("/auth/shares?project=public:demo").json()["my_access"] == "view"
+    assert u.post("/dashboard/read", json={"projectName": "public:other"}).status_code == 404
+    login(c, "boss", "Correct-horse-9")                                   # administrator may edit the sample
+    assert c.post("/project", json={"projectName": "public:demo"}).json()["project"] == "demo"
+    assert c.post("/auth/shares/add", json={"project": "public:demo", "username": "carl"}).status_code == 400

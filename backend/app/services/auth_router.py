@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from config import (PROJECT_ROOT, COOKIE_NAME, COOKIE_SECURE, SESSION_HOURS, SESSION_MAX_DAYS, PUBLIC_URL, SOURCE_FRONTEND,
                     INVITE_HOURS, RESET_HOURS, SELF_REGISTRATION, ADMIN_EMAILS)
 from services import auth_store as store, mailer
-from services.functions import current_user, require_admin, split_project_ref, SHARE_SEP
+from services.functions import current_user, require_admin, split_project_ref, SHARE_SEP, PUBLIC_OWNER
 
 router = APIRouter()
 log = logging.getLogger("fjord.auth")
@@ -248,6 +248,8 @@ def _signed_in(request: Request):
 def _owned_project(ref: str, user) -> tuple[str, str]:
     """(owner, project) of a project the caller may manage: its owner, or an administrator."""
     owner, project = split_project_ref(ref, user.username)
+    if owner == PUBLIC_OWNER:
+        raise HTTPException(status_code=400, detail="The sample project is already visible to everyone")
     if owner != user.username and not user.is_admin:
         raise HTTPException(status_code=403, detail="Only the owner of the project (or an administrator) can manage sharing")
     if not os.path.isdir(os.path.join(PROJECT_ROOT, owner, project)):
@@ -258,6 +260,9 @@ def _owned_project(ref: str, user) -> tuple[str, str]:
 def shares_of_project(project: str, request: Request):
     user = _signed_in(request)
     owner, name = split_project_ref(project, user.username)
+    if owner == PUBLIC_OWNER:                                     # sample project: everyone reads, admins edit
+        return _ok(owner=owner, project=name, can_manage=False, public=True,
+                   my_access="edit" if user.is_admin else "view", shares=[])
     if owner != user.username and not user.is_admin:             # shared with me: show who shared it, not the list
         access = store.share_access(owner, name, user.username)
         if access is None: raise HTTPException(status_code=403, detail="Project not shared with you")

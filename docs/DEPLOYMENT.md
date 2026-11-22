@@ -65,7 +65,7 @@ New files: `services/auth_store.py`, `services/auth_router.py`, `services/mailer
   answer 503 "server is busy".
 - **Process termination** uses `psutil`, so it works on both Windows and Linux (`functions.kill_process_tree`).
 - `deploy/`: `.env.example`, `Caddyfile` (HTTPS), Windows (NSSM) and Linux (systemd) services, backup scripts.
-- `backend/tests/test_auth.py` (7 tests) and `.github/workflows/ci.yml` (GitHub Actions).
+- `backend/tests/test_auth.py` (8 tests) and `.github/workflows/ci.yml` (GitHub Actions).
 
 ### A.4. Project sharing
 
@@ -91,7 +91,20 @@ Every user works in their own folder `projects/<username>/`. An owner can share 
 Note: opening a scenario in Visualization records it as the project's "current WAQ scenario" (`output/config/config.json`),
 also for users with a *view* share – the same file the owner's dashboard reads.
 
-### A.5. Behaviour changes to be aware of
+### A.5. Sample project (read only for everyone)
+
+The folder `PROJECT_ROOT/demo` is a **sample project** that every signed-in user can open, referenced as `public:demo`.
+
+- New users start on it (no project selected yet), and it is listed first in **Open Project** as
+  *"demo (sample project, read only)"*; the project chip shows *"demo · sample · read only"*.
+- Everyone can view the dashboard, Visualization and results. Any change (inputs, runs, deletion) is refused with
+  *"The sample project is read-only. Copy it to your own projects to make changes."*
+- **Administrators** (role `admin`) can change it, e.g. to refresh the sample results.
+- Users can make their own copy to experiment: *Create HYD Scenario → select "public:demo" → Clone Scenario*.
+- More sample projects: `PUBLIC_PROJECTS=demo,fjord2` in `.env` (folders directly under `PROJECT_ROOT`).
+- Opening a WAQ scenario in Visualization/dashboard records it as the sample's "current WAQ scenario" (shared by everyone).
+
+### A.6. Behaviour changes to be aware of
 
 - A **missing** `projectName` (`None`) in a request body used to become the folder `user/None`; it is now
   **400 Project name is required**.
@@ -191,7 +204,7 @@ Open http://localhost:8000; it redirects to `/login`. Check:
    ```powershell
    cd backend
    pip install pytest httpx
-   python -m pytest -q tests          # 7 passed
+   python -m pytest -q tests          # 8 passed
    ```
 
 When everything works, merge the pull request into `main`.
@@ -482,6 +495,7 @@ normal sign-in. Everything else (cookie, roles, `/admin`) stays the same.
 | `SESSION_HOURS` / `SESSION_MAX_DAYS` | 12 / 14 | Session lifetime |
 | `LOGIN_MAX_FAILS` | 5 | Failures before a 15-minute lock |
 | `SELF_REGISTRATION` | `true` | Enables "Request access" |
+| `PUBLIC_PROJECTS` | `demo` | Read-only sample projects under `PROJECT_ROOT`, visible to all users |
 | `INVITE_HOURS` / `RESET_HOURS` | 72 / 2 | Link validity |
 | `SMTP_*`, `ADMIN_EMAILS` | empty | Outgoing e-mail; recipients of access requests |
 | `REDIS_URL` / `REQUIRE_REDIS` | `redis://localhost:6379/0` / per `ENV` | Redis |

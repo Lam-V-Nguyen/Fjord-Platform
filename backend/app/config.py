@@ -73,7 +73,10 @@ _hosts = [h.strip() for h in (_env("ALLOWED_HOSTS", "") or "").split(",") if h.s
 ALLOWED_HOSTS = _hosts or ([urlparse(PUBLIC_URL).hostname, "localhost", "127.0.0.1"] if IS_PROD else ["*"])
 # Send error details to the browser? (production: generic message + error id only; details go to the log)
 SHOW_ERROR_DETAILS = _bool("SHOW_ERROR_DETAILS", not IS_PROD)
-SELF_REGISTRATION = _bool("SELF_REGISTRATION", True)       # "Request access" button (account waits for admin approval)
+SELF_REGISTRATION = _bool("SELF_REGISTRATION", True)
+# Sample projects visible to EVERY signed-in user, read only (administrators may edit them).
+# Folders directly under PROJECT_ROOT (e.g. PROJECT_ROOT/demo), referenced as "public:<name>".
+PUBLIC_PROJECTS = [p.strip() for p in (_env("PUBLIC_PROJECTS", "demo") or "").split(",") if p.strip()]       # "Request access" button (account waits for admin approval)
 
 # Max simulation processes (D-Flow FM, DELWAQ, Wflow) running at once on the server – above it, new runs are refused
 MAX_SOLVER_PROCESSES = int(_env("MAX_SOLVER_PROCESSES", str(max(1, (os.cpu_count() or 4) // 2))))
