@@ -17,6 +17,7 @@ import { renderPreview, currentMap } from "./mapManager.js";
 import { TOOL_GROUPS, QUICK_TOOLS, getTool, groupOf, standaloneLabel } from "./toolRegistry.js";
 import { icon } from "./icons.js";
 import { initThresholdEditor } from "./thresholdEditor.js";
+import { initAccountMenu } from "./accountMenu.js";
 import { Dashboard, toast, initSidebarResize } from "./dashboardManager.js";
 
 const app = document.getElementById('app');
@@ -202,6 +203,7 @@ function bindShell() {
     });
     settings.addEventListener('click', (e) => e.stopPropagation());
     bindTimezoneSearch();
+    initAccountMenu({ toast, beforeOpen: () => settings.classList.remove('show') });
     initThresholdEditor({
         toast, beforeOpen: () => settings.classList.remove('show'),
         onSaved: () => dashboard?.refresh(true),          // tính lại cảnh báo / WQI theo ngưỡng mới

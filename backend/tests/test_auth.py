@@ -1,0 +1,86 @@
+"""
+Tests for sign-in, roles and project isolation.   Run:  cd backend && python -m pytest -q tests
+Uses temporary folders for projects / database, so real data is never touched.
+"""
+import os, sys, importlib
+import pytest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [os.path.join(HERE, "..", "app"), os.path.join(HERE, "..")]
+
+@pytest.fixture(scope="module")
+def client(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("fjord")
+    (tmp / "frontend" / "src" / "htmls").mkdir(parents=True)
+    for n in ("login.html", "admin.html"): (tmp / "frontend" / "src" / "htmls" / n).write_text("<html></html>")
+    os.environ.update(PROJECT_DES=str(tmp), ENV="development", REQUIRE_REDIS="false")
+    from fastapi import APIRouter, Depends, FastAPI, Request
+    from fastapi.testclient import TestClient
+    import config; importlib.reload(config)
+    from services import auth_store, auth_router, security, functions
+    for m in (auth_store, functions, auth_router, security): importlib.reload(m)
+    auth_store.init_db()
+    app = FastAPI(); security.install(app); app.include_router(auth_router.router)
+    r = APIRouter()
+
+    @r.post("/project")
+    async def project(request: Request, user=Depends(functions.basic_auth)):
+        body = await request.json()
+        try: return {"project": functions.project_definer(body.get("projectName"), user)[0]}
+        except Exception as e: functions.error("/project", e)
+
+    @r.post("/dashboard/read")
+    async def read(): return {"ok": True}
+    app.include_router(r, dependencies=[Depends(functions.basic_auth)])
+    auth_store.create_user("boss", email="boss@x.no", password="Correct-horse-9", role="admin", status="active",
+                           allow_reserved=True)
+    return TestClient(app, base_url="http://localhost:8000"), auth_store
+
+def login(c, u, p): return c.post("/auth/login", json={"username": u, "password": p})
+
+def test_requires_login(client):
+    c, _ = client
+    assert c.post("/project", json={"projectName": "a"}).status_code == 401
+
+def test_login_and_project_isolation(client):
+    c, _ = client
+    assert login(c, "boss", "wrong-password").status_code == 401
+    assert login(c, "boss", "Correct-horse-9").status_code == 200
+    assert c.post("/project", json={"projectName": "lake1"}).json()["project"] == "boss/lake1"
+    # "../other/x" cannot leave the user's folder
+    assert c.post("/project", json={"projectName": "../other/x"}).json()["project"] == "boss/x"
+    assert c.post("/project", json={"projectName": ".."}).status_code == 400
+
+def test_csrf_blocked(client):
+    c, _ = client
+    r = c.post("/project", json={"projectName": "a"}, headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+
+def test_invite_flow_and_viewer(client):
+    c, _ = client
+    login(c, "boss", "Correct-horse-9")
+    inv = c.post("/auth/admin/invite", json={"username": "anna", "email": "anna@x.no", "role": "viewer"}).json()
+    token = inv["link"].split("invite=")[1]
+    from fastapi.testclient import TestClient
+    v = TestClient(c.app, base_url="http://localhost:8000")
+    assert v.post("/auth/set_password", json={"kind": "invite", "token": token, "password": "short"}).status_code == 400
+    assert v.post("/auth/set_password", json={"kind": "invite", "token": token, "password": "Blue-river-fjord-1"}).status_code == 200
+    assert v.post("/auth/set_password", json={"kind": "invite", "token": token, "password": "Blue-river-fjord-2"}).status_code == 400
+    assert v.post("/dashboard/read").status_code == 200        # viewer: may read
+    assert v.post("/project", json={"projectName": "a"}).status_code == 403   # viewer: may not write
+    assert v.get("/auth/admin/users").status_code == 403
+
+def test_rate_limit_and_last_admin(client):
+    c, _ = client
+    x = __import__("fastapi.testclient", fromlist=["TestClient"]).TestClient(c.app, base_url="http://localhost:8000")
+    for _ in range(6): login(x, "anna", "nope-nope-nope")
+    assert login(x, "anna", "Blue-river-fjord-1").status_code == 429
+    login(c, "boss", "Correct-horse-9")
+    r = c.post("/auth/admin/update", json={"username": "boss", "role": "user"})
+    assert r.status_code == 400 and "last" in r.json()["message"]
+
+def test_passwords_are_hashed(client):
+    _, store = client
+    with store.db() as con:
+        h = con.execute("SELECT password_hash FROM users WHERE username='boss'").fetchone()[0]
+    assert h.startswith("$argon2id$") and "Correct-horse-9" not in h

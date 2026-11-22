@@ -1,0 +1,25 @@
+# Automated checks on every push / pull request
+name: CI
+on: [push, pull_request]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: backend/requirements.txt }
+      - name: Install
+        run: pip install -r backend/requirements.txt geopandas pytest httpx pip-audit
+      - name: Tests
+        working-directory: backend
+        run: python -m pytest -q tests
+      - name: Known vulnerabilities in dependencies
+        run: pip-audit -r backend/requirements.txt || true     # remove "|| true" to fail CI on known vulnerabilities
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }          # Node 22 detects ES modules with --check
+      - name: JavaScript syntax
+        run: for f in frontend/src/services/*.js; do node --check "$f" || exit 1; done

@@ -393,7 +393,7 @@ def met_downloader(key:str, api_key:str, url:str, dir:str, processes:dict, key_p
     except Exception as e: 
         logger.exception("Weather download failed.")
         processes[key_process] = {"status": "failed", "message": str(e)}
-        functions.error('/met_downloader', e)
+        functions.log_error('/met_downloader', e)
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
         for h in logger.handlers[:]:
@@ -594,7 +594,7 @@ def dem_downloader(directory:str, key:str, resolution:int, boundary:gpd.GeoDataF
             if os.path.exists(temp_file):
                 try: functions.safe_remove(temp_file)
                 except OSError: pass
-        functions.error('/dem_downloader', e)
+        functions.log_error('/dem_downloader', e)
 
 def prepare_terrain(project_name:str, dem_path:str):
     # Convert to COG

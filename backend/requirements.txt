@@ -26,3 +26,9 @@ xugrid>=0.12
 numba-celltree>=0.2
 numba>=0.59
 ruamel.yaml==0.19.1
+# --- Security & operations (added for production)
+argon2-cffi>=23.1          # password hashing (Argon2id)
+cryptography>=42           # encrypts credentials.json
+psutil>=5.9                # stop / count simulation processes (Windows & Linux)
+python-dotenv>=1.0         # reads .env (already used by config.py)
+jinja2>=3.1                # page templates (route_page.py)

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign in · Fjord Platform</title>
+    <link rel="icon" type="image/png" href="/src_frontend/images/logo16x16.png" />
+    <link rel="stylesheet" href="/src_frontend/styles/theme.css">
+    <link rel="stylesheet" href="/src_frontend/styles/layout.css">
+    <link rel="stylesheet" href="/src_frontend/styles/auth.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <img src="/src_frontend/images/logo16x16.png" alt="">
+      <div><b>Fjord Platform</b><small>Hydrodynamic &amp; water-quality modelling</small></div>
+    </div>
+
+    <!-- 1. Sign in -->
+    <section data-view="login">
+      <h2>Sign in</h2><p class="sub">Use your username or e-mail.</p>
+      <form class="auth-form" id="f-login" autocomplete="on">
+        <label>Username or e-mail<input name="username" autocomplete="username" required autofocus></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <div class="auth-msg"></div>
+        <button class="btn primary" type="submit">Sign in</button>
+      </form>
+      <div class="auth-links"><a data-go="forgot">Forgot password?</a><a data-go="request" id="go-request">Request access</a></div>
+    </section>
+
+    <!-- 2. Request access (account waits for admin approval) -->
+    <section data-view="request" hidden>
+      <h2>Request access</h2><p class="sub">An administrator will review your request.</p>
+      <form class="auth-form" id="f-request" autocomplete="on">
+        <div class="row2">
+          <label>Full name<input name="full_name" autocomplete="name" required></label>
+          <label>Organisation<input name="organisation" autocomplete="organization"></label>
+        </div>
+        <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
+        <label>Username<input name="username" autocomplete="username" pattern="[a-z0-9][a-z0-9_.\-]{2,31}" required>
+          <span class="auth-hint">3–32 characters: a–z, 0–9, “_”, “-”, “.” (also the name of your project folder)</span></label>
+        <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+        <label>Repeat password<input name="password2" type="password" autocomplete="new-password" minlength="10" required></label>
+        <label>Why do you need access? (optional)<textarea name="note" maxlength="500"></textarea></label>
+        <input class="hp" name="website" tabindex="-1" autocomplete="off">
+        <div class="auth-msg"></div>
+        <button class="btn primary" type="submit">Send request</button>
+      </form>
+      <div class="auth-links"><a data-go="login">← Back to sign in</a></div>
+    </section>
+
+    <!-- 3. Forgot password -->
+    <section data-view="forgot" hidden>
+      <h2>Forgot password</h2><p class="sub">We will e-mail you a link to choose a new password.</p>
+      <form class="auth-form" id="f-forgot">
+        <label>Username or e-mail<input name="email" required></label>
+        <div class="auth-msg"></div>
+        <button class="btn primary" type="submit">Send reset link</button>
+      </form>
+      <div class="auth-links"><a data-go="login">← Back to sign in</a></div>
+    </section>
+
+    <!-- 4. Set password from an invitation / reset link -->
+    <section data-view="setpw" hidden>
+      <h2 id="setpw-title">Choose a password</h2><p class="sub" id="setpw-sub"></p>
+      <form class="auth-form" id="f-setpw">
+        <label>New password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+        <label>Repeat password<input name="password2" type="password" autocomplete="new-password" minlength="10" required></label>
+        <span class="auth-hint">At least 10 characters, must not contain your username.</span>
+        <div class="auth-msg"></div>
+        <button class="btn primary" type="submit">Save password</button>
+      </form>
+      <div class="auth-links"><a data-go="login">← Back to sign in</a></div>
+    </section>
+
+    <div class="auth-foot">By signing in you agree to the terms of use of this service.</div>
+  </div>
+</div>
+<script type="module" src="/src_frontend/services/authPage.js"></script>
+</body>
+</html>
