@@ -197,6 +197,7 @@ async def dashboard_thresholds(request: Request, user=Depends(functions.basic_au
     try:
         body = await _body(request)
         if body.get("save") is not None:
+            functions.require_admin(request)        # thresholds are shared by all users -> admins only
             data = await asyncio.to_thread(dfn.save_thresholds, body["save"])
             await _clear_summary_cache(request)
         elif body.get("reload"):
