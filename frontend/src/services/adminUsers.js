@@ -48,6 +48,12 @@ async function load() {
     $('#mail-note').textContent = d.mail_enabled ? 'Invitations are sent by e-mail.'
         : 'E-mail (SMTP) is not configured: copy the invitation link shown after sending and give it to the user.';
     render();
+    const sh = await api('/auth/admin/shares');
+    $('#shares').innerHTML = sh.shares.map(s => `<tr><td><b>${esc(s.project)}</b></td><td>${esc(s.owner)}</td>
+        <td>${esc(s.grantee)}</td><td><span class="pill ${s.access === 'edit' ? 'invited' : 'active'}">${esc(s.access)}</span></td>
+        <td class="muted">${fmt(s.created_at)}</td>
+        <td><button class="btn small danger" data-unshare="${esc(s.owner)}:${esc(s.project)}|${esc(s.grantee)}">Revoke</button></td></tr>`).join('')
+        || '<tr><td colspan="6" class="muted">No shared projects</td></tr>';
     const a = await api('/auth/admin/audit?limit=60');
     $('#audit').innerHTML = a.events.map(e => `<tr><td class="muted">${fmt(e.at)}</td><td>${esc(e.actor || '')}</td>
         <td>${esc(e.action)}</td><td>${esc(e.target || '')}</td><td class="muted">${esc(e.detail || '')}</td>
@@ -94,6 +100,14 @@ $('#users').addEventListener('click', async (e) => {
         }
         await load();
     } catch (err) { alert(err.message); }
+});
+
+$('#shares').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-unshare]');
+    if (!b) return;
+    const [project, username] = b.dataset.unshare.split('|');
+    if (!confirm(`Stop sharing ${project} with ${username}?`)) return;
+    try { await api('/auth/shares/remove', { project, username }); await load(); } catch (err) { alert(err.message); }
 });
 
 load().catch(err => alert(err.message));

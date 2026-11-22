@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS login_fails (
     at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_fails_key ON login_fails(key, at);
+CREATE TABLE IF NOT EXISTS project_shares (
+    owner TEXT NOT NULL,                   -- username owning projects/<owner>/<project>
+    project TEXT NOT NULL,
+    grantee TEXT NOT NULL,                 -- username the project is shared with
+    access TEXT NOT NULL DEFAULT 'view',   -- 'view' | 'edit'
+    created_by TEXT, created_at REAL NOT NULL,
+    PRIMARY KEY (owner, project, grantee)
+);
+CREATE INDEX IF NOT EXISTS ix_shares_grantee ON project_shares(grantee);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at REAL NOT NULL, actor TEXT, action TEXT NOT NULL, target TEXT, detail TEXT, ip TEXT
@@ -208,7 +217,9 @@ def delete_user(username: str):
     user = get_user(username)
     if user is None: raise AuthError("User not found")
     if user.is_admin and count_admins() <= 1: raise AuthError("Cannot delete the last administrator")
-    with db() as con: con.execute("DELETE FROM users WHERE id = ?", (user.id,))
+    with db() as con:
+        con.execute("DELETE FROM users WHERE id = ?", (user.id,))
+        con.execute("DELETE FROM project_shares WHERE owner = ? OR grantee = ?", (user.username, user.username))
 
 def set_password(username: str, password: str, activate: bool = False):
     user = get_user(username)
@@ -324,3 +335,47 @@ def consume_token(token: str, purpose: str, new_password: str) -> User:
     set_password(user.username, new_password, activate=(purpose == "invite" or user.status == "invited"))
     with db() as con: con.execute("UPDATE tokens SET used_at = ? WHERE token_hash = ?", (_now(), _h(token)))
     return get_user(user.username)
+
+
+# ---------------------------------------------------------------- project sharing
+SHARE_ACCESS = ("view", "edit")
+
+def share_access(owner: str, project: str, grantee: str) -> str | None:
+    """'view' | 'edit' when <owner>/<project> is shared with <grantee> (and the grantee is active), else None."""
+    with db() as con:
+        r = con.execute("""SELECT s.access FROM project_shares s JOIN users u ON u.username = s.grantee
+                           WHERE s.owner = ? AND s.project = ? AND s.grantee = ? AND u.status = 'active'""",
+                        (owner, project, grantee)).fetchone()
+    return r[0] if r else None
+
+def add_share(owner: str, project: str, grantee: str, access: str, created_by: str) -> dict:
+    grantee = (grantee or "").strip().lower()
+    if access not in SHARE_ACCESS: raise AuthError("Access must be 'view' or 'edit'")
+    if grantee == owner: raise AuthError("A project cannot be shared with its owner")
+    if get_user(grantee) is None: raise AuthError(f"User '{grantee}' does not exist")
+    with db() as con:
+        con.execute("""INSERT INTO project_shares(owner, project, grantee, access, created_by, created_at)
+                       VALUES (?,?,?,?,?,?)
+                       ON CONFLICT(owner, project, grantee) DO UPDATE SET access = excluded.access""",
+                    (owner, project, grantee, access, created_by, _now()))
+    return {"owner": owner, "project": project, "grantee": grantee, "access": access}
+
+def remove_share(owner: str, project: str, grantee: str) -> bool:
+    with db() as con:
+        return con.execute("DELETE FROM project_shares WHERE owner = ? AND project = ? AND grantee = ?",
+                           (owner, project, (grantee or "").lower())).rowcount > 0
+
+def rename_shares(owner: str, old_project: str, new_project: str):
+    with db() as con:
+        con.execute("UPDATE project_shares SET project = ? WHERE owner = ? AND project = ?", (new_project, owner, old_project))
+
+def drop_project_shares(owner: str, project: str):
+    with db() as con:
+        con.execute("DELETE FROM project_shares WHERE owner = ? AND project = ?", (owner, project))
+
+def list_shares(owner: str | None = None, project: str | None = None, grantee: str | None = None) -> list[dict]:
+    q, args = "SELECT owner, project, grantee, access, created_by, created_at FROM project_shares WHERE 1=1", []
+    for col, val in (("owner", owner), ("project", project), ("grantee", grantee)):
+        if val is not None: q += f" AND {col} = ?"; args.append(val)
+    with db() as con:
+        return [dict(r) for r in con.execute(q + " ORDER BY owner, project, grantee", args)]

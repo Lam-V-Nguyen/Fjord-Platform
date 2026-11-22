@@ -30,10 +30,17 @@ def client(tmp_path_factory):
         except Exception as e: functions.error("/project", e)
 
     @r.post("/dashboard/read")
-    async def read(): return {"ok": True}
+    async def read(request: Request, user=Depends(functions.basic_auth)):
+        body = await request.json() if (await request.body()) else {}
+        try:
+            if body.get("projectName"): return {"project": functions.project_definer(body["projectName"], user)[0]}
+            return {"ok": True}
+        except Exception as e: functions.error("/dashboard/read", e)
     app.include_router(r, dependencies=[Depends(functions.basic_auth)])
     auth_store.create_user("boss", email="boss@x.no", password="Correct-horse-9", role="admin", status="active",
                            allow_reserved=True)
+    import config as cfg
+    os.makedirs(os.path.join(cfg.PROJECT_ROOT, "boss", "lake1"), exist_ok=True)
     return TestClient(app, base_url="http://localhost:8000"), auth_store
 
 def login(c, u, p): return c.post("/auth/login", json={"username": u, "password": p})
@@ -84,3 +91,30 @@ def test_passwords_are_hashed(client):
     with store.db() as con:
         h = con.execute("SELECT password_hash FROM users WHERE username='boss'").fetchone()[0]
     assert h.startswith("$argon2id$") and "Correct-horse-9" not in h
+
+
+def test_project_sharing(client):
+    c, store = client
+    from fastapi.testclient import TestClient
+    login(c, "boss", "Correct-horse-9")
+    store.create_user("carl", email="carl@x.no", password="Green-lake-tide-7", role="user", status="active")
+    carl = TestClient(c.app, base_url="http://localhost:8000"); login(carl, "carl", "Green-lake-tide-7")
+    # not shared yet
+    assert carl.post("/dashboard/read", json={"projectName": "boss:lake1"}).status_code == 403
+    # view share: read OK, write refused
+    r = c.post("/auth/shares/add", json={"project": "lake1", "username": "carl", "access": "view"})
+    assert r.status_code == 200 and r.json()["shares"][0]["grantee"] == "carl"
+    assert carl.post("/dashboard/read", json={"projectName": "boss:lake1"}).json()["project"] == "boss/lake1"
+    assert carl.post("/project", json={"projectName": "boss:lake1"}).status_code == 403
+    assert [s["ref"] for s in carl.get("/auth/shares/with_me").json()["shares"]] == ["boss:lake1"]
+    # carl cannot manage the owner's sharing
+    assert carl.post("/auth/shares/add", json={"project": "boss:lake1", "username": "anna", "access": "edit"}).status_code == 403
+    # edit share: write allowed
+    c.post("/auth/shares/add", json={"project": "lake1", "username": "carl", "access": "edit"})
+    assert carl.post("/project", json={"projectName": "boss:lake1"}).json()["project"] == "boss/lake1"
+    # unknown project / traversal through the owner part
+    assert c.post("/auth/shares/add", json={"project": "nope", "username": "carl"}).status_code == 404
+    assert carl.post("/dashboard/read", json={"projectName": "..:x"}).status_code == 400
+    # revoke
+    c.post("/auth/shares/remove", json={"project": "lake1", "username": "carl"})
+    assert carl.post("/dashboard/read", json={"projectName": "boss:lake1"}).status_code == 403

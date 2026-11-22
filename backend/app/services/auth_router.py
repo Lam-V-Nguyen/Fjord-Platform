@@ -5,15 +5,18 @@ Pages:   GET /login (sign in · request access · forgot password · set passwor
 API:     POST /auth/login · /auth/logout · GET /auth/me · POST /auth/change_password
          POST /auth/request_access · /auth/forgot · GET /auth/token_info · POST /auth/set_password
 Admin:   GET /auth/admin/users · POST /auth/admin/invite · /auth/admin/update · /auth/admin/approve
-         POST /auth/admin/reset_link · /auth/admin/delete · GET /auth/admin/audit
+         POST /auth/admin/reset_link · /auth/admin/delete · GET /auth/admin/audit · GET /auth/admin/shares
+Sharing: GET /auth/shares?project= · POST /auth/shares/add · /auth/shares/remove · GET /auth/shares/with_me
+         GET /auth/users_lookup?q=   (projects shared with a user are referenced as "<owner>:<project>")
 """
 import os, time, logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from config import (COOKIE_NAME, COOKIE_SECURE, SESSION_HOURS, SESSION_MAX_DAYS, PUBLIC_URL, SOURCE_FRONTEND,
+from fastapi import HTTPException
+from config import (PROJECT_ROOT, COOKIE_NAME, COOKIE_SECURE, SESSION_HOURS, SESSION_MAX_DAYS, PUBLIC_URL, SOURCE_FRONTEND,
                     INVITE_HOURS, RESET_HOURS, SELF_REGISTRATION, ADMIN_EMAILS)
 from services import auth_store as store, mailer
-from services.functions import current_user, require_admin
+from services.functions import current_user, require_admin, split_project_ref, SHARE_SEP
 
 router = APIRouter()
 log = logging.getLogger("fjord.auth")
@@ -234,3 +237,82 @@ def admin_audit(limit: int = 200, admin: str = Depends(require_admin)):
     with store.db() as con:
         rows = [dict(r) for r in con.execute("SELECT * FROM audit ORDER BY id DESC LIMIT ?", (min(limit, 2000),))]
     return _ok(events=rows, now=time.time())
+
+
+# ================================================================= project sharing
+def _signed_in(request: Request):
+    user = current_user(request)
+    if user is None: raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+def _owned_project(ref: str, user) -> tuple[str, str]:
+    """(owner, project) of a project the caller may manage: its owner, or an administrator."""
+    owner, project = split_project_ref(ref, user.username)
+    if owner != user.username and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Only the owner of the project (or an administrator) can manage sharing")
+    if not os.path.isdir(os.path.join(PROJECT_ROOT, owner, project)):
+        raise HTTPException(status_code=404, detail=f"Project '{project}' not found")
+    return owner, project
+
+@router.get("/auth/shares")
+def shares_of_project(project: str, request: Request):
+    user = _signed_in(request)
+    owner, name = split_project_ref(project, user.username)
+    if owner != user.username and not user.is_admin:             # shared with me: show who shared it, not the list
+        access = store.share_access(owner, name, user.username)
+        if access is None: raise HTTPException(status_code=403, detail="Project not shared with you")
+        return _ok(owner=owner, project=name, can_manage=False, my_access=access, shares=[])
+    owner, name = _owned_project(project, user)
+    return _ok(owner=owner, project=name, can_manage=True, shares=store.list_shares(owner=owner, project=name))
+
+@router.post("/auth/shares/add")
+async def shares_add(request: Request):
+    user = _signed_in(request)
+    if not user.can_write: return _fail("Read-only accounts cannot share projects", 403)
+    body = await _json(request)
+    owner, name = _owned_project(body.get("project") or "", user)
+    try: share = store.add_share(owner, name, body.get("username"), body.get("access", "view"), user.username)
+    except store.AuthError as e: return _fail(str(e))
+    store.audit("project_shared", actor=user.username, target=share["grantee"],
+                detail=f"{owner}/{name} ({share['access']})", ip=_ip(request))
+    grantee = store.get_user(share["grantee"])
+    if grantee and grantee.email:
+        mailer.send(grantee.email, f"Project shared with you: {name}",
+                    f"Hello {grantee.full_name or grantee.username},\n\n{user.full_name or user.username} has shared the project "
+                    f"'{name}' with you ({share['access']} access).\nOpen it in {PUBLIC_URL} via Open Project: "
+                    f"'{owner}{SHARE_SEP}{name}'.\n")
+    return _ok(share=share, shares=store.list_shares(owner=owner, project=name))
+
+@router.post("/auth/shares/remove")
+async def shares_remove(request: Request):
+    user = _signed_in(request)
+    body = await _json(request)
+    owner, name = split_project_ref(body.get("project") or "", user.username)
+    grantee = (body.get("username") or "").lower()
+    # owner / admin may remove anyone; a user may also leave a project shared with them
+    if not (owner == user.username or user.is_admin or grantee == user.username):
+        return _fail("Not allowed", 403)
+    store.remove_share(owner, name, grantee)
+    store.audit("project_unshared", actor=user.username, target=grantee, detail=f"{owner}/{name}", ip=_ip(request))
+    return _ok(shares=store.list_shares(owner=owner, project=name) if owner == user.username or user.is_admin else [])
+
+@router.get("/auth/shares/with_me")
+def shares_with_me(request: Request):
+    user = _signed_in(request)
+    return _ok(shares=[{**s, "ref": f'{s["owner"]}{SHARE_SEP}{s["project"]}'} for s in store.list_shares(grantee=user.username)])
+
+@router.get("/auth/users_lookup")
+def users_lookup(q: str, request: Request):
+    """Usernames to share with (active accounts only, at least 2 characters, max 10 results)."""
+    user = _signed_in(request)
+    q = (q or "").strip().lower()
+    if len(q) < 2: return _ok(users=[])
+    with store.db() as con:
+        rows = con.execute("""SELECT username, full_name, organisation FROM users WHERE status = 'active' AND username != ?
+                              AND (username LIKE ? OR lower(full_name) LIKE ?) ORDER BY username LIMIT 10""",
+                           (user.username, f"{q}%", f"%{q}%")).fetchall()
+    return _ok(users=[dict(r) for r in rows])
+
+@router.get("/auth/admin/shares")
+def admin_shares(admin: str = Depends(require_admin)):
+    return _ok(shares=store.list_shares())
