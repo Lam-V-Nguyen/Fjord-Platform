@@ -46,6 +46,7 @@ def client(tmp_path_factory):
     )
     import config as cfg
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "boss", "lake1"), exist_ok=True)
+    os.makedirs(os.path.join(cfg.PROJECT_ROOT, "boss", "x"), exist_ok=True)
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "demo"), exist_ok=True)          # sample project
     return TestClient(app, base_url=constants.LOCAL_HOST), auth_store
 
@@ -166,3 +167,15 @@ def test_per_user_waq_choice_on_sample_and_shared_projects(client):
     as_user("carl")
     assert "user_state" in functions.user_config_path("boss/lake1")        # shared project: private copy
     functions._CURRENT_REQUEST.set(None)
+
+def test_missing_project_is_never_created(client):
+    """A route must not silently create a project folder (e.g. a download log for a project that was never created)."""
+    c, store = client
+    import config as cfg
+    login(c, "boss", "Correct-horse-9")
+    r = c.post("/project", json={"projectName": "never_created"})
+    assert r.status_code == 404 and "does not exist" in r.json()["message"]
+    assert not os.path.exists(os.path.join(cfg.PROJECT_ROOT, "boss", "never_created"))
+    assert c.post("/project", json={"projectName": ""}).status_code == 400          # no project selected
+    assert c.post("/dashboard/read", json={"projectName": "never_created"}).status_code == 404
+    assert c.post("/project", json={"projectName": "lake1"}).json()["project"] == "boss/lake1"   # existing: fine

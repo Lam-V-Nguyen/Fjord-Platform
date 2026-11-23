@@ -144,14 +144,23 @@ def split_project_ref(ref, username: str) -> tuple[str, str]:
         return owner, safe_project_name(project)
     return username, safe_project_name(ref)
 
-def project_definer(old_name, username='admin', for_copy: bool = False):
+def _require_project_dir(path: str, ref) -> None:
+    """404 when PROJECT_ROOT/<path> is not an existing project folder."""
+    if not os.path.isdir(os.path.join(PROJECT_ROOT, path)):
+        raise HTTPException(status_code=404, detail=f"Project '{ref}' does not exist. "
+                            "Create a new project or open an existing one first.")
+
+def project_definer(old_name, username='admin', for_copy: bool = False, must_exist: bool = True):
     """'<owner>/<project>' path relative to PROJECT_ROOT (legacy account 'admin' -> shared demo project).
     - own project: '<project>' (or '<username>:<project>')
     - shared project: '<owner>:<project>' -> allowed only when shared with `username`; a 'view' share
       refuses write requests (403). The real path must stay inside the owner's folder (no '../').
     - sample project: 'public:<name>' -> PROJECT_ROOT/<name>; everyone may read it, only administrators may change it
       (for_copy=True: reading it as the SOURCE of a copy into the user's own folder is allowed).
-    Raises 400 / 403 HTTPException."""
+    - must_exist=True (default): the project folder must already exist (404 otherwise), so no route silently creates a
+      project – e.g. a download log for a project that was never created. Only the routes that CREATE a project
+      (setup_new_project, copy_project, save_scenario_calibration, finish_calibration) pass must_exist=False.
+    Raises 400 / 403 / 404 HTTPException."""
     if username == 'admin':
         new_name = 'demo'
     else:
@@ -165,6 +174,7 @@ def project_definer(old_name, username='admin', for_copy: bool = False):
             if is_write_request(req) and not for_copy and not (user is not None and user.is_admin):
                 raise HTTPException(status_code=403, detail="The sample project is read-only. "
                                     "Copy it to your own projects to make changes.")
+            if must_exist: _require_project_dir(project, old_name)
             return project, f'{project}/{uuid4()}'
         if owner != username:
             from services import auth_store
@@ -178,6 +188,10 @@ def project_definer(old_name, username='admin', for_copy: bool = False):
         if os.path.commonpath([owner_dir, target]) != owner_dir:
             raise HTTPException(status_code=403, detail="Forbidden project path")
         new_name = f'{owner}/{project}'.rstrip('/')
+        if not project:                         # '' = the user's own folder: only for listing projects
+            if is_write_request(_CURRENT_REQUEST.get()):
+                raise HTTPException(status_code=400, detail="No project selected. Create a new project or open an existing one first.")
+        elif must_exist: _require_project_dir(new_name, old_name)
     name_id = f'{new_name}/{uuid4()}'
     return new_name, name_id
 

@@ -1,5 +1,5 @@
 import traceback, asyncio, os, shutil, json, msgpack
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from config import PROJECT_ROOT
 from services import functions, grid_functions
@@ -11,8 +11,14 @@ router = APIRouter()
 async def auth_check(request: Request, user=Depends(functions.basic_auth)):
     u = functions.current_user(request)
     output = 'ok' if user == 'admin' else 'error'
+    try: body = await request.json()
+    except Exception: body = {}
+    project_exists = None                       # the browser's last project still exists for this user? (None = not asked)
+    if body.get('projectName'):
+        try: functions.project_definer(body['projectName'], user); project_exists = True
+        except HTTPException: project_exists = False
     return {"user": user, "output": output, "role": u.role if u else None,
-            "full_name": u.full_name if u else "", "is_admin": bool(u and u.is_admin)}
+            "full_name": u.full_name if u else "", "is_admin": bool(u and u.is_admin), "project_exists": project_exists}
 
 @router.post("/get_timezone")
 async def get_timezone(request: Request):
@@ -48,7 +54,7 @@ async def reset_config(request: Request, user=Depends(functions.basic_auth)):
 async def setup_new_project(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
-        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        project_name, _ = functions.project_definer(body.get('projectName'), user, must_exist=False)
         project_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name))
         os.makedirs(project_dir, exist_ok=True)
         input_dir = os.path.normpath(os.path.join(project_dir, "input"))
@@ -64,7 +70,7 @@ async def copy_project(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
         old_name, _ = functions.project_definer(body.get('oldName'), user, for_copy=True)   # sample may be the source
-        new_name, _ = functions.project_definer(body.get('newName'), user)
+        new_name, _ = functions.project_definer(body.get('newName'), user, must_exist=False)
         functions.require_owner(new_name, user)          # copies always go into the user's own folder
         project_folder = os.path.normpath(os.path.join(PROJECT_ROOT, old_name))
         redis = request.app.state.redis

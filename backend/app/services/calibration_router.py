@@ -659,7 +659,7 @@ async def save_scenario_calibration(request: Request, user=Depends(functions.bas
     try:
         body = await request.json()
         project_old, _ = functions.project_definer(body.get('oldProject'), user)
-        project_new, _ = functions.project_definer(body.get('newProject'), user)
+        project_new, _ = functions.project_definer(body.get('newProject'), user, must_exist=False)
         functions.require_owner(project_new, user)       # new scenario always goes into the user's own folder
         redis, key = request.app.state.redis, f"{project_old}:{project_new}"
         lock = redis.lock(key, timeout=1000, blocking_timeout=10)
@@ -773,7 +773,7 @@ async def finish_calibration(request: Request, user=Depends(functions.basic_auth
         body = await request.json()
         old_project, new_project = body.get('oldName'), body.get('newName')
         project_old, _ = functions.project_definer(old_project, user)
-        project_new, _ = functions.project_definer(new_project, user)
+        project_new, _ = functions.project_definer(new_project, user, must_exist=False)
         checked = body.get('delete', False)
         old_dir = os.path.join(PROJECT_ROOT, project_old)
         new_dir = os.path.join(PROJECT_ROOT, project_new)
