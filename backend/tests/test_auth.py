@@ -4,6 +4,7 @@ Uses temporary folders for projects / database, so real data is never touched.
 """
 import os, sys, importlib
 import pytest
+from backend.app.services import constants
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", "app"), os.path.join(HERE, "..")]
@@ -44,7 +45,7 @@ def client(tmp_path_factory):
     import backend.app.config as cfg
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "boss", "lake1"), exist_ok=True)
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "demo"), exist_ok=True)          # sample project
-    return TestClient(app, base_url="http://localhost:8000"), auth_store
+    return TestClient(app, base_url=constants.LOCAL_HOST), auth_store
 
 def login(c, u, p): return c.post("/auth/login", json={"username": u, "password": p})
 
@@ -72,7 +73,7 @@ def test_invite_flow_and_viewer(client):
     inv = c.post("/auth/admin/invite", json={"username": "anna", "email": "anna@x.no", "role": "viewer"}).json()
     token = inv["link"].split("invite=")[1]
     from fastapi.testclient import TestClient
-    v = TestClient(c.app, base_url="http://localhost:8000")
+    v = TestClient(c.app, base_url=constants.LOCAL_HOST)
     assert v.post("/auth/set_password", json={"kind": "invite", "token": token, "password": "short"}).status_code == 400
     assert v.post("/auth/set_password", json={"kind": "invite", "token": token, "password": "Blue-river-fjord-1"}).status_code == 200
     assert v.post("/auth/set_password", json={"kind": "invite", "token": token, "password": "Blue-river-fjord-2"}).status_code == 400
@@ -82,7 +83,7 @@ def test_invite_flow_and_viewer(client):
 
 def test_rate_limit_and_last_admin(client):
     c, _ = client
-    x = __import__("fastapi.testclient", fromlist=["TestClient"]).TestClient(c.app, base_url="http://localhost:8000")
+    x = __import__("fastapi.testclient", fromlist=["TestClient"]).TestClient(c.app, base_url=constants.LOCAL_HOST)
     for _ in range(6): login(x, "anna", "nope-nope-nope")
     assert login(x, "anna", "Blue-river-fjord-1").status_code == 429
     login(c, "boss", "Correct-horse-9")
@@ -101,7 +102,7 @@ def test_project_sharing(client):
     from fastapi.testclient import TestClient
     login(c, "boss", "Correct-horse-9")
     store.create_user("carl", email="carl@x.no", password="Green-lake-tide-7", role="user", status="active")
-    carl = TestClient(c.app, base_url="http://localhost:8000"); login(carl, "carl", "Green-lake-tide-7")
+    carl = TestClient(c.app, base_url=constants.LOCAL_HOST); login(carl, "carl", "Green-lake-tide-7")
     # not shared yet
     assert carl.post("/dashboard/read", json={"projectName": "boss:lake1"}).status_code == 403
     # view share: read OK, write refused
@@ -126,7 +127,7 @@ def test_project_sharing(client):
 def test_sample_project_read_only(client):
     c, store = client
     from fastapi.testclient import TestClient
-    u = TestClient(c.app, base_url="http://localhost:8000"); login(u, "carl", "Green-lake-tide-7")
+    u = TestClient(c.app, base_url=constants.LOCAL_HOST); login(u, "carl", "Green-lake-tide-7")
     assert u.post("/dashboard/read", json={"projectName": "public:demo"}).json()["project"] == "demo"
     r = u.post("/project", json={"projectName": "public:demo"})
     assert r.status_code == 403 and "read-only" in r.json()["message"]

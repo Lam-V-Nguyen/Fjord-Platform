@@ -6,15 +6,15 @@ Weather forcing for the flow (Wflow) model.
 Every source is first converted to a "source dataset" in ERA5 convention
 (variables named like the values of VARIABLES, ERA5 units, regular latitude/longitude grid,
 optional orography as geopotential). The common step `build_forcing_file` then interpolates it to the
-DEM grid (Regridder, lapse-rate correction) and writes flows/<flow>/forcing/weather_forcing.nc –
+DEM grid (Regridder, lapse-rate correction) and writes flows/<flow>/forcing/weather_forcing.nc -
 exactly as before for ERA5.
 
 Sources
 -------
-era5             CDS ERA5 single levels (gridded, request queue)                          – CDS API key
-era5-timeseries  CDS ERA5 hourly time series (point = catchment centre, fast)             – CDS API key
-met-nordic       MET Norway MET Nordic analysis, 1 km, hourly, 2012-09 → now (Nordic)     – no key
-open-meteo       Open-Meteo historical API (point = catchment centre, non-commercial)     – no key
+era5             CDS ERA5 single levels (gridded, request queue)                          - CDS API key
+era5-timeseries  CDS ERA5 hourly time series (point = catchment centre, fast)             - CDS API key
+met-nordic       MET Norway MET Nordic analysis, 1 km, hourly, 2012-09 → now (Nordic)     - no key
+open-meteo       Open-Meteo historical API (point = catchment centre, non-commercial)     - no key
 """
 import os, gc, glob, json, shutil, time, threading, hashlib, zipfile, uuid, stat, requests
 from concurrent.futures import ThreadPoolExecutor, as_completed

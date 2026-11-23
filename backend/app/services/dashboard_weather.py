@@ -169,7 +169,7 @@ def _fetch_frost(lat: float, lon: float, now: datetime) -> dict:
 
 # MET Norway Locationforecast (forecast)
 def _fetch_metno(lat: float, lon: float, now: datetime) -> dict:
-    r = requests.get("https://api.met.no/weatherapi/locationforecast/2.0/compact", timeout=constants.WEATHER_TIMEOUT,
+    r = requests.get(os.getenv('MET_NO'), timeout=constants.WEATHER_TIMEOUT,
         headers={"User-Agent": constants.WEATHER_USER_AGENT}, params={"lat": f"{lat:.4f}", "lon": f"{lon:.4f}"}
     )
     r.raise_for_status(); ttl = None
@@ -200,7 +200,7 @@ def _fetch_metno(lat: float, lon: float, now: datetime) -> dict:
 #  Open-Meteo (model)
 def _fetch_openmeteo(lat: float, lon: float, now: datetime) -> dict:
     hourly = "temperature_2m,precipitation,pressure_msl,relative_humidity_2m"
-    r = requests.get("https://api.open-meteo.com/v1/forecast", timeout=constants.WEATHER_TIMEOUT, 
+    r = requests.get(os.getenv('MET_FORECAST'), timeout=constants.WEATHER_TIMEOUT, 
         headers={"User-Agent": constants.WEATHER_USER_AGENT}, params={"latitude": f"{lat:.4f}", 
         "longitude": f"{lon:.4f}", "hourly": hourly, "past_days": max(1, constants.WEATHER_PAST_HOURS // 24),
         "forecast_days": max(1, constants.WEATHER_FORECAST_HOURS // 24) + 1, "timezone": "GMT"})
