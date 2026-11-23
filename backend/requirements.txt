@@ -37,3 +37,6 @@ cryptography>=42           # encrypts credentials.json
 psutil>=5.9                # stop / count simulation processes (Windows & Linux)
 python-dotenv>=1.0         # reads .env (already used by config.py)
 jinja2>=3.1                # page templates (route_page.py)
+# Testing (python -m pytest -q tests)
+pytest>=8.0
+httpx>=0.27                # required by FastAPI TestClient
