@@ -1,5 +1,5 @@
-/* Chế độ "Wflow 3D" của Dashboard (dashboardWflow3D.js tự nạp file này khi được bật).
-   .panel-map.w3d-on : ẩn bản đồ Leaflet và mọi thành phần của nó, chỉ giữ khung 3D và bảng cài đặt ⚙. */
+/* "Wflow 3D" Dashboard mode (dashboardWflow3D.js loads this file when it is switched on).
+   .panel-map.w3d-on : hides the Leaflet map and all its components, keeping only the 3D frame and the ⚙ settings panel. */
 .panel-map.w3d-on > :not(.w3d-root):not(#layer-settings) { display: none !important; }
 
 .w3d-root {

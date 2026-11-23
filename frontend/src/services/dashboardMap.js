@@ -1,9 +1,9 @@
-// Bản đồ của Dashboard (Leaflet) – trung tâm là KẾT QUẢ MÔ PHỎNG:
-//  - Trường HYD/WAQ trên lưới tính toán (canvas), tô màu theo biến/lớp/thời điểm
-//  - Trạm quan trắc HYD/WAQ (bấm để chọn trạm cho profile & chuỗi thời gian)
-//  - Vùng cảnh báo tại trạm vượt ngưỡng
-//  - Lớp ngữ cảnh: ranh giới hồ, lưu vực, sông, độ sâu mẫu, lớp GIS của dự án
-//  - Danh sách bật/tắt lớp ở sidebar (lưu localStorage) + chú giải có thang màu
+// Dashboard map (Leaflet) – centred on the SIMULATION RESULTS:
+//  - HYD/WAQ fields on the computational mesh (canvas), coloured by variable/layer/time
+//  - HYD/WAQ monitoring stations (click to select the station for the profile & time series)
+//  - Alert zones at stations exceeding thresholds
+//  - Context layers: lake boundary, catchment, rivers, sample depths, project GIS layers
+//  - Layer on/off list in the sidebar (saved in localStorage) + legend with colour scale
 
 import { icon } from './icons.js';
 import { cssVar, seriesColors } from './dashboardCharts.js';
@@ -31,7 +31,7 @@ export const BASEMAPS = {
     },
 };
 
-// Thang màu cho từng loại biến (từ thấp -> cao)
+// Colour scales per variable type (low -> high)
 export const PALETTES = {
     thermal: ['#1e3a8a', '#2563eb', '#06b6d4', '#a3e635', '#facc15', '#f97316', '#dc2626'],
     haline: ['#0c4a6e', '#0284c7', '#22d3ee', '#a7f3d0', '#fef9c3'],
@@ -49,12 +49,12 @@ export const LAYER_DEFS = [
     { key: 'field', label: 'Simulation field', kind: 'gradient', on: true },
     { key: 'stations', label: 'Observation stations', kind: 'point', color: '#e879f9', icon: 'eye', on: true },
     { key: 'alerts', label: 'Alert zones', kind: 'zone', color: '#f43f5e', on: true },
-    // context: true -> luôn có trong danh sách, chỉ sáng khi dự án có file tương ứng trong <project>/others
+    // context: true -> always listed, only enabled when the project has the matching file in <project>/others
     { key: 'lake', label: 'Lake boundary', kind: 'polygon', color: '#38bdf8', on: true, context: true, file: 'lake.geojson' },
     { key: 'catchment', label: 'Catchment', kind: 'polygon-dashed', color: '#a3e635', on: false, context: true, file: 'catchment.geojson' },
     { key: 'rivers', label: 'River network', kind: 'line', color: '#60a5fa', on: false, context: true, file: 'river.geojson' },
     { key: 'bathymetry', label: 'Bathymetry points', kind: 'gradient', palette: 'bathymetry', on: false, context: true, file: 'depth.csv' },
-    // Lớp bổ sung: chỉ bật được khi dự án có dữ liệu (xem setAvailability / registerExtra)
+    // Extra layers: can only be enabled when the project has data (see setAvailability / registerExtra)
     { key: 'movement', label: 'Flow movement (HYD)', kind: 'gradient', palette: 'speed_light', on: false, extra: true },
     { key: 'pollution', label: 'Pollutant spread (WAQ)', kind: 'gradient', palette: 'quality', on: false, extra: true },
     { key: 'wflow', label: 'Wflow results', kind: 'gradient', palette: 'flow', on: false, extra: true },
@@ -101,18 +101,18 @@ export class DashboardMap {
         this.defs = LAYER_DEFS.map(d => ({ ...d }));
         this.state = { ...Object.fromEntries(this.defs.map(d => [d.key, d.on])), ...loadState() };
         this.meshBounds = null; this.contextBounds = null;
-        this.meshLayers = [];      // L.Polygon theo chỉ số ô
+        this.meshLayers = [];      // L.Polygon by cell index
         this.field = null;         // {values, min, max, label, unit, palette}
-        this.stationLookup = {};   // tên trạm -> [lat, lon]
+        this.stationLookup = {};   // station name -> [lat, lon]
         this.stationMarkers = {};
         this.selectedStation = null;
         this.alertMarkers = {};
         this.scaleMode = localStorage.getItem('dash-scale-mode') || 'fixed';
-        this.extraHandlers = {};          // key -> async (on) => {...}  (lớp bổ sung)
+        this.extraHandlers = {};          // key -> async (on) => {...}  (extra layers)
         this.availability = {};           // key -> {available, ready, reason}
-        this.baseAvail = {};              // key -> {available, reason}  (field, stations, alerts, lớp nền)
+        this.baseAvail = {};              // key -> {available, reason}  (field, stations, alerts, base layers)
         this.extraLegends = {};           // key -> {title, palette, min, max, note} | [ ... ]
-        this.settingsHandlers = {};       // key -> (btn) => mở bảng cài đặt
+        this.settingsHandlers = {};       // key -> (btn) => open the settings panel
         this.loadingKeys = new Set();
         this.rawField = null;
     }
@@ -175,7 +175,7 @@ export class DashboardMap {
         if (this.groups[key]) this.map.removeLayer(this.groups[key]);
         this.groups[key] = group;
         const def = this.defs.find(d => d.key === key);
-        if (this.state[key] ?? def?.on ?? true) group.addTo(this.map);   // mặc định theo LAYER_DEFS (on: false -> ẩn)
+        if (this.state[key] ?? def?.on ?? true) group.addTo(this.map);   // default from LAYER_DEFS (on: false -> hidden)
     }
 
     // Mesh + field
@@ -216,8 +216,8 @@ export class DashboardMap {
     setField(field) {
         // field: {values, min, max, label, unit, palette, time}
         this.rawField = field;
-        // Thang màu: 'fixed' = P2–P98 trên toàn thời gian (ổn định khi chạy animation)
-        //           'frame' = P2–P98 của khung hình hiện tại (tương phản tốt hơn)
+        // Colour scale: 'fixed' = P2–P98 over the whole period (stable during animation)
+        //           'frame' = P2–P98 of the current frame (better contrast)
         if (this.scaleMode === 'frame') {
             const v = field.values.filter(x => x !== null && x !== undefined).sort((a, b) => a - b);
             if (v.length) { field = { ...field, min: v[Math.floor(v.length * 0.02)], max: v[Math.ceil(v.length * 0.98) - 1] }; }
@@ -238,7 +238,7 @@ export class DashboardMap {
     // stations
     setStations(stations) {
         // stations: [{name, lat, lon, sources:['hyd','waq'], coords:{hyd:[lat,lon], waq:[lat,lon]}}]
-        // Có thể có 2 điểm cùng tên (HYD và WAQ ở hai vị trí khác nhau).
+        // There may be 2 points with the same name (HYD and WAQ at two different locations).
         this.stationLookup = {}; this.stationMarkers = {};
         const g = L.layerGroup();
         const def = this.defs.find(d => d.key === 'stations');
@@ -274,13 +274,13 @@ export class DashboardMap {
 
     // context layers
     setContext(layers) {
-        const parts = []; layers = layers || {};  // null = dự án không tồn tại / không đọc được -> tất cả mờ
+        const parts = []; layers = layers || {};  // null = project does not exist / cannot be read -> everything greyed out
         const hasGeo = (gj) => !!(gj && (gj.features ? gj.features.length : gj.type));
         this.contextAvail = {
             lake: hasGeo(layers.lake), catchment: hasGeo(layers.catchment), rivers: hasGeo(layers.rivers),
             bathymetry: Array.isArray(layers.bathymetry) && layers.bathymetry.length > 0,
         };
-        // Cập nhật trạng thái MỌI lớp nền (có dữ liệu -> bật được; không có -> mờ + lý do), gỡ lớp không còn dữ liệu
+        // Update the state of ALL base layers (data -> can be enabled; none -> greyed out + reason), remove layers that no longer have data
         Object.entries(this.contextAvail).forEach(([k, ok]) => {
             const file = this.defs.find(d => d.key === k)?.file;
             this._setBase(k, ok, `No ${file} in the project folder 'others'`);
@@ -341,7 +341,7 @@ export class DashboardMap {
         (alerts || []).forEach(a => {
             const loc = this.stationLookup[`${a.source}:${a.location}`] || this.stationLookup[a.location];
             if (!loc) return;
-            const key = loc.join(',');   // nhóm theo VỊ TRÍ (hai trạm cùng tên có thể ở hai nơi)
+            const key = loc.join(',');   // group by LOCATION (two stations with the same name may be in two places)
             (byLoc[key] = byLoc[key] || { name: a.location, loc, items: [] }).items.push(a);
         });
         Object.values(byLoc).forEach(({ name, loc, items }) => {
@@ -370,8 +370,8 @@ export class DashboardMap {
         return true;
     }
 
-    // Có dữ liệu để bật/tắt? Lớp bổ sung: theo /dashboard/extras; lớp GIS: luôn có (chỉ tạo khi có file);
-    // còn lại: theo dữ liệu đã nạp (chưa nạp xong -> mờ, "Checking data…")
+    // Data available to toggle? Extra layers: from /dashboard/extras; GIS layers: always (only created when a file exists);
+    // others: from the loaded data (not loaded yet -> greyed out, "Checking data…")
     _setBase(key, available, reason) { this.baseAvail[key] = { available: !!available, reason: available ? '' : reason }; }
     isAvailable(d) {
         if (d.extra) return !!this.availability[d.key]?.available;
@@ -393,7 +393,7 @@ export class DashboardMap {
                 ${d.extra && on && this.settingsHandlers[d.key] ? `<button type="button" class="layer-gear" data-settings="${esc(d.key)}" title="${esc(d.label)} settings">⚙</button>` : ''}
                 <span class="swatch" style="background:${sw}"></span></label>`;
         }).join('');
-        this.layerListEl.onclick = (e) => {             // nút ⚙ trong <label>: không bật/tắt checkbox
+        this.layerListEl.onclick = (e) => {             // ⚙ button inside <label>: does not toggle the checkbox
             const g = e.target.closest('[data-settings]');
             if (!g) return;
             e.preventDefault(); e.stopPropagation();
@@ -405,7 +405,7 @@ export class DashboardMap {
         };
     }
 
-    //  lớp bổ sung (movement, wflow)
+    //  extra layers (movement, wflow)
     registerExtra(key, handler, onSettings = null) {
         this.extraHandlers[key] = handler;
         if (onSettings) this.settingsHandlers[key] = onSettings;
@@ -427,7 +427,7 @@ export class DashboardMap {
         this.renderLegend();
     }
 
-    // Đặt trạng thái checkbox mà KHÔNG gọi handler (vd. khi bật thất bại)
+    // Set the checkbox state WITHOUT calling the handler (e.g. when enabling failed)
     setChecked(key, on) {
         this.state[key] = on; saveState(this.state);
         const cb = this.layerListEl?.querySelector(`[data-layer="${CSS.escape(key)}"]`);
@@ -445,12 +445,12 @@ export class DashboardMap {
         if (def?.extra) {
             if (!this.availability[key]?.available) return;
             this.setChecked(key, on);
-            this.renderLayerList();                      // hiện/ẩn nút ⚙
+            this.renderLayerList();                      // show/hide the ⚙ button
             const h = this.extraHandlers[key];
             if (h) h(on);
             return;
         }
-        if (!this.isAvailable(def || { key })) return;     // mờ: không đổi trạng thái đã lưu
+        if (!this.isAvailable(def || { key })) return;     // greyed out: do not change the saved state
         this.state[key] = on; saveState(this.state);
         const g = this.groups[key];
         if (g) { on ? g.addTo(this.map) : this.map.removeLayer(g); }
@@ -460,7 +460,7 @@ export class DashboardMap {
     }
 
     toggleAll() {
-        // Lớp bổ sung (nặng) không bật/tắt hàng loạt
+        // Extra (heavy) layers are not toggled in bulk
         const base = this.defs.filter(d => !d.extra && this.isAvailable(d));
         const anyOff = base.some(d => !(this.state[d.key] ?? d.on));
         base.forEach(d => this.toggle(d.key, anyOff));
@@ -504,8 +504,8 @@ export class DashboardMap {
     }
 
     // utils
-    // Bản đồ đang bị ẩn (vd. khung Wflow 3D che, kích thước 0×0)? Khi đó Leaflet tính zoom sai
-    // (fitBounds trên khung 0×0 -> zoom tối đa) nên bỏ qua.
+    // Is the map hidden (e.g. covered by the Wflow 3D frame, size 0×0)? Leaflet then computes the wrong zoom
+    // (fitBounds on a 0×0 frame -> maximum zoom), so skip.
     isShown() {
         const c = this.map?.getContainer();
         return !!(c && c.offsetWidth > 0 && c.offsetHeight > 0);

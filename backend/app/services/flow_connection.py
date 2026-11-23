@@ -85,7 +85,7 @@ def needs_rebuild(model_dir, res=None, view_dir=constants.VIEW_DIR):
     elif abs(float(res) - float(meta["grid"]["res_m"])) > 1e-6:
         return f"Resolution changed {meta['grid']['res_m']} -> {res} m"
     if "velocity" not in meta: return "Viewer cache has no velocity field (particles)"
-    # Cache cũ được ghi khi tạo vận tốc bị lỗi (velocity = null) dù output có dòng chảy mặt -> dựng lại
+    # Old cache written while velocity generation failed (velocity = null) although the output has surface flow -> rebuild
     if meta.get("velocity") is None and not meta.get("velocity_error") and \
             any(v in meta.get("variables", {}) for v in ("overland_flow", "river_discharge")):
         return "Viewer cache has no velocity field although overland_flow/river_discharge exist"
@@ -407,7 +407,7 @@ def build_cache(model_dir:str, res:str, budget_mb_per_var=400, chunk=48,
         try:
             meta["velocity"] = build_velocity(p["cache"], ds, static, flip, cell, src_crs, x, ys, src_idx, domain, T, chunk)
         except Exception as e:
-            # Hạt chỉ là phần phụ: lỗi vận tốc không được làm hỏng cả cache viewer
+            # Particles are only an extra: a velocity error must not break the whole viewer cache
             meta["velocity"], meta["velocity_error"] = None, str(e)
             print(f"build_cache: velocity field skipped – {e}")
         with open(os.path.join(p["cache"], "meta.json"), "w", encoding="utf-8") as f:

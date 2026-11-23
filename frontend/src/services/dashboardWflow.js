@@ -1,14 +1,14 @@
-// Lớp "Wflow results": kết quả sau khi chạy mô hình Wflow, đọc từ cache viewer của nền tảng
-// (flows/<flow>/wflow_model/viewer_dashboard) – cache RIÊNG, độc lập với công cụ Flow Estimation (viewer/).
-//  - Lớp sông (river): tô màu & độ dày từng đoạn sông theo giá trị
-//  - Lớp lưới (grid): ảnh raster trên lưới Wflow
-//  Hai lớp có thể hiển thị đồng thời (vd. lưu lượng sông trên nền dòng chảy mặt).
-// Chế độ: animate (theo thanh thời gian) | max | mean | sum | tmax | above (thống kê cả kỳ chạy,
-// GET /dashboard/wflow/stat/{var}/{stat}). Cài đặt hiển thị lưu trong localStorage;
-// độ phân giải/dựng lại cache là thao tác phía server (cache dùng chung).
+// "Wflow results" layer: results after running the Wflow model, read from the platform's viewer cache
+// (flows/<flow>/wflow_model/viewer_dashboard) – OWN cache, independent of the Flow Estimation tool (viewer/).
+//  - River layer: each river segment coloured & sized by its value
+//  - Grid layer: raster image on the Wflow grid
+//  Both layers can be shown together (e.g. river discharge over surface runoff).
+// Modes: animate (follows the time bar) | max | mean | sum | tmax | above (statistics over the whole run,
+// GET /dashboard/wflow/stat/{var}/{stat}). Display settings are saved in localStorage;
+// resolution/cache rebuild are server-side operations (shared cache).
 
 import { paletteColor, fmtVal } from './dashboardMap.js';
-// Không import từ dashboardMovement.js: lớp Wflow độc lập hoàn toàn với lớp HYD
+// No imports from dashboardMovement.js: the Wflow layer is fully independent of the HYD layer
 function nearestIndex(times, iso) {
     if (!times?.length) return -1;
     if (!iso) return times.length - 1;
@@ -21,14 +21,14 @@ function nearestIndex(times, iso) {
     return best;
 }
 import { ui, bindSettings, loadSettings, saveSettings, readInput } from './dashboardLayerSettings.js';
-import { WflowParticles } from './dashboardWflowParticles.js';      // riêng cho Wflow (không dùng chung với HYD)
+import { WflowParticles } from './dashboardWflowParticles.js';      // Wflow only (not shared with HYD)
 
 const L = window.L;
 const SETTINGS_KEY = 'dash.wflow.settings';
 const DEFAULTS = { river: null, grid: null, mode: 'animate', threshold: '', scale: 'auto', opacity: 0.8, flow: null };
-// Hạt dòng chảy mặt (trường vận tốc velocity.npy của cache viewer) – bật mặc định khi có dữ liệu
+// Surface-runoff particles (velocity field velocity.npy of the viewer cache) – on by default when data exists
 const P_KEY = 'dash.wflow.particles';
-// Mặc định giống công cụ Flow Estimation (flowRunner.js: count 4000, speed 1, trail 0.92, curve sqrt)
+// Defaults as in the Flow Estimation tool (flowRunner.js: count 4000, speed 1, trail 0.92, curve sqrt)
 const P_DEFAULTS = { on: true, count: 4000, pspeed: 1, trail: 0.92, width: 1.5, curve: 'sqrt', pcolor: 'speed', opacity: 1, water: true };
 const MODES = [['animate', 'Animate'], ['max', 'Max'], ['mean', 'Mean'], ['sum', 'Sum'], ['tmax', 'Time of peak'], ['above', 'Hours above']];
 const MODE_LABEL = Object.fromEntries(MODES);
@@ -82,7 +82,7 @@ export class WflowLayer {
     }
 
     q(extra = '') {
-        // v = phiên bản cache viewer -> sau khi dựng lại, trình duyệt không dùng dữ liệu cũ
+        // v = viewer cache version -> after a rebuild the browser does not use stale data
         return `projectName=${encodeURIComponent(this.projectName)}&flowName=${encodeURIComponent(this.info.flow)}&v=${encodeURIComponent(this.info.version || '')}${extra}`;
     }
 
@@ -91,7 +91,7 @@ export class WflowLayer {
         const flowName = opts.flowName || this.S.flow || undefined;
         let res;
         try { res = await post('wflow/init', { projectName: this.projectName, ...opts, flowName }); }
-        catch (err) {                                      // kịch bản đã lưu không còn -> dùng mặc định
+        catch (err) {                                      // saved scenario no longer exists -> use the default
             if (!flowName || opts.flowName) throw err;
             res = await post('wflow/init', { projectName: this.projectName, ...opts, flowName: undefined });
         }
@@ -100,11 +100,11 @@ export class WflowLayer {
         this.lastRebuild = res.rebuilt ? res.reason : null;
         if (!this.map.getPane('wflow')) {
             const pane = this.map.createPane('wflow');
-            pane.style.zIndex = 395;                 // trên trường mô phỏng, dưới hạt movement
+            pane.style.zIndex = 395;                 // above the simulation field, below the movement particles
         }
         this.frames.clear(); this.stats.clear(); this.frameIndex = -1;
         this.riverGeo = null; this.cellsOf = null; this.mask = null;
-        // Biến: giữ lựa chọn đã lưu nếu còn tồn tại; '' = tắt có chủ ý
+        // Variable: keep the saved choice if it still exists; '' = deliberately off
         const ok = (name, kind) => name && res.variables[name]?.kind === kind;
         const river = this.S.river === '' ? '' : ok(this.S.river, 'river') ? this.S.river : (res.river_default || '');
         let grid = this.S.grid === '' ? '' : ok(this.S.grid, 'grid') ? this.S.grid : '';
@@ -114,7 +114,7 @@ export class WflowLayer {
         return this;
     }
 
-    // Thanh thời gian (theo kết quả HYD/WAQ) nằm ngoài kỳ mô phỏng Wflow?
+    // Is the time bar (from HYD/WAQ results) outside the Wflow simulation period?
     outsidePeriod() {
         const t = Date.parse(this.lastIso || ''), ts = this.info?.times || [];
         if (!Number.isFinite(t) || !ts.length) return false;
@@ -130,7 +130,7 @@ export class WflowLayer {
 
     get hasVelocity() { return !!this.info?.velocity; }
 
-    // mask.npy của cache viewer: 0 ngoài miền, 1 đất, 2 vùng nước (water area)
+    // mask.npy of the viewer cache: 0 outside the domain, 1 land, 2 water area
     async loadMask() {
         if (!this.cellsOf) {
             this.mask = new Uint8Array(await getBin(`/dashboard/wflow/mask?${this.q()}`));
@@ -140,11 +140,11 @@ export class WflowLayer {
         return this.cellsOf;
     }
 
-    // Hạt Wflow: bộ vẽ riêng (dashboardWflowParticles.js), dữ liệu GET /dashboard/wflow/velocity/{i}
+    // Wflow particles: own renderer (dashboardWflowParticles.js), data GET /dashboard/wflow/velocity/{i}
     async initParticles() {
         if (!this.hasVelocity) { this.particles.hide(); return; }
         await this.loadMask();
-        // Đường viền lưu vực + vùng nước: hạt được cắt/xoá giống hệt Flow Estimation
+        // Catchment outline + water area: particles are clipped/erased exactly as in Flow Estimation
         const geo = (kind) => fetch(`/dashboard/wflow/geometry/${kind}?${this.q()}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
         const [basinGeo, waterGeo] = await Promise.all([geo('basins'), (this.info.grid?.n_water || 0) > 0 ? geo('water') : null]);
         this.particles.setup({
@@ -156,7 +156,7 @@ export class WflowLayer {
     }
 
     async syncParticles() {
-        if (this.hasVelocity) this.particles.setTime(this.lastIso);     // nội suy giữa 2 bước Wflow
+        if (this.hasVelocity) this.particles.setTime(this.lastIso);     // interpolated between 2 Wflow steps
     }
 
     updateParticleVisibility() {
@@ -187,7 +187,7 @@ export class WflowLayer {
                 onEachFeature: (f, lyr) => { p.layers[f.properties.id] = lyr; },
             });
             p.geo.on('click', (e) => this.popup(e.latlng, e.layer?.feature?.properties?.id));
-            this.group.addLayer(p.geo);                       // sông vẽ sau -> nằm trên raster
+            this.group.addLayer(p.geo);                       // rivers drawn later -> on top of the raster
         }
         await this.refreshValues(true);
     }
@@ -212,7 +212,7 @@ export class WflowLayer {
         return out;
     }
 
-    // Nạp giá trị cho các lớp đang bật theo chế độ hiện tại rồi vẽ lại
+    // Load values for the enabled layers in the current mode, then redraw
     async refreshValues(force = false) {
         const i = nearestIndex(this.info.times, this.lastIso);
         if (!force && !this.statMode && i === this.frameIndex) return;
@@ -247,7 +247,7 @@ export class WflowLayer {
         this.lastIso = iso;
         if (!this.info) return null;
         if (!this.statMode) await this.refreshValues();
-        await this.syncParticles();                           // hạt luôn theo thanh thời gian
+        await this.syncParticles();                           // particles always follow the time bar
         const i = nearestIndex(this.info.times, iso);
         return i >= 0 ? this.info.times[i] : null;
     }
@@ -271,7 +271,7 @@ export class WflowLayer {
                 const v = gp.values[j];
                 if (!Number.isFinite(v)) continue;
                 const k = this.cellsOf[j], ix = k % g.nx, iy = (k / g.nx) | 0;
-                const o = ((g.ny - 1 - iy) * g.nx + ix) * 4;              // hàng 0 của lưới = phía nam
+                const o = ((g.ny - 1 - iy) * g.nx + ix) * 4;              // grid row 0 = south
                 const rgb = lut[Math.round(Math.max(0, Math.min(1, this.scale(gp, v))) * 63)];
                 img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 230;
             }
@@ -325,9 +325,9 @@ export class WflowLayer {
     hide() { if (this.visible) { this.map.removeLayer(this.group); this.visible = false; } this.particles.hide(); }
     destroy() { this.hide(); this.group.clearLayers(); this.frames.clear(); this.stats.clear(); this.particles.destroy(); }
 
-    // bảng cài đặt
+    // settings panel
     renderSettings(el, ctx) {
-        if (el._bound) { const n = el.cloneNode(false); n.classList.remove('busy'); el.replaceWith(n); el = n; }   // vẽ lại -> bỏ listener cũ
+        if (el._bound) { const n = el.cloneNode(false); n.classList.remove('busy'); el.replaceWith(n); el = n; }   // redraw -> drop old listeners
         el._bound = true;
         const S = this.S, info = this.info, g = info.grid || {};
         const opts = (kind) => [['', '- none -'], ...Object.entries(this.vars).filter(([, v]) => v.kind === kind)
@@ -383,7 +383,7 @@ export class WflowLayer {
             fmt: { opacity: (v) => v.toFixed(2), 'p.opacity': (v) => v.toFixed(2), 'p.pspeed': (v) => v.toFixed(1), 'p.trail': (v) => v.toFixed(3), 'p.width': (v) => v.toFixed(1) },
             onSet: (k, v, live) => {
                 if (k === 'res') return;
-                if (k.startsWith('p.')) {                         // cài đặt hạt
+                if (k.startsWith('p.')) {                         // particle settings
                     const pk = k.slice(2), PS = this.PS;
                     PS[pk] = (pk === 'on' || pk === 'water') ? v === '1' : v;
                     if (!live) saveSettings(P_KEY, PS);
@@ -424,7 +424,7 @@ export class WflowLayer {
                 run(() => this.refreshValues(true));
             },
             onAction: (act) => {
-                if (act === 'enter:threshold') return;           // đã xử lý ở onSet
+                if (act === 'enter:threshold') return;           // already handled in onSet
                 if (act === 'open-flow') { ctx.openTool?.('flow-estimation'); return; }
                 if (act === 'apply' || act === 'enter:res' || act === 'rebuild') {
                     const txt = readInput(el, 'res'), res = txt === '' ? 'auto' : Number(txt);

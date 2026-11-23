@@ -1,18 +1,18 @@
 """
 Dashboard functions
 ===================
-Tổng hợp cho trang Overview, lấy KẾT QUẢ MÔ PHỎNG THỦY ĐỘNG LỰC (HYD) VÀ CHẤT LƯỢNG NƯỚC (WAQ)
-làm nội dung chính (đọc qua dashboard_results.ProjectResults).
+Aggregation for the Overview page, using the HYDRODYNAMIC (HYD) AND WATER QUALITY (WAQ) SIMULATION RESULTS
+as the main content (read via dashboard_results.ProjectResults).
 
-Gồm:
-- Ngưỡng cảnh báo (backend/src/dashboard_thresholds.json), phân loại high/medium/low
-- Kiểm kê dự án (pipeline: dữ liệu → lưới → HYD → WAQ → calibration)
-- summarize(): KPI, gauges, trạng thái chất lượng nước, nguồn/xả, checks, phân bố rủi ro
-- Lớp bản đồ ngữ cảnh (ranh giới hồ, lưu vực, sông, độ sâu mẫu, lớp GIS của dự án)
-- Cảnh báo từ checks
+Contents:
+- Alert thresholds (backend/src/dashboard_thresholds.json), high/medium/low classification
+- Project inventory (pipeline: data → mesh → HYD → WAQ → calibration)
+- summarize(): KPIs, gauges, water quality status, sources/discharges, checks, risk distribution
+- Context map layers (lake boundary, catchment, rivers, sample depths, project GIS layers)
+- Alerts from checks
 
-Các phần của mô hình Flow / tải dữ liệu / hiệu chỉnh KHÔNG nằm ở đây - chúng hiển thị trong
-công cụ tương ứng (Workspace) và có thể thêm thành module dashboard riêng sau này.
+The Flow model / data download / calibration parts are NOT here - they are shown in
+their own tools (Workspace) and can be added as separate dashboard modules later.
 """
 from __future__ import annotations
 import glob, json, math, os, traceback, shutil
@@ -68,10 +68,10 @@ def reload_thresholds() -> dict:
     return load_thresholds()
 
 def validate_thresholds(data: dict) -> tuple[dict, list[str]]:
-    """Kiểm tra & chuẩn hoá {'substances': {...}, 'physics': {...}} trước khi ghi file."""
+    """Validate & normalise {'substances': {...}, 'physics': {...}} before writing the file."""
     clean, errors = {"substances": {}, "physics": {}}, []
     if not isinstance(data, dict): return clean, ["Invalid data"]
-    required_physics = set(load_thresholds()["physics"])          # khoá physics do code dùng
+    required_physics = set(load_thresholds()["physics"])          # physics keys used by the code
     for group in ("substances", "physics"):
         rows = data.get(group) or {}
         if not isinstance(rows, dict): errors.append(f"'{group}' must be an object"); continue
@@ -93,7 +93,7 @@ def validate_thresholds(data: dict) -> tuple[dict, list[str]]:
     return clean, errors
 
 def save_thresholds(data: dict) -> dict:
-    """Ghi đè dashboard_thresholds.json (giữ '_comment', bản sao lưu .bak) rồi nạp lại. ValueError nếu dữ liệu sai."""
+    """Overwrite dashboard_thresholds.json (keeps '_comment', .bak backup) and reload. ValueError if the data is invalid."""
     clean, errors = validate_thresholds(data)
     if errors: raise ValueError("; ".join(errors))
     comment = None
@@ -105,7 +105,7 @@ def save_thresholds(data: dict) -> dict:
     out = ({"_comment": comment} if comment else {}) | clean
     tmp = THRESHOLD_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f: json.dump(out, f, ensure_ascii=False, indent=4)
-    os.replace(tmp, THRESHOLD_PATH)     # ghi nguyên tử: không để file dở dang
+    os.replace(tmp, THRESHOLD_PATH)     # atomic write: never leaves a half-written file
     return reload_thresholds()
 
 def classify(value, rule: dict) -> str:
@@ -229,7 +229,7 @@ def hyd_stats(pr: ProjectResults, start, end) -> dict:
             out["stratification"] = _round(np.nanmean(strat[-1]), 2)
             out["stratification_start"] = _round(np.nanmean(strat[0]), 2)
             out["n_layers"] = int(temp.sizes.get(layer_dim(temp, exclude=[time_dim(temp), station_dim(temp)]) or "", 1))
-            # Độ sâu trung bình của lớp mặt / đáy CÓ GIÁ TRỊ (z-layers: thay đổi theo trạm)
+            # Mean depth of the surface / bottom layers THAT HAVE VALUES (z-layers: varies per station)
             try:
                 z, _ = _his_window(pr, "hyd", "zcoordinate_c", start, end)
                 wl0, _ = _his_window(pr, "hyd", "waterlevel", start, end)
@@ -337,8 +337,8 @@ def physics_checks(stats: dict) -> list[dict]:
     return out
 
 def quality_status(checks: list[dict]) -> dict:
-    """Chất lượng nước = số chỉ tiêu WAQ nằm trong ngưỡng (mức tệ nhất của mỗi chất trong cửa sổ thời gian).
-    Không dùng trọng số; ngưỡng vật lý (nhiệt độ, dòng chảy) KHÔNG tính ở đây."""
+    """Water quality = number of WAQ indicators within thresholds (worst level of each substance in the time window).
+    No weights; physical thresholds (temperature, current) are NOT counted here."""
     worst: dict[str, dict] = {}
     for c in checks:
         if c["source"] != "waq" or c["severity"] not in ("high", "medium", "low"): continue
@@ -358,7 +358,7 @@ def quality_status(checks: list[dict]) -> dict:
     }
 
 def _limit_flag(checks: list[dict], key: str) -> dict | None:
-    """Ngưỡng vật lý gắn vào KPI tương ứng (Surface Temperature / Max Current Speed)."""
+    """Physical thresholds attached to the matching KPI (Surface Temperature / Max Current Speed)."""
     c = next((x for x in checks if x["source"] == "hyd" and x["key"] == key), None)
     if c is None: return None
     th = c["threshold"]
@@ -376,7 +376,7 @@ def risk_level(checks: list[dict]) -> dict:
     return {"level": level, "high": n_high, "medium": n_med}
 
 def _strat_hint(stats: dict) -> str:
-    """Tooltip: lớp nào được so sánh (z-layers: lớp có giá trị trên cùng / dưới cùng tại từng trạm)."""
+    """Tooltip: which layer is compared (z-layers: topmost / bottommost layer with values at each station)."""
     f = lambda k: "-" if stats.get(k) is None else stats.get(k)
     depth = ""
     if stats.get("surface_depth") is not None and stats.get("bottom_depth") is not None:
@@ -516,12 +516,12 @@ def _file_mtime(path: str) -> float | None:
     except OSError: return None
 
 def context_signature(project_name: str) -> str:
-    """Thay đổi khi một file lớp nền CỦA DỰ ÁN được thêm / sửa / xoá (khoá cache /dashboard/layers)."""
+    """Changes when a PROJECT base-layer file is added / edited / deleted (cache key for /dashboard/layers)."""
     out_dir = os.path.join(project_dir(project_name), "others")
     return ",".join(f"{k}:{_file_mtime(os.path.join(out_dir, f)) or 0}" for k, f in constants.CONTEXT_LAYERS.items())
 
 @lru_cache(maxsize=16)
-def _sample_geojson_cached(path: str, step: int, mtime: float) -> dict | None:   # mtime: file sửa -> đọc lại
+def _sample_geojson_cached(path: str, step: int, mtime: float) -> dict | None:   # mtime: file edited -> re-read
     gj = read_geojson(path, step)
     return gj if gj and gj.get("features") else None
 
@@ -536,12 +536,12 @@ def sample_geojson(directory: str, name: str) -> dict | None:
 def _depth_points_cached(path: str, max_points: int, mtime: float) -> list[list[float]]:
     try:
         df = pd.read_csv(path, encoding="utf-8-sig")
-        cols = {str(c).strip().lower(): c for c in df.columns}            # không phân biệt hoa/thường, khoảng trắng
+        cols = {str(c).strip().lower(): c for c in df.columns}            # case- and whitespace-insensitive
         need = [cols.get(k) for k in ("lat", "lon", "depth")]
         if None in need:
             print(f"[dashboard] {path}: needs columns Lat, Lon, Depth (found {list(df.columns)})", flush=True)
             return []
-        df = df[need].apply(pd.to_numeric, errors="coerce").dropna()       # chỉ bỏ dòng thiếu 3 cột này
+        df = df[need].apply(pd.to_numeric, errors="coerce").dropna()       # only drop rows missing these 3 columns
         df.columns = ["Lat", "Lon", "Depth"]
         if len(df) > max_points: df = df.sample(max_points, random_state=7)
         df["Depth"] = df["Depth"].abs()

@@ -95,7 +95,7 @@ function clearScenarioPaths(lineType) {
     scenarioPaths[lineType].forEach(l => l.remove()); scenarioPaths[lineType].length = 0;
 }
 
-// Vẽ các đường (mặt cắt/biên) theo nhóm tên: 'CS_1','CS_2' | 'Bnd_0001',... -> 1 đường mỗi nhóm
+// Draw lines (cross-sections/boundaries) grouped by name: 'CS_1','CS_2' | 'Bnd_0001',... -> 1 line per group
 function drawGroupedLines(rows, lineType) {
     const isCross = lineType === 'crossSection';
     const markerList = isCross ? markerCrossSection : markerBoundary;

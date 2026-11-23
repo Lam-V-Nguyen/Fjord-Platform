@@ -1,13 +1,13 @@
 """
-Router "Wflow 3D" cho Dashboard (tách riêng, không sửa dashboard_router.py)
+"Wflow 3D" router for the Dashboard (separate, dashboard_router.py is not modified)
 =========================================================================
-    GET /dashboard/wflow3d/terrain?projectName=&flowName=      -> float32 (ny, nx) độ cao trên lưới viewer
+    GET /dashboard/wflow3d/terrain?projectName=&flowName=      -> float32 (ny, nx) elevation on the viewer grid
                                                                   (header X-Z-Min, X-Z-Max, X-Z-Source)
-    GET /dashboard/wflow3d/scene?projectName=&flowName=        -> JSON: cửa ra + hydrograph, mưa lưu vực
-    GET /dashboard/wflow3d/series/{river_id}?projectName=&flowName=[&var=] -> JSON chuỗi thời gian tại một ô sông
+    GET /dashboard/wflow3d/scene?projectName=&flowName=        -> JSON: outlet + hydrograph, catchment rainfall
+    GET /dashboard/wflow3d/series/{river_id}?projectName=&flowName=[&var=] -> JSON time series at one river cell
 
-Cần gọi POST /dashboard/wflow/init trước (dựng cache viewer) – frontend đã làm việc này.
-Các endpoint còn lại (mask, frame, velocity, rivers, geometry) dùng lại của dashboard_router.
+POST /dashboard/wflow/init must be called first (builds the viewer cache) – the frontend already does this.
+The other endpoints (mask, frame, velocity, rivers, geometry) are reused from dashboard_router.
 """
 import asyncio, gzip
 from typing import Optional
