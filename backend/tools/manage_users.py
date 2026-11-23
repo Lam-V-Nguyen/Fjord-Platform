@@ -13,8 +13,8 @@ import argparse, getpass, json, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", "app"), os.path.join(HERE, "..")]
-from config import ALLOWED_USERS            # noqa: E402
-from services import auth_store as store, constants    # noqa: E402
+from backend.app.config import ALLOWED_USERS
+from backend.app.services import auth_store as store, constants
 
 def ask_password(username: str) -> str:
     while True:
@@ -38,8 +38,9 @@ def main():
     store.init_db()
     try:
         if args.cmd == "create-admin":
-            u = store.create_user(args.username, email=args.email, password=ask_password(args.username),
-                                  role="admin", status="active", allow_reserved=True)
+            u = store.create_user(
+                args.username, email=args.email, password=ask_password(args.username), role="admin", status="active", allow_reserved=True
+            )
             store.audit("user_created_cli", actor="cli", target=u.username)
             print(f"Administrator '{u.username}' created.")
         elif args.cmd == "import-json":
@@ -49,8 +50,9 @@ def main():
                 try:
                     if store.get_user(name): skipped.append(f"{name} (exists)"); continue
                     # Legacy passwords may be shorter than the new policy -> hashed as they are; users should change them
-                    u = store.create_user(name, role="admin" if name in args.admin else "user", status="active",
-                                          allow_reserved=True)
+                    u = store.create_user(
+                        name, role="admin" if name in args.admin else "user", status="active", allow_reserved=True
+                    )
                     with store.db() as con:
                         con.execute("UPDATE users SET password_hash = ? WHERE id = ?", (store._ph.hash(pw), u.id))
                     done += 1

@@ -3,6 +3,7 @@ import numpy as np
 
 
 # Configuration
+LOCAL_HOST = "http://localhost:8000"
 #  brute-force protection
 WINDOW = 15 * 60
 # short in-memory cache: avoids opening SQLite for EVERY request (map tiles, frames…)
@@ -219,6 +220,12 @@ UV_SCALE = 0.001     # 1 unit int16 = 1 mm/s
 DEPTH_SCALE = 0.01   # 1 unit = 1 cm
 
 # Weather
+MET_BASE = "https://thredds.met.no/thredds/dodsC"
+MET_URLS = (
+    MET_BASE + "/metpparchivev3/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
+    MET_BASE + "/metpparchive/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
+    MET_BASE + "/metpplatest/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
+)
 SOURCES = {
     "era5": {"label": "ERA5 reanalysis (CDS)", "needs_key": True, "min_date": "1940-01-01", "latency_days": ERA5_LATENCY_DAYS},
     "era5-timeseries": {"label": "ERA5 hourly time series (CDS)", "needs_key": True, "min_date": "1940-01-01", "latency_days": ERA5_LATENCY_DAYS},
@@ -243,12 +250,6 @@ ALIASES = {"degc": "degC", "°c": "degC", "c": "degC", "celsius": "degC", "k": "
     "kpa": "kPa", "kg/m3": "kg/m^3", "kg m-3": "kg/m3", "g/cm3": "g/cm^3", "ph": "-", "1": "-"
 }
 SIGMA, MET_HOUR_RETRIES, MET_MAX_GAP_H, MET_MAX_MISSING_SHARE = 5.670374419e-8, 3, 6, 0.2
-MET_BASE = "https://thredds.met.no/thredds/dodsC"
-MET_URLS = (
-    MET_BASE + "/metpparchivev3/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
-    MET_BASE + "/metpparchive/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
-    MET_BASE + "/metpplatest/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
-)
 MET_VARS = {"precipitation_amount": "precip_mm", "air_temperature_2m": "t_k", "relative_humidity_2m": "rh",
     "air_pressure_at_sea_level": "msl_pa", "wind_speed_10m": "ws", "wind_direction_10m": "wd",
     "cloud_area_fraction": "cloud", "integral_of_surface_downwelling_shortwave_flux_in_air_wrt_time": "sw_j",

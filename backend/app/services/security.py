@@ -69,7 +69,8 @@ def install(app: FastAPI):
     async def _http_error(request: Request, exc: StarletteHTTPException):
         # Same shape as other errors ({"status": "error", "message"}) + "detail" for older code
         return JSONResponse({"status": "error", "message": exc.detail, "detail": exc.detail},
-                            status_code=exc.status_code, headers=getattr(exc, "headers", None))
+            status_code=exc.status_code, headers=getattr(exc, "headers", None)
+        )
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception):

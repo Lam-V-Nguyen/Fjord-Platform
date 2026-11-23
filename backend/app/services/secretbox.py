@@ -1,5 +1,5 @@
 """
-secretbox.py – Encrypts secrets stored on disk (e.g. client_secret / client_password in credentials.json).
+secretbox.py - Encrypts secrets stored on disk (e.g. client_secret / client_password in credentials.json).
 The key derives from SECRET_KEY (config) -> changing SECRET_KEY makes stored values unreadable (users re-enter them).
 Older plain values (without the 'enc:' prefix) are still read and get encrypted on the next save.
 """
