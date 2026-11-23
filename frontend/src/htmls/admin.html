@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Users · Fjord Platform</title>
+    <link rel="icon" type="image/png" href="/src_frontend/images/logo16x16.png" />
+    <link rel="stylesheet" href="/src_frontend/styles/theme.css">
+    <link rel="stylesheet" href="/src_frontend/styles/layout.css">
+    <link rel="stylesheet" href="/src_frontend/styles/auth.css">
+</head>
+<body>
+<div class="admin-page">
+  <div class="admin-head">
+    <h1>User management</h1>
+    <a class="btn small" href="/">← Back to dashboard</a>
+  </div>
+
+  <div class="admin-card">
+    <h3>Invite a user</h3>
+    <form class="admin-bar" id="f-invite">
+      <input name="username" placeholder="username" required pattern="[a-z0-9][a-z0-9_.\-]{2,31}">
+      <input name="email" type="email" placeholder="e-mail" required>
+      <input name="full_name" placeholder="full name">
+      <input name="organisation" placeholder="organisation">
+      <select name="role"><option value="user">user</option><option value="viewer">viewer</option><option value="admin">admin</option></select>
+      <button class="btn small primary" type="submit">Send invitation</button>
+    </form>
+    <div class="auth-hint" id="mail-note" style="margin-top:6px"></div>
+    <div class="link-box" id="link-box"></div>
+  </div>
+
+  <div class="admin-card">
+    <div class="admin-bar" style="margin-bottom:8px">
+      <h3 style="flex:1; margin:0">Accounts</h3>
+      <input id="filter" placeholder="Filter…">
+    </div>
+    <table class="admin-table">
+      <thead><tr><th>User</th><th>E-mail / organisation</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>Actions</th></tr></thead>
+      <tbody id="users"></tbody>
+    </table>
+  </div>
+
+  <div class="admin-card">
+    <h3>Shared projects</h3>
+    <div class="auth-hint" style="margin-bottom:6px">Owners share projects from Settings → Share project. view = read only · edit = may change and run.</div>
+    <table class="admin-table"><thead><tr><th>Project</th><th>Owner</th><th>Shared with</th><th>Access</th><th>Since</th><th></th></tr></thead>
+      <tbody id="shares"></tbody></table>
+  </div>
+
+  <div class="admin-card">
+    <h3>Recent activity</h3>
+    <table class="admin-table"><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead>
+      <tbody id="audit"></tbody></table>
+  </div>
+</div>
+<script type="module" src="/src_frontend/services/adminUsers.js"></script>
+</body>
+</html>

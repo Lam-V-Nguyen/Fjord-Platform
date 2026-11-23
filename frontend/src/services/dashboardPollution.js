@@ -1,11 +1,11 @@
-// Lớp "Pollutant spread (WAQ)" của dashboard:
-//  - MỨC ĐỘ: nồng độ một chất WAQ trên lưới tính toán (đa giác, canvas), thang màu CỐ ĐỊNH cho toàn bộ
-//    thời gian mô phỏng (0 – P99.5); ô dưới ngưỡng (x % của giá trị lớn nhất) để trong suốt.
-//  - LAN TRUYỀN: hạt trôi theo vận tốc HYD của CÙNG LỚP và thời điểm gần nhất, chỉ sinh ra và chỉ sống
-//    trong vùng có ô nhiễm (vận tốc ngoài vùng = NaN -> hạt "chết" khi ra khỏi vùng ô nhiễm).
-//  - Mật độ hạt cố định theo diện tích ô nhiễm, tốc độ tuyến tính theo |v| / speed_max (cố định theo
-//    lớp, toàn thời gian). Người dùng KHÔNG chỉnh được mật độ / tốc độ để tránh đọc sai.
-// Dữ liệu: POST /dashboard/pollution/init (chất, lớp, lưới hạt), /dashboard/pollution/frame (theo thời điểm).
+// "Pollutant spread (WAQ)" dashboard layer:
+//  - LEVEL: concentration of one WAQ substance on the computational mesh (polygons, canvas), colour scale FIXED for the whole
+//    simulation period (0 – P99.5); cells below the threshold (x % of the maximum) are transparent.
+//  - SPREAD: particles drift with the HYD velocity of the SAME LAYER at the nearest time, spawned and living only
+//    inside the polluted area (velocity outside = NaN -> particles "die" when they leave the polluted area).
+//  - Particle density fixed per polluted area, speed linear in |v| / speed_max (fixed per
+//    layer, over the whole period). Users can NOT change density / speed, to avoid misreading.
+// Data: POST /dashboard/pollution/init (substances, layers, particle grid), /dashboard/pollution/frame (per time).
 
 import { paletteColor, fmtVal } from './dashboardMap.js';
 import { ParticleField } from './dashboardParticles.js';
@@ -15,9 +15,9 @@ const L = window.L;
 const SETTINGS_KEY = 'dash.pollution.settings.v1';
 const DEFAULTS = { name: '', layer: 'max', threshold: 0.01 };
 const PALETTE = 'quality';
-const PER_CELL = 0.06;                 // hạt / ô lưới hạt bị ô nhiễm -> cùng mật độ ở mọi vùng, mọi thời điểm
+const PER_CELL = 0.06;                 // particles / polluted particle-grid cell -> same density everywhere, at all times
 const MAX_PARTICLES = 20000;
-// Cài đặt hạt cố định (đọc bởi ParticleField) – không hiển thị trong bảng cài đặt
+// Fixed particle settings (read by ParticleField) – not shown in the settings panel
 const PARTICLE_S = { count: 0, pspeed: 1, trail: 0.9, width: 1.2, curve: 'linear', pcolor: 'white', opacity: 0.9 };
 const THRESHOLDS = [['0.001', '0.1 % of max'], ['0.01', '1 % of max'], ['0.05', '5 % of max'], ['0.1', '10 % of max']];
 
@@ -37,7 +37,7 @@ function f32(b64) {
     return new Float32Array(u8.buffer);
 }
 
-// ParticleField dùng tối thiểu 200 hạt; ở đây số hạt tỷ lệ với diện tích ô nhiễm nên cho phép ít hơn
+// ParticleField uses at least 200 particles; here the count scales with the polluted area, so fewer are allowed
 class PlumeParticles extends ParticleField {
     spawnAll() {
         const n = Math.max(1, Math.min(MAX_PARTICLES, this.S.count | 0));
@@ -97,13 +97,13 @@ export class PollutionLayer {
         const token = ++this.token;
         const res = await post('pollution/frame', { projectName: this.projectName, name: this.S.name, layer: this.S.layer, time: this.time });
         if (res.status !== 'ok') throw new Error(res.message || 'Cannot load pollutant frame');
-        if (token !== this.token) return;                     // đã có yêu cầu mới hơn
+        if (token !== this.token) return;                     // a newer request exists
         const f = this.frame = { ...res, conc: f32(res.conc), u: res.u ? f32(res.u) : null, v: res.v ? f32(res.v) : null };
         if (f.conc.length !== this.polys.length) throw new Error('WAQ values do not match the dashboard mesh');
         this.paint(); this.updateParticles();
     }
 
-    setPlaying() { /* hạt luôn chuyển động theo vận tốc của thời điểm đang hiển thị */ }
+    setPlaying() { /* particles always move with the velocity of the displayed time */ }
 
     // drawing
     paint() {
@@ -129,7 +129,7 @@ export class PollutionLayer {
             const k = cf[j], c = f.conc[k], uu = f.u[k], vv = f.v[k];
             if (Number.isFinite(c) && c >= thr && c > 0 && Number.isFinite(uu) && Number.isFinite(vv) && (uu || vv)) {
                 u[j] = uu; v[j] = vv; wet.push(j);
-            } else { u[j] = NaN; v[j] = NaN; }           // ngoài vùng ô nhiễm: hạt không đi vào được
+            } else { u[j] = NaN; v[j] = NaN; }           // outside the polluted area: particles cannot enter
         }
         const key = `${this.S.layer}|${f.speed_max}`;
         if (this.gridKey !== key) { this.particles.setGrid(this.info.grid, this.info.cells, f.speed_max); this.gridKey = key; }
@@ -207,7 +207,7 @@ export class PollutionLayer {
             onSet: async (k, val) => {
                 S[k] = k === 'threshold' ? Number(val) : val;
                 saveSettings(SETTINGS_KEY, S);
-                if (k === 'name') this.renderSettings(el, ctx);               // lớp có/không theo chất
+                if (k === 'name') this.renderSettings(el, ctx);               // layers depend on the substance
                 if (k === 'threshold' && this.frame) { this.paint(); this.updateParticles(); ctx.refreshLegend(); return; }
                 ctx.busy(true);
                 try { await this.setTime(this.time); ctx.refreshLegend(); }

@@ -1,25 +1,25 @@
 """
 Dashboard weather
 =================
-Dữ liệu khí tượng THỜI GIAN THỰC cho trang Overview (độc lập với kết quả mô phỏng).
+REAL-TIME weather data for the Overview page (independent of the simulation results).
 
-Nguồn (đều miễn phí):
-    frost      MET Norway Frost API – SỐ ĐO tại trạm gần nhất, theo giờ, trễ ~1 h.
-               Cần client ID miễn phí (biến môi trường MET_ProstAPI_CLIENT_ID – đã dùng ở Data Download).
-    metno      MET Norway Locationforecast 2.0 – DỰ BÁO theo điểm, theo giờ (~60 h đầu), cập nhật ~mỗi giờ.
-               Không cần khoá; bắt buộc User-Agent định danh và toạ độ tối đa 4 chữ số thập phân.
-    openmeteo  Open-Meteo – mô hình (phân tích + dự báo), theo giờ, toàn cầu, không cần khoá.
-    Có thể chọn NHIỀU nguồn cùng lúc (vẽ chồng); mặc định: frost + metno nếu có client ID, nếu không -> metno.
+Sources (all free):
+    frost      MET Norway Frost API – MEASUREMENTS at the nearest station, hourly, ~1 h delay.
+               Needs a free client ID (environment variable MET_ProstAPI_CLIENT_ID – already used by Data Download).
+    metno      MET Norway Locationforecast 2.0 – point FORECAST, hourly (first ~60 h), updated ~every hour.
+               No key needed; requires an identifying User-Agent and coordinates with at most 4 decimals.
+    openmeteo  Open-Meteo – model (analysis + forecast), hourly, global, no key needed.
+    SEVERAL sources can be selected at once (overlaid); default: frost + metno with a client ID, otherwise -> metno.
 
-Biến chuẩn hoá: temperature (°C), precipitation (mm/h), pressure (hPa, quy về mực nước biển), humidity (%).
-Thời gian trả về: ISO UTC ('...Z'); frontend đổi sang múi giờ người dùng.
-Quy ước lượng mưa thống nhất: giá trị tại giờ t = lượng mưa của giờ TRƯỚC (t-1 -> t) – như Frost & Open-Meteo;
-Locationforecast (giờ tới) được dời +1 h.
-Cache trong bộ nhớ theo (nguồn, vị trí) với thời hạn theo nguồn -> frontend làm mới thường xuyên
-cũng không gọi lại API ngoài quá mức (điều khoản sử dụng của MET Norway / Open-Meteo).
-Trạm Frost: trạm GẦN NHẤT có số đo (không giới hạn khoảng cách; xét WEATHER_STATION_COUNT trạm gần nhất).
-Luôn có dữ liệu: không có trạm Frost, trạm không có số đo, hoặc một biến
-thiếu số đo -> tự lấy nguồn thay thế (WEATHER_FALLBACK_ORDER) và ghi rõ trong 'fallback' / 'site'.
+Normalised variables: temperature (°C), precipitation (mm/h), pressure (hPa, reduced to sea level), humidity (%).
+Returned times: ISO UTC ('...Z'); the frontend converts them to the user's time zone.
+Unified precipitation convention: the value at hour t = precipitation of the PREVIOUS hour (t-1 -> t) – as in Frost & Open-Meteo;
+Locationforecast (next hour) is shifted by +1 h.
+In-memory cache per (source, location) with a source-specific lifetime -> frequent frontend refreshes
+do not call the external APIs excessively (MET Norway / Open-Meteo terms of use).
+Frost station: the NEAREST station with measurements (no distance limit; the WEATHER_STATION_COUNT nearest stations are checked).
+Data is always available: no Frost station, a station without measurements, or a variable
+without measurements -> a fallback source is used automatically (WEATHER_FALLBACK_ORDER) and noted in 'fallback' / 'site'.
 """
 from __future__ import annotations
 import os, threading, time, requests
@@ -67,7 +67,7 @@ def available_sources() -> list[dict]:
     return out
 
 def project_location(project_name: str) -> dict | None:
-    """Toạ độ đại diện của vùng mô hình: trung bình các trạm HYD (hoặc WAQ), nếu không có thì tâm lưới."""
+    """Representative coordinates of the model area: mean of the HYD (or WAQ) stations, otherwise the mesh centre."""
     pr = ProjectResults(project_name)
     for src in ("hyd", "waq"):
         try:
@@ -92,7 +92,7 @@ def _empty_series() -> dict:
     return {v["key"]: {"x": [], "y": []} for v in constants.WEATHER_VARIABLES}
 
 def _finish(series: dict, now: datetime, extra: dict) -> dict:
-    """Thêm giá trị 'hiện tại' (giá trị gần nhất <= bây giờ) cho mỗi biến."""
+    """Add the 'current' value (latest value <= now) for each variable."""
     current = {}
     for key, s in series.items():
         best = None
@@ -102,13 +102,13 @@ def _finish(series: dict, now: datetime, extra: dict) -> dict:
             t = _parse_time(x)
             if t <= now + timedelta(minutes=5):
                 best = (x, y)
-        if best is None:               # chỉ có dự báo -> giá trị đầu tiên
+        if best is None:               # forecast only -> first value
             best = next(((x, y) for x, y in zip(s["x"], s["y"]) if y is not None), None)
         current[key] = {"time": best[0], "value": best[1]} if best else {"time": None, "value": None}
     return {"series": series, "current": current, **extra}
 
 def _distance_km(lat1, lon1, lat2, lon2):
-    """Khoảng cách đường tròn lớn (km) từ vùng mô hình đến trạm."""
+    """Great-circle distance (km) from the model area to the station."""
     if None in (lat1, lon1, lat2, lon2): return None
     p1, p2 = np.radians(lat1), np.radians(lat2)
     a = np.sin((p2 - p1) / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(np.radians(lon2 - lon1) / 2) ** 2
@@ -130,12 +130,12 @@ def _fetch_frost(lat: float, lon: float, now: datetime) -> dict:
     for s in r.json().get("data", []):
         coords = (s.get("geometry") or {}).get("coordinates") or [None, None]
         st_lon, st_lat = _num(coords[0]), _num(coords[1])
-        dist = _distance_km(lat, lon, st_lat, st_lon)          # tự tính; Frost 'distance' chỉ dùng khi thiếu toạ độ
+        dist = _distance_km(lat, lon, st_lat, st_lon)          # computed here; Frost 'distance' is only used when coordinates are missing
         stations.append({"id": s["id"], "name": s.get("shortName") or s.get("name", s["id"]),
             "distance_km": dist if dist is not None else _num(s.get("distance")),
             "lon": st_lon, "lat": st_lat, "elevation": _num(s.get("masl"))})
     if not stations: raise RuntimeError("No Frost station found")
-    # Gần nhất trước – không giới hạn khoảng cách
+    # Nearest first – no distance limit
     stations.sort(key=lambda s: s["distance_km"] if s["distance_km"] is not None else float("inf"))
     start = (now - timedelta(hours=constants.WEATHER_PAST_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     r = requests.get(f"{base}/observations/v0.jsonld", auth=auth, headers=headers, 
@@ -159,7 +159,7 @@ def _fetch_frost(lat: float, lon: float, now: datetime) -> dict:
     series, used = _empty_series(), {}
     for key, element in constants.FROST_ELEMENTS.items():
         by_station = raw.get(element, {})
-        st = next((s for s in stations if by_station.get(s["id"])), None)     # trạm gần nhất CÓ số đo
+        st = next((s for s in stations if by_station.get(s["id"])), None)     # nearest station WITH measurements
         if st is None: continue
         pts = sorted(by_station[st["id"]].items())
         series[key] = {"x": [_iso(_parse_time(t)) for t, _ in pts], "y": [_num(v) for _, v in pts]}
@@ -169,7 +169,7 @@ def _fetch_frost(lat: float, lon: float, now: datetime) -> dict:
 
 # MET Norway Locationforecast (forecast)
 def _fetch_metno(lat: float, lon: float, now: datetime) -> dict:
-    r = requests.get("https://api.met.no/weatherapi/locationforecast/2.0/compact", timeout=constants.WEATHER_TIMEOUT,
+    r = requests.get(os.getenv('MET_NO'), timeout=constants.WEATHER_TIMEOUT,
         headers={"User-Agent": constants.WEATHER_USER_AGENT}, params={"lat": f"{lat:.4f}", "lon": f"{lon:.4f}"}
     )
     r.raise_for_status(); ttl = None
@@ -185,14 +185,14 @@ def _fetch_metno(lat: float, lon: float, now: datetime) -> dict:
     for step in props.get("timeseries", []):
         t = _parse_time(step["time"])
         nxt = step["data"].get("next_1_hours")
-        if t > stop or nxt is None:          # chỉ phần theo giờ
+        if t > stop or nxt is None:          # hourly part only
             continue
         d = step["data"]["instant"]["details"]; x = _iso(t)
         for key, val in (("temperature", d.get("air_temperature")),
             ("pressure", d.get("air_pressure_at_sea_level")),
             ("humidity", d.get("relative_humidity"))):
             series[key]["x"].append(x); series[key]["y"].append(_num(val))
-        # next_1_hours = mưa của giờ t -> t+1: gán vào cuối khoảng (t+1) cho cùng quy ước với Frost/Open-Meteo
+        # next_1_hours = precipitation for hour t -> t+1: assigned to the end of the interval (t+1), same convention as Frost/Open-Meteo
         series["precipitation"]["x"].append(_iso(t + timedelta(hours=1)))
         series["precipitation"]["y"].append(_num(nxt.get("details", {}).get("precipitation_amount")))
     return {"series": series, "ttl": ttl, "point": point, "model_updated": props.get("meta", {}).get("updated_at")}
@@ -200,7 +200,7 @@ def _fetch_metno(lat: float, lon: float, now: datetime) -> dict:
 #  Open-Meteo (model)
 def _fetch_openmeteo(lat: float, lon: float, now: datetime) -> dict:
     hourly = "temperature_2m,precipitation,pressure_msl,relative_humidity_2m"
-    r = requests.get("https://api.open-meteo.com/v1/forecast", timeout=constants.WEATHER_TIMEOUT, 
+    r = requests.get(os.getenv('MET_FORECAST'), timeout=constants.WEATHER_TIMEOUT, 
         headers={"User-Agent": constants.WEATHER_USER_AGENT}, params={"latitude": f"{lat:.4f}", 
         "longitude": f"{lon:.4f}", "hourly": hourly, "past_days": max(1, constants.WEATHER_PAST_HOURS // 24),
         "forecast_days": max(1, constants.WEATHER_FORECAST_HOURS // 24) + 1, "timezone": "GMT"})
@@ -218,7 +218,7 @@ def _fetch_openmeteo(lat: float, lon: float, now: datetime) -> dict:
 FETCHERS = {"frost": _fetch_frost, "metno": _fetch_metno, "openmeteo": _fetch_openmeteo}
 
 def default_sources() -> list[str]:
-    """Mặc định: số đo + dự báo MET (so sánh) nếu có client ID Frost, nếu không chỉ dự báo MET."""
+    """Default: measurements + MET forecast (comparison) with a Frost client ID, otherwise MET forecast only."""
     return ["frost", "metno"] if frost_client_id() else ["metno"]
 
 def _source_meta(src: str) -> dict:
@@ -228,7 +228,7 @@ def _source_meta(src: str) -> dict:
     }
 
 def _fetch_cached(src: str, loc: dict, force: bool) -> dict:
-    """Một nguồn: dữ liệu từ cache (còn hạn) hoặc gọi API. Lỗi -> {'status': 'error', 'message'}."""
+    """One source: data from the cache (still valid) or an API call. Error -> {'status': 'error', 'message'}."""
     key = (src, round(loc["lat"], 3), round(loc["lon"], 3))
     with _LOCK: hit = _CACHE.get(key)
     age = time.time() - hit[0] if hit else None
@@ -251,12 +251,12 @@ def _has_value(res: dict, var: str) -> bool:
     return res.get("status") == "ok" and (res.get("current", {}).get(var) or {}).get("value") is not None
 
 def get_weather(project_name: str, sources: list[str] | None = None, force: bool = False) -> dict:
-    """sources: nguồn người dùng chọn (1 = riêng lẻ, nhiều = vẽ chồng). None -> mặc định.
-    Trả thêm:
-      shown    : nguồn thực sự hiển thị (= selected + nguồn thay thế tự thêm khi cần)
-      fallback : {"from", "to", "reason"} khi không có số đo trạm (hoặc thiếu biến) -> dùng nguồn thay thế
-      current  : giá trị hiện tại của từng biến, kèm nguồn (ưu tiên số đo trạm, thiếu thì lấy nguồn thay thế)
-      site     : vị trí lấy dữ liệu – trạm Frost (tên, mã, toạ độ, khoảng cách) hoặc điểm lưới của mô hình"""
+    """sources: sources chosen by the user (1 = single, several = overlaid). None -> default.
+    Also returns:
+      shown    : sources actually displayed (= selected + fallback sources added automatically when needed)
+      fallback : {"from", "to", "reason"} when there are no station measurements (or a variable is missing) -> fallback source used
+      current  : current value of each variable with its source (station measurements first, else the fallback source)
+      site     : where the data comes from – Frost station (name, id, coordinates, distance) or the model grid point"""
     loc = project_location(project_name)
     base = {"variables": constants.WEATHER_VARIABLES, "sources": available_sources(), "server_now": _iso(_utc_now())}
     if loc is None:
@@ -269,14 +269,14 @@ def get_weather(project_name: str, sources: list[str] | None = None, force: bool
     frost = results.get("frost")
     var_keys = [v["key"] for v in constants.WEATHER_VARIABLES]
     missing = [v for v in var_keys if frost and frost["status"] == "ok" and not _has_value(frost, v)]
-    # Cần nguồn thay thế: không nguồn nào chạy được, trạm Frost lỗi / không có số đo, hoặc thiếu biến
+    # Fallback needed: no source worked, the Frost station failed / has no measurements, or a variable is missing
     need = not ok or (frost is not None and frost["status"] != "ok") or bool(missing)
     fallback, shown = None, list(ok)
     if need:
         fb = model_ok[0] if model_ok else None
         if fb is None:
             for cand in constants.WEATHER_FALLBACK_ORDER:
-                if cand in results: continue                      # đã thử và lỗi
+                if cand in results: continue                      # already tried and failed
                 res = _fetch_cached(cand, loc, force)
                 results[cand] = {**res, "auto": True}
                 if res["status"] == "ok":
@@ -292,7 +292,7 @@ def get_weather(project_name: str, sources: list[str] | None = None, force: bool
         return {"status": "error", "message": f"Weather data unavailable – {msg}",
             "location": loc, "selected": selected, "results": results, **base
         }
-    # Giá trị hiện tại: ưu tiên số đo trạm, thiếu thì nguồn mô hình đầu tiên có giá trị
+    # Current value: station measurements first, else the first model source with a value
     order, current = (["frost"] if "frost" in shown else []) + [s for s in shown if s != "frost"], {}
     for v in var_keys:
         src = next((s for s in order if _has_value(results[s], v)), None)
@@ -300,7 +300,7 @@ def get_weather(project_name: str, sources: list[str] | None = None, force: bool
         c = results[src]["current"][v]
         current[v] = {**c, "source": src, "station": (results[src].get("stations") or {}).get(v)}
     primary = order[0]
-    # Vị trí lấy dữ liệu cho dòng phụ đề
+    # Data location for the subtitle line
     if "frost" in shown and results["frost"].get("stations"):
         st = results["frost"]["stations"]
         main = st.get("temperature") or next(iter(st.values()))

@@ -9,10 +9,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" />
-    <!-- Third-party libraries (Leaflet CSS và JS cùng phiên bản 1.9.4) -->
+    <!-- Third-party libraries (Leaflet CSS and JS, same version 1.9.4) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.2.0/dist/gridstack.min.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <!-- Styles: cũ (giữ cho các widget) + mới (dashboard) -->
+    <!-- Styles: old (kept for the widgets) + new (dashboard) -->
     <link rel="stylesheet" href="/src_frontend/styles/index.css">
     <link rel="stylesheet" href="/src_frontend/styles/gridLayout.css">
     <link rel="stylesheet" href="/src_frontend/styles/theme.css">
@@ -179,7 +179,7 @@
                       <button id="map-expand" title="Toggle Map View"><span data-icon="expand"></span></button>
                     </div>
                   </div>
-                  <!-- Bộ chọn trường mô phỏng (HYD / WAQ) -->
+                  <!-- Simulation field selector (HYD / WAQ) -->
                   <div class="field-picker" id="field-picker">
                     <select id="field-var" title="Simulated variable"></select>
                     <select id="field-layer" title="Layer">
@@ -191,7 +191,7 @@
                   <div class="basemap-switch" id="basemap-switch"></div>
                   <div class="map-legend" id="map-legend"></div>
                   <div class="map-coords" id="map-coords"></div>
-                  <!-- Thanh thời gian -->
+                  <!-- Time bar -->
                   <div class="time-bar" id="time-bar">
                     <button class="tb-btn" id="tb-play" title="Play / pause"><span data-icon="play"></span></button>
                     <input type="range" id="tb-slider" min="0" max="0" value="0" />
@@ -271,7 +271,7 @@
                 </div>
               </div>
 
-              <!-- Trạng thái trống: dự án chưa có kết quả HYD/WAQ -->
+              <!-- Empty state: the project has no HYD/WAQ results yet -->
               <div class="empty-card" id="empty-card">
                 <div class="empty-icon"><span data-icon="waves"></span></div>
                 <h2>No simulation results in this project yet</h2>
@@ -283,7 +283,7 @@
             </div>
           </section>
 
-          <!-- WORKSPACE (công cụ cũ trên Gridstack) -->
+          <!-- WORKSPACE (legacy tools on Gridstack) -->
           <section class="view" id="view-workspace">
             <div class="workspace-head">
               <div><h2>Workspace</h2>
@@ -320,6 +320,19 @@
     </div>
 
     <div class="popover" id="settings-popover" style="width: 300px;">
+      <div class="pop-section"><h4>Account</h4>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px">
+          <span data-icon="user"></span>
+          <div style="min-width:0; flex:1"><div id="account-name" style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">–</div>
+            <div id="account-role" style="font-size:11px; color: var(--muted)"></div></div>
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px">
+          <button class="btn small" id="btn-change-password"><span data-icon="lock"></span>Change password</button>
+          <button class="btn small" id="btn-share-project"><span data-icon="share"></span>Share project</button>
+          <button class="btn small" id="btn-admin-users" hidden><span data-icon="users"></span>Manage users</button>
+          <button class="btn small danger" id="btn-logout"><span data-icon="logout"></span>Sign out</button>
+        </div>
+      </div>
       <div class="pop-section"><h4>Time zone</h4>
         <input type="text" class="tz-search" id="tz-search" placeholder="Search... (Oslo, New York, UTC)" autocomplete="off">
         <div id="tz-results" class="tz-results"></div>
@@ -337,6 +350,26 @@
       </div>
     </div>
 
+    <div class="modal-backdrop" id="share-modal">
+      <div class="modal" style="width:min(560px,100%)">
+        <div class="modal-head"><span data-icon="share"></span><h3 id="share-modal-title">Share project</h3>
+          <button class="btn icon-only ghost" data-close-modal title="Close"><span data-icon="x"></span></button></div>
+        <div class="modal-body" id="share-modal-body"></div>
+      </div>
+    </div>
+    <div class="modal-backdrop" id="password-modal">
+      <div class="modal" style="width:min(420px,100%)">
+        <div class="modal-head"><span data-icon="lock"></span><h3>Change password</h3>
+          <button class="btn icon-only ghost" data-close-modal title="Close"><span data-icon="x"></span></button></div>
+        <form class="modal-body" id="f-change-password" style="display:flex; flex-direction:column; gap:10px">
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px">Current password<input class="tz-search" name="current" type="password" autocomplete="current-password" required></label>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px">New password (min. 10 characters)<input class="tz-search" name="new" type="password" autocomplete="new-password" minlength="10" required></label>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:12.5px">Repeat new password<input class="tz-search" name="new2" type="password" autocomplete="new-password" minlength="10" required></label>
+          <div id="pw-msg" style="color: var(--sev-high); font-size:12px; min-height:14px"></div>
+          <button class="btn small primary" type="submit" style="align-self:flex-end">Save</button>
+        </form>
+      </div>
+    </div>
     <div class="modal-backdrop" id="alerts-modal">
       <div class="modal">
         <div class="modal-head">

@@ -1,0 +1,35 @@
+# Caddy – HTTPS reverse proxy (obtains and renews Let's Encrypt certificates automatically).
+# Requirements: the domain name points (DNS A/AAAA) to the server; ports 80 and 443 are open in the firewall.
+# Windows: caddy.exe run --config C:\FjordPlatform\deploy\Caddyfile   (service: see deploy/windows/install_services.ps1)
+# Linux:   sudo cp Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+
+fjord.example.no {
+	encode zstd gzip
+
+	# Large uploads (DEM, NetCDF…): keep in line with MAX_UPLOAD_MB in .env
+	request_body {
+		max_size 200MB
+	}
+
+	reverse_proxy 127.0.0.1:8000 {
+		# long simulations / downloads: do not cut connections early
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output file C:/FjordData/logs/caddy-access.log {
+			roll_size 20MiB
+			roll_keep 10
+		}
+	}
+}

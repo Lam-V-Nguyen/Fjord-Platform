@@ -1,24 +1,24 @@
-// Lớp "Flow movement (HYD)" của dashboard.
-// Thuật toán hạt và nền raster CHUYỂN NGUYÊN từ công cụ Visualization (moveManager.js) để hai nơi
-// hiển thị giống nhau với cùng dữ liệu đầu vào:
-//  - khung int16 (u, v, depth) mở rộng ra toàn lưới như expandFrame(); nodata = meta.nodata
-//  - nội suy song tuyến 4 ô + nội suy tuyến tính giữa 2 khung (fa, fb, w), không kiểm tra ô tâm
-//  - sinh hạt ở ô hợp lệ bất kỳ (12 lần thử), tuổi 40–130 khung (physical: 400–490)
-//  - bước con ≤ nửa ô (res_m), chiều dài 1.5 px × speed × curve(|v|/vmax), tối đa 40 px;
-//    chế độ "physical": quãng đường = |v| × thời gian mô phỏng (rate h/s)
-//  - "Freeze when paused": khi dừng chỉ chạy 30 bước "snapshot" rồi đứng yên
-//  - nền raster speed (đã qua curve) / depth, alpha 190, làm mịn – như buildRaster/drawRaster
-//  - mặc định giống visualization.html: 5000 hạt, ×1, vệt 0.93, √, hạt trắng, nền Velocity
-// Dữ liệu: cache RIÊNG của dashboard (output/movement_dashboard), dựng bằng cùng
-// movement_functions.init_data, cùng file HYD map và cùng quy ước lớp như Visualization.
-// Không dùng chung mã/canvas/cài đặt với lớp Wflow.
+// "Flow movement (HYD)" dashboard layer.
+// The particle algorithm and raster background are PORTED AS-IS from the Visualization tool (moveManager.js) so both places
+// look the same with the same input data:
+//  - int16 frames (u, v, depth) expanded to the full grid like expandFrame(); nodata = meta.nodata
+//  - bilinear interpolation over 4 cells + linear interpolation between 2 frames (fa, fb, w), no centre-cell check
+//  - particles spawn in any valid cell (12 attempts), age 40–130 frames (physical: 400–490)
+//  - sub-steps ≤ half a cell (res_m), length 1.5 px × speed × curve(|v|/vmax), at most 40 px;
+//    "physical" mode: distance = |v| × simulated time (rate h/s)
+//  - "Freeze when paused": when paused only 30 "snapshot" steps run, then it stands still
+//  - raster background speed (after curve) / depth, alpha 190, smoothed – like buildRaster/drawRaster
+//  - defaults as in visualization.html: 5000 particles, ×1, trail 0.93, √, white particles, Velocity background
+// Data: the dashboard's OWN cache (output/movement_dashboard), built with the same
+// movement_functions.init_data, the same HYD map file and the same layer convention as Visualization.
+// No code/canvas/settings shared with the Wflow layer.
 
 import { PALETTES } from './dashboardMap.js';
 import { ui, bindSettings, loadSettings, saveSettings, readInput } from './dashboardLayerSettings.js';
 
 const L = window.L;
 const SETTINGS_KEY = 'dash.movement.settings.v2';
-const DEFAULTS = {                                    // = giá trị mặc định trong visualization.html
+const DEFAULTS = {                                    // = defaults in visualization.html
     count: 5000, pspeed: 1, trail: 0.93, curve: 'sqrt', pcolor: 'white', motion: 'always',
     raster: 'speed', rasterOpacity: 1, rate: 3,
 };
@@ -54,7 +54,7 @@ async function getBin(url) {
     return res.arrayBuffer();
 }
 
-// "-1"/"Average" -> mean (quy ước giao diện: k = thứ tự từ mặt xuống)
+// "-1"/"Average" -> mean (UI convention: k = order from the surface down)
 export function normLayer(layer) {
     const s = String(layer ?? '').trim().toLowerCase();
     if (['', '-1', 'mean', 'average', 'avg'].includes(s)) return 'mean';
@@ -100,7 +100,7 @@ export class MovementLayer {
     }
 
     // data
-    // opts: {res, layer, rebuild} – chỉ gửi khi người dùng đổi; mặc định dùng cache đang có
+    // opts: {res, layer, rebuild} – only sent when the user changes them; by default the existing cache is used
     async init(opts = {}) {
         const res = await post('movement/init', { projectName: this.projectName, ...opts });
         if (res.status !== 'ok') throw new Error(res.message || 'Movement data not available');
@@ -120,7 +120,7 @@ export class MovementLayer {
         return this;
     }
 
-    // Khung gọn (3 × Nv) -> toàn lưới (3 × N), như expandFrame() của moveManager.js
+    // Compact frame (3 × Nv) -> full grid (3 × N), like expandFrame() in moveManager.js
     expand(compact) {
         const N = this.N, V = this.valid, nv = V.length, ND = this.ND;
         if (compact.length === 3 * N) return compact;
@@ -155,7 +155,7 @@ export class MovementLayer {
         return p;
     }
 
-    // Thanh thời gian dashboard -> chỉ số thực S.t (nội suy giữa 2 khung như Visualization)
+    // Dashboard time bar -> real index S.t (interpolated between 2 frames as in Visualization)
     async setTime(iso) {
         this.lastIso = iso;
         if (!this.meta) return null;
@@ -170,7 +170,7 @@ export class MovementLayer {
         }
         if (tt !== this.t) {
             this.t = tt;
-            if (!this.playing) {                              // như seek() của moveManager.js
+            if (!this.playing) {                              // like seek() in moveManager.js
                 this.clear(); this.snapshot = SNAPSHOT;
                 if (this.S.motion !== 'always' && this.age) this.age.fill(0);
             }
@@ -200,7 +200,7 @@ export class MovementLayer {
         return y * y;
     }
 
-    // Menu Layer: Depth-mean, Surface + các lớp theo độ sâu (output/config/layers_hyd.json)
+    // Layer menu: Depth-mean, Surface + depth layers (output/config/layers_hyd.json)
     layerOptions() {
         const sigma = this.layerLabels.length ? this.layerLabels
             : Array.from({ length: this.nLayers }, (_, k) => [String(k), `Layer ${k}${k === 0 ? ' (surface)' : k === this.nLayers - 1 ? ' (bottom)' : ''}`]);
@@ -293,7 +293,7 @@ export class MovementLayer {
         this.age = new Uint16Array(n); this.life = new Uint16Array(n);
     }
 
-    // = updateProjection() của moveManager.js
+    // = updateProjection() in moveManager.js
     project() {
         if (!this.rasterCv || !this.meta) return;
         const m = this.meta, sz = this.map.getSize(), dpr = window.devicePixelRatio || 1, P = this.P;
@@ -314,7 +314,7 @@ export class MovementLayer {
     gx2x(gx) { return this.P.ax * (this.meta.lon0 + gx * this.meta.dlon) + this.P.bx; }
     gy2y(gy) { return this.P.ay * merc(this.meta.lat0 + gy * this.meta.dlat) + this.P.by; }
 
-    // vòng lặp (= frame() của moveManager.js)
+    // loop (= frame() in moveManager.js)
     frame(now) {
         const dtReal = Math.min(0.1, (now - this.last) / 1000); this.last = now;
         if (!this.meta || !this.pctx || document.hidden) return;
@@ -427,7 +427,7 @@ export class MovementLayer {
         this.drawn = drawn;
     }
 
-    // nền raster (= buildRaster/drawRaster)
+    // raster background (= buildRaster/drawRaster)
     buildRaster(fa, fb, w) {
         const m = this.meta, { nx, ny } = m, N = this.N, ND = this.ND, d = this.offImg.data;
         const mode = this.S.raster, lut = LUT[mode];
@@ -469,7 +469,7 @@ export class MovementLayer {
         }
     }
 
-    // đọc giá trị dưới con trỏ
+    // read the value under the cursor
     probe(latlng) {
         if (!this.probeEl || !this.probeEl.isConnected || !this.meta) return;
         const m = this.meta, f = this.frames.get(Math.round(this.t));
@@ -482,9 +482,9 @@ export class MovementLayer {
         this.probeEl.textContent = `Speed ${Math.hypot(u, v).toFixed(3)} m/s · to ${dir.toFixed(0)}° · depth ${d.toFixed(2)} m`;
     }
 
-    // bảng cài đặt (giống bảng của Visualization)
+    // settings panel (same as the Visualization panel)
     renderSettings(el, ctx) {
-        if (el._bound) { const n = el.cloneNode(false); n.classList.remove('busy'); el.replaceWith(n); el = n; }   // vẽ lại -> bỏ listener cũ
+        if (el._bound) { const n = el.cloneNode(false); n.classList.remove('busy'); el.replaceWith(n); el = n; }   // redraw -> drop old listeners
         el._bound = true;
         const S = this.S, m = this.meta;
         el.innerHTML =
@@ -523,7 +523,7 @@ export class MovementLayer {
         bindSettings(el, {
             fmt: { rasterOpacity: (v) => v.toFixed(2), pspeed: (v) => v.toFixed(1), trail: (v) => v.toFixed(3) },
             onSet: (k, v, live) => {
-                if (k === 'res' || k === 'layer') return;                   // chỉ áp dụng khi bấm Apply / Enter
+                if (k === 'res' || k === 'layer') return;                   // only applied on Apply / Enter
                 S[k] = k === 'rate' ? Number(v) : v;
                 if (!live) saveSettings(SETTINGS_KEY, S);
                 if (k === 'rasterOpacity') this.applyRasterOpacity();

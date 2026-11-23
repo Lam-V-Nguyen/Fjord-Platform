@@ -1,6 +1,6 @@
-// Bảng cài đặt nổi trên bản đồ cho các lớp bổ sung (Flow movement, Wflow results).
-// Mỗi lớp tự mô tả các điều khiển qua renderSettings(el, ctx); module này chỉ cung cấp
-// các hàm dựng HTML gọn + bộ gắn sự kiện chung + lưu cài đặt vào localStorage.
+// Floating settings panel on the map for the extra layers (Flow movement, Wflow results).
+// Each layer describes its own controls via renderSettings(el, ctx); this module only provides
+// compact HTML builders + a shared event binder + saving settings to localStorage.
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -28,10 +28,10 @@ export const ui = {
 };
 
 /**
- * Gắn sự kiện cho toàn bộ điều khiển trong el.
- *  onSet(k, value, live)  – live=true khi đang kéo thanh trượt (event 'input')
- *  onAction(act)          – nút data-act
- *  fmt                    – {k: fn} định dạng giá trị hiển thị cạnh thanh trượt
+ * Bind events for all controls inside el.
+ *  onSet(k, value, live)  – live=true while a slider is being dragged ('input' event)
+ *  onAction(act)          – data-act buttons
+ *  fmt                    – {k: fn} formats the value shown next to the slider
  */
 export function bindSettings(el, { onSet, onAction, fmt = {} }) {
     el.addEventListener('input', (e) => {
@@ -46,12 +46,12 @@ export function bindSettings(el, { onSet, onAction, fmt = {} }) {
         if (!t.dataset.k) return;
         if (t.type === 'range') onSet(t.dataset.k, Number(t.value), false);
         else if (t.tagName === 'SELECT') onSet(t.dataset.k, t.value, false);
-        else if (t.tagName === 'INPUT') onSet(t.dataset.k, t.value.trim(), false);   // ô nhập: khi rời ô
+        else if (t.tagName === 'INPUT') onSet(t.dataset.k, t.value.trim(), false);   // text input: on leaving the field
     });
-    el.addEventListener('keydown', (e) => {          // ô nhập: Enter = áp dụng
+    el.addEventListener('keydown', (e) => {          // text input: Enter = apply
         if (e.key === 'Enter' && e.target.dataset.k && e.target.tagName === 'INPUT' && e.target.type !== 'range') {
             e.preventDefault();
-            e.target.blur();                                  // -> 'change' gọi onSet
+            e.target.blur();                                  // -> 'change' calls onSet
             onAction?.('enter:' + e.target.dataset.k);
         }
     });

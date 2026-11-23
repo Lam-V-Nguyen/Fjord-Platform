@@ -2,6 +2,69 @@ import re, math
 import numpy as np
 
 
+# Configuration
+LOCAL_HOST = "http://localhost:8000"
+#  brute-force protection
+WINDOW = 15 * 60
+# short in-memory cache: avoids opening SQLite for EVERY request (map tiles, frames…)
+CACHE_SEC = 30
+ROLES = ("admin", "user", "viewer")
+STATUSES = ("active", "pending", "invited", "disabled")
+USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{2,31}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+RESERVED = {"admin", "demo", "root", "system", "public", "static", "api", "login", "logout"}
+MIN_PASSWORD = 10
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    email TEXT UNIQUE,
+    full_name TEXT DEFAULT '',
+    organisation TEXT DEFAULT '',
+    password_hash TEXT,
+    role TEXT NOT NULL DEFAULT 'user',
+    status TEXT NOT NULL DEFAULT 'pending',
+    note TEXT DEFAULT '',
+    created_at REAL NOT NULL,
+    last_login REAL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at REAL NOT NULL,
+    last_seen REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    ip TEXT, user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose TEXT NOT NULL,                 -- 'invite' | 'reset'
+    expires_at REAL NOT NULL,
+    used_at REAL
+);
+CREATE TABLE IF NOT EXISTS login_fails (
+    key TEXT NOT NULL,                     -- 'u:<username>' or 'ip:<ip>'
+    at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_fails_key ON login_fails(key, at);
+CREATE TABLE IF NOT EXISTS project_shares (
+    owner TEXT NOT NULL,                   -- username owning projects/<owner>/<project>
+    project TEXT NOT NULL,
+    grantee TEXT NOT NULL,                 -- username the project is shared with
+    access TEXT NOT NULL DEFAULT 'view',   -- 'view' | 'edit'
+    created_by TEXT, created_at REAL NOT NULL,
+    PRIMARY KEY (owner, project, grantee)
+);
+CREATE INDEX IF NOT EXISTS ix_shares_grantee ON project_shares(grantee);
+CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at REAL NOT NULL, actor TEXT, action TEXT NOT NULL, target TEXT, detail TEXT, ip TEXT
+);
+"""
+
+
 # Dashboard
 DASH_MOVE_DIR, DASH_VIEW_DIR = "movement",  "viewer"
 VELOCITY_PAIRS = [
@@ -157,6 +220,12 @@ UV_SCALE = 0.001     # 1 unit int16 = 1 mm/s
 DEPTH_SCALE = 0.01   # 1 unit = 1 cm
 
 # Weather
+MET_BASE = "https://thredds.met.no/thredds/dodsC"
+MET_URLS = (
+    MET_BASE + "/metpparchivev3/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
+    MET_BASE + "/metpparchive/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
+    MET_BASE + "/metpplatest/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
+)
 SOURCES = {
     "era5": {"label": "ERA5 reanalysis (CDS)", "needs_key": True, "min_date": "1940-01-01", "latency_days": ERA5_LATENCY_DAYS},
     "era5-timeseries": {"label": "ERA5 hourly time series (CDS)", "needs_key": True, "min_date": "1940-01-01", "latency_days": ERA5_LATENCY_DAYS},
@@ -181,12 +250,6 @@ ALIASES = {"degc": "degC", "°c": "degC", "c": "degC", "celsius": "degC", "k": "
     "kpa": "kPa", "kg/m3": "kg/m^3", "kg m-3": "kg/m3", "g/cm3": "g/cm^3", "ph": "-", "1": "-"
 }
 SIGMA, MET_HOUR_RETRIES, MET_MAX_GAP_H, MET_MAX_MISSING_SHARE = 5.670374419e-8, 3, 6, 0.2
-MET_BASE = "https://thredds.met.no/thredds/dodsC"
-MET_URLS = (
-    MET_BASE + "/metpparchivev3/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
-    MET_BASE + "/metpparchive/{t:%Y/%m/%d}/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
-    MET_BASE + "/metpplatest/met_analysis_1_0km_nordic_{t:%Y%m%dT%H}Z.nc",
-)
 MET_VARS = {"precipitation_amount": "precip_mm", "air_temperature_2m": "t_k", "relative_humidity_2m": "rh",
     "air_pressure_at_sea_level": "msl_pa", "wind_speed_10m": "ws", "wind_direction_10m": "wd",
     "cloud_area_fraction": "cloud", "integral_of_surface_downwelling_shortwave_flux_in_air_wrt_time": "sw_j",
@@ -199,7 +262,7 @@ OM_HOURLY = ("precipitation,temperature_2m,relative_humidity_2m,dew_point_2m,sho
 # Weather Live
 WEATHER_USER_AGENT = "HydroAI-Water-Platform/1.0 (+https://github.com/Lam-V-Nguyen/HydroAI-Fjord-Platform)"
 WEATHER_STATION_COUNT = 15
-WEATHER_FALLBACK_ORDER = ("metno", "openmeteo")   # nguồn thay thế khi không có số đo trạm
+WEATHER_FALLBACK_ORDER = ("metno", "openmeteo")   # fallback sources when there are no station measurements
 WEATHER_PAST_HOURS, WEATHER_FORECAST_HOURS, WEATHER_TIMEOUT = 48, 48, 20
 WEATHER_VARIABLES = [
     {"key": "temperature", "label": "Air temperature", "short": "Temperature", "unit": "°C", "icon": "temperature", "decimals": 1},
@@ -305,9 +368,9 @@ SOIL_DEPTH = {
 SOIL_DEPTH_REVERSE = {v: k for k, v in SOIL_DEPTH.items()}
 
 # Pollution
-GRID_CELLS = 320          # số ô lưới hạt theo cạnh dài của miền
-SAMPLE_STEPS = 24         # số bước thời gian lấy mẫu để tính thang cố định
-FILL_LIMIT = -998.0        # DELWAQ ghi -999 cho ô không hoạt động (z-layers) – không phải nồng độ
+GRID_CELLS = 320          # number of particle grid cells along the longest side of the domain
+SAMPLE_STEPS = 24         # number of sampled time steps used to compute the fixed scale
+FILL_LIMIT = -998.0        # DELWAQ writes -999 for inactive cells (z-layers) – not a concentration
 
 # YAML
 TARGET_UNITS = {
@@ -464,6 +527,6 @@ FRIENDLY = {
         "Cannot triangulate the polygon: it has duplicate/overlapping vertices or zero-length edges, "
         "or the scale factor is too small. Reset the vertexes or increase the scale factor and try again.",
 }
-# Lớp nền (lake, catchment, rivers, bathymetry): thiếu file -> None / [] -> dashboard ẩn lựa chọn tương ứng.
-# Cache theo (đường dẫn, mtime) để file được thêm / sửa / xoá sau khi server chạy vẫn được nhận ra.
+# Base layers (lake, catchment, rivers, bathymetry): missing file -> None / [] -> the dashboard hides the matching option.
+# Cached by (path, mtime) so files added / edited / deleted after the server has started are still picked up.
 CONTEXT_LAYERS = { "lake": "lake.geojson", "catchment": "catchment.geojson", "river": "river.geojson", "bathymetry": "depth.csv" }

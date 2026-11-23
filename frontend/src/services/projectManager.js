@@ -26,7 +26,11 @@ export async function projectModifier(user) {
     if (data.status === "error") { alert(data.message); overlay.remove(); return; }
     data.content.forEach(project => {
         const option = document.createElement("option"); option.value = project;
-        option.textContent = project; projectList.appendChild(option);
+        // "<owner>:<project>" = shared with you by <owner>
+        const i = project.indexOf(':');
+        option.textContent = i < 0 ? project : project.startsWith('public:') ? `${project.slice(i + 1)}  (sample project, read only)`
+            : `${project.slice(i + 1)}  (shared by ${project.slice(0, i)})`;
+        projectList.appendChild(option);
     });
     if (data.content.length > 0) { projectList.selectedIndex = 1; }
     modal.querySelector("#okBtn").onclick = async () => {

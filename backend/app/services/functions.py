@@ -1,13 +1,11 @@
 import os, json, chardet, asyncio, stat, time, re, shapely
-import shutil, base64, signal, subprocess, gc, traceback
-from config import ALLOWED_USERS
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi import Depends, HTTPException, status
+import shutil, base64, signal, subprocess, gc, traceback, logging, contextvars, secrets as _secrets
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from redis.asyncio.lock import Lock
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt, gaussian_filter
-from config import PROJECT_ROOT
+from config import PROJECT_ROOT, COOKIE_NAME, SHOW_ERROR_DETAILS, MAX_SOLVER_PROCESSES, PUBLIC_PROJECTS, DATA_DIR
 from uuid import uuid4
 from shapely.geometry import Polygon, MultiPolygon
 import numpy as np, xarray as xr, pandas as pd
@@ -35,7 +33,7 @@ def encoding_detect(file_path: str) -> str:
         if detected: encoding = detected
     return encoding
 
-USERS = json.load(open(ALLOWED_USERS, "r", encoding=encoding_detect(ALLOWED_USERS)))
+_log = logging.getLogger("fjord")
 
 @lru_cache(maxsize=1)
 def _all_timezones() -> list[str]:
@@ -47,10 +45,26 @@ _ALL_TZ = sorted(_all_timezones())
 
 variablesNames, units = constants.VARIABLES_NAME, constants.UNITS
 
+class AppError(Exception):
+    """Route error -> answered as JSON {"status": "error", "message", "error_id"} with HTTP status `code`."""
+    def __init__(self, where: str, message: str, code: int = 500, error_id: str = ""):
+        super().__init__(message)
+        self.where, self.message, self.code, self.error_id = where, message, code, error_id
+
+def log_error(where: str, e: Exception) -> str:
+    """Log the error with its traceback; return a short id that matches the message the user sees."""
+    error_id = _secrets.token_hex(4)
+    if not isinstance(e, BaseException): e = Exception(str(e))       # some callers pass a string instead of an exception
+    _log.error("%s [%s]: %s", where, error_id, e, exc_info=(type(e), e, e.__traceback__))
+    return error_id
+
 def error(where: str, e: Exception, code: int = 500):
-    print(f"{where}:\n==============")
-    traceback.print_exc()
-    return JSONResponse({"status": "error", "message": f"Error: {e}"}, status_code=code)
+    """Call inside a route's except block: logs, then RAISES AppError. (It used to return a JSONResponse that
+    no route returned, so the browser received `null` with status 200 instead of an error.)"""
+    if isinstance(e, HTTPException): raise e               # 400/401/403… raised on purpose: keep as is
+    error_id = log_error(where, e)
+    msg = f"Error: {e}" if (SHOW_ERROR_DETAILS or code < 500) else f"Internal error (id {error_id}). Please contact the administrator."
+    raise AppError(where, msg, code, error_id)
 
 def encode_array(arr: np.ndarray) -> str:
     arr = arr.astype(np.float32)
@@ -60,20 +74,147 @@ def decode_array(b64_str: str, shape, dtype=np.float32) -> np.ndarray:
     arr = np.frombuffer(base64.b64decode(b64_str), dtype=dtype)
     return arr.reshape(shape)
 
-def basic_auth(credentials: HTTPBasicCredentials=Depends(HTTPBasic())):
-    username, password = credentials.username, credentials.password
-    if username not in USERS or USERS[username] != password:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authorized", headers={"WWW-Authenticate": "Basic"}
-        )
-    return username
+# ---------------------------------------------------------------- authentication (cookie session)
+def current_user(request: Request):
+    """Signed-in user (services.auth_store.User) or None; cached on request.state."""
+    if hasattr(request.state, "user"): return request.state.user
+    from services import auth_store
+    request.state.user = auth_store.session_user(request.cookies.get(COOKIE_NAME))
+    return request.state.user
 
-def project_definer(old_name, username='admin'):
-    new_name = f'{username}/{old_name}' if username!='admin' else 'demo'
+_CURRENT_REQUEST: "contextvars.ContextVar[Request | None]" = contextvars.ContextVar("fjord_request", default=None)
+
+async def basic_auth(request: Request) -> str:
+    """Keeps the OLD NAME so ~180 routes need no change: returns the session's username, 401 when not signed in.
+    (Previously: HTTP Basic + allowed_users.json.)  Async on purpose: the request is stored in a context variable
+    that project_definer() reads to enforce read-only access to shared projects."""
+    user = current_user(request)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if not user.can_write and is_write_request(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Read-only account (viewer)")
+    _CURRENT_REQUEST.set(request)
+    return user.username
+
+# Read-only API: POST endpoints that only read results (dashboard, Visualization, status checks…).
+# Viewers and users with a 'view' share may call these; every other POST/PUT/DELETE counts as a write.
+_READ_PREFIXES = ("/dashboard/", "/auth/", "/auth_check", "/get_", "/load_", "/check_", "/calibration_log_tail",
+                  "/plot_station")
+_READ_ROUTES = {"/setup_database", "/select_project", "/select_meshes", "/select_thermocline", "/process_data",
+                "/initiate_options", "/check_condition", "/init_movement", "/close_movement", "/load_general_dynamic",
+                "/load_vector_dynamic", "/init_source", "/unstructure_grid_plot"}
+
+def is_write_request(request: Request | None) -> bool:
+    if request is None or request.method in ("GET", "HEAD", "OPTIONS"): return False
+    path = request.url.path
+    return not (path in _READ_ROUTES or path.startswith(_READ_PREFIXES))
+
+def require_admin(request: Request) -> str:
+    user = current_user(request)
+    if user is None: raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if not user.is_admin: raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator only")
+    return user.username
+
+# ---------------------------------------------------------------- safe project names
+_BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+SHARE_SEP = ":"          # a shared project is referenced as "<owner>:<project>" (":" is never part of a folder name)
+PUBLIC_OWNER = "public"  # sample projects: "public:<name>" -> PROJECT_ROOT/<name>, read only except for administrators
+
+def public_refs() -> list[str]:
+    """References of the sample projects that exist on disk, e.g. ['public:demo']."""
+    return [f"{PUBLIC_OWNER}{SHARE_SEP}{p}" for p in PUBLIC_PROJECTS if os.path.isdir(os.path.join(PROJECT_ROOT, p))]
+
+def safe_project_name(name) -> str:
+    """Valid project name: no path characters, not '.'/'..', at most 100 characters. 400 otherwise."""
+    if name is None: raise HTTPException(status_code=400, detail="Project name is required")
+    name = str(name).strip()
+    if "/" in name: name = name.rstrip("/").split("/")[-1]     # legacy "user/project" form -> keep the project name only
+    if name in (".", "..") or name.startswith(".") or len(name) > 100 or _BAD_NAME.search(name):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+    return name
+
+def split_project_ref(ref, username: str) -> tuple[str, str]:
+    """'<owner>:<project>' or '<project>' -> (owner, project); both validated."""
+    ref = "" if ref is None else str(ref).strip()
+    if SHARE_SEP in ref:
+        owner, project = ref.split(SHARE_SEP, 1)
+        owner = owner.strip().lower()
+        if not owner or owner in (".", "..") or _BAD_NAME.search(owner) or len(owner) > 64:
+            raise HTTPException(status_code=400, detail="Invalid project owner")
+        return owner, safe_project_name(project)
+    return username, safe_project_name(ref)
+
+def project_definer(old_name, username='admin', for_copy: bool = False):
+    """'<owner>/<project>' path relative to PROJECT_ROOT (legacy account 'admin' -> shared demo project).
+    - own project: '<project>' (or '<username>:<project>')
+    - shared project: '<owner>:<project>' -> allowed only when shared with `username`; a 'view' share
+      refuses write requests (403). The real path must stay inside the owner's folder (no '../').
+    - sample project: 'public:<name>' -> PROJECT_ROOT/<name>; everyone may read it, only administrators may change it
+      (for_copy=True: reading it as the SOURCE of a copy into the user's own folder is allowed).
+    Raises 400 / 403 HTTPException."""
+    if username == 'admin':
+        new_name = 'demo'
+    else:
+        if old_name == '': owner, project = username, ''
+        else: owner, project = split_project_ref(old_name, username)
+        if owner == PUBLIC_OWNER:
+            if project not in PUBLIC_PROJECTS:
+                raise HTTPException(status_code=404, detail=f"Sample project '{project}' not found")
+            req = _CURRENT_REQUEST.get()
+            user = current_user(req) if req is not None else None
+            if is_write_request(req) and not for_copy and not (user is not None and user.is_admin):
+                raise HTTPException(status_code=403, detail="The sample project is read-only. "
+                                    "Copy it to your own projects to make changes.")
+            return project, f'{project}/{uuid4()}'
+        if owner != username:
+            from services import auth_store
+            access = auth_store.share_access(owner, project, username)
+            if access is None:
+                raise HTTPException(status_code=403, detail=f"Project '{owner}:{project}' is not shared with you")
+            if access == 'view' and is_write_request(_CURRENT_REQUEST.get()):
+                raise HTTPException(status_code=403, detail="Read-only shared project (view access)")
+        owner_dir = os.path.realpath(os.path.join(PROJECT_ROOT, owner))
+        target = os.path.realpath(os.path.join(owner_dir, project))
+        if os.path.commonpath([owner_dir, target]) != owner_dir:
+            raise HTTPException(status_code=403, detail="Forbidden project path")
+        new_name = f'{owner}/{project}'.rstrip('/')
     name_id = f'{new_name}/{uuid4()}'
-    if old_name == '': new_name = new_name.rstrip('/')
     return new_name, name_id
+
+# ---------------------------------------------------------------- per-user view state of other people's projects
+def _viewer_of_other(project_path: str):
+    """The signed-in user when `project_path` (relative to PROJECT_ROOT) is a sample project or a project shared
+    with them – i.e. not their own; None otherwise (own project, administrators on samples, no request)."""
+    req = _CURRENT_REQUEST.get()
+    user = current_user(req) if req is not None else None
+    if user is None or user.username == 'admin': return None
+    owner = project_path.split('/')[0] if '/' in project_path else PUBLIC_OWNER
+    if owner == user.username or (owner == PUBLIC_OWNER and user.is_admin): return None
+    return user
+
+def user_config_path(project_path: str) -> str:
+    """config.json that stores the selected WAQ scenario (+ scanned variables) of a project.
+    Owners (and administrators on sample projects) use the project's own output/config/config.json. Anyone else
+    – sample or shared project – gets a private copy under DATA_DIR/user_state/<user>/, so choosing another WAQ
+    scenario does not change what other users see. The copy starts from the project's current config."""
+    base = os.path.join(PROJECT_ROOT, project_path, 'output', 'config', 'config.json')
+    user = _viewer_of_other(project_path)
+    if user is None: return base
+    path = os.path.join(DATA_DIR, 'user_state', user.username, project_path.replace('/', '__'), 'config.json')
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(base) and os.path.getsize(base) > 0: shutil.copyfile(base, path)
+    return path
+
+def cache_key(project_path: str) -> str:
+    """Key of the Redis hash / in-memory project cache: per user for sample and shared projects (see user_config_path)."""
+    user = _viewer_of_other(project_path)
+    return project_path if user is None else f"{project_path}#{user.username}"
+
+def require_owner(project_path: str, username: str):
+    """Deleting / renaming / copying INTO a project is for its owner only (not for users it is shared with)."""
+    if username != 'admin' and project_path.split('/')[0] != username:
+        raise HTTPException(status_code=403, detail="Only the owner of the project can do this")
 
 def project_reader(user_name, project_name):
     output_dir = os.path.join(PROJECT_ROOT, user_name, project_name, 'output')
@@ -85,7 +226,7 @@ def project_reader(user_name, project_name):
         raise ValueError(
             f"Project '{project_name}' does not contain enough HYD configuration files."
         )
-    config_path = os.path.join(output_dir, 'config', 'config.json')
+    config_path = user_config_path(os.path.join(user_name, project_name).replace(os.sep, '/').strip('/'))
     waq_name, waq_model = '', ''
     if os.path.exists(config_path):
         with open(config_path, 'r', encoding=encoding_detect(config_path)) as f:
@@ -471,9 +612,7 @@ def kill_process(process):
             process.wait(timeout=5)
             return {"status": "ok", "message": "Simulation terminated."}
         except Exception: pass
-        # Force kill for Windows
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        kill_process_tree(process.pid)              # Windows & Linux
         return {"status": "ok", "message": "Simulation force killed"}
     except Exception as e: 
         return {"status": "error", "message": str(e)}
@@ -1101,3 +1240,42 @@ def clean_json_value(value):
     if isinstance(value, np.integer):
         return int(value)
     return value
+
+def kill_process_tree(pid: int) -> bool:
+    """Kill a process and all its children (Windows & Linux) with psutil; falls back to taskkill / SIGKILL."""
+    try:
+        import psutil
+        p = psutil.Process(int(pid))
+        for c in p.children(recursive=True):
+            try: c.kill()
+            except psutil.Error: pass
+        p.kill(); return True
+    except ImportError: pass
+    except Exception: return False
+    try:
+        if os.name == "nt":
+            return subprocess.run(["taskkill", "/F", "/T", "/PID", str(int(pid))], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, check=False).returncode == 0
+        os.killpg(os.getpgid(int(pid)), signal.SIGKILL); return True
+    except Exception: return False
+
+
+# ---------------------------------------------------------------- server resource limits
+SOLVER_NAMES = ("dflowfm", "dimr", "delwaq", "wflow_cli")
+
+def running_solvers() -> int:
+    """Number of simulation processes running on this machine (all users)."""
+    try: import psutil
+    except ImportError: return 0
+    n = 0
+    for p in psutil.process_iter(["name"]):
+        name = (p.info.get("name") or "").lower()
+        if any(s in name for s in SOLVER_NAMES): n += 1
+    return n
+
+def require_sim_slot():
+    """Dependency for routes that START a simulation: server at capacity -> 503 (try again later)."""
+    n = running_solvers()
+    if n >= MAX_SOLVER_PROCESSES:
+        raise HTTPException(status_code=503, detail=f"The server is busy: {n} simulation process(es) running "
+                            f"(limit {MAX_SOLVER_PROCESSES}). Please try again later.")

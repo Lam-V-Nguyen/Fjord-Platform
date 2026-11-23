@@ -4,7 +4,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form, Response, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.concurrency import run_in_threadpool
-from services import functions, data_functions, flow_functions, yml_update, era5_function, constants
+from services import functions, data_functions, flow_functions, yml_update, era5_function, constants, secretbox
 from config import PROJECT_ROOT, SOURCE_BACKEND
 import geopandas as gpd, pandas as pd, numpy as np
 from services.data_functions import Regnbyge as regnbyge
@@ -59,7 +59,8 @@ async def save_client(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
-        path = os.path.join(PROJECT_ROOT, project_name.split('/')[0], 'credentials.json')
+        path = os.path.join(PROJECT_ROOT, user if user != 'admin' else 'demo', 'credentials.json')   # always the signed-in user's own
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(path):
             with open(path, 'w', encoding='utf-8', errors='ignore') as f:
                 json.dump({}, f)
@@ -67,8 +68,8 @@ async def save_client(request: Request, user=Depends(functions.basic_auth)):
             content = json.load(f)
         client_name, client_secret = body.get('clientName', ''), body.get('clientSecret', '')
         client_username, client_password = body.get('clientUsername', ''), body.get('clientPassword', '')
-        content[body.get('key')] = {'client_id': client_name, 'client_secret': client_secret,
-            'client_username': client_username, 'client_password': client_password}
+        content[body.get('key')] = secretbox.protect({'client_id': client_name, 'client_secret': client_secret,
+            'client_username': client_username, 'client_password': client_password})      # secrets are encrypted
         with open(path, 'w', encoding='utf-8', errors='ignore') as f:
             json.dump(content, f)
         return JSONResponse({'message': 'Registration information is saved successfully.'})
@@ -78,12 +79,12 @@ async def save_client(request: Request, user=Depends(functions.basic_auth)):
 async def load_client(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
     project_name, _ = functions.project_definer(body.get('projectName'), user)
-    path = os.path.join(PROJECT_ROOT, project_name.split('/')[0], 'credentials.json')
+    path = os.path.join(PROJECT_ROOT, user if user != 'admin' else 'demo', 'credentials.json')   # always the signed-in user's own
     temp = {'client_id': '', 'client_secret': '', 'client_username': '', 'client_password': ''}
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             content = json.load(f)
-        content = content.get(body.get('key'), temp)
+        content = secretbox.reveal(content.get(body.get('key'), temp))
     else: content = temp
     return JSONResponse({'content': content})
     
@@ -702,7 +703,7 @@ async def cancel_download_weather(request: Request, user=Depends(functions.basic
     info["cancel"] = True
     return JSONResponse({"status": "ok", "message": "Cancelling... (takes effect within a few seconds)"})
 
-@router.post("/wflow_model")
+@router.post("/wflow_model", dependencies=[Depends(functions.require_sim_slot)])
 async def wflow_model(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
     project_name, _ = functions.project_definer(body.get('projectName'), user)
