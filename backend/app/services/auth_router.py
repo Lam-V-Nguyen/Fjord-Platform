@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi import HTTPException
 from config import (PROJECT_ROOT, COOKIE_NAME, COOKIE_SECURE, SESSION_HOURS, SESSION_MAX_DAYS, 
     PUBLIC_URL, SOURCE_FRONTEND, INVITE_HOURS, RESET_HOURS, SELF_REGISTRATION, ADMIN_EMAILS)
-from services import auth_store as store, mailer
+from services import auth_store as store, mailer, constants
 from services.functions import current_user, require_admin, split_project_ref, SHARE_SEP, PUBLIC_OWNER
 
 router = APIRouter()
@@ -167,7 +167,7 @@ async def auth_set_password(request: Request):
 #  administration
 @router.get("/auth/admin/users")
 def admin_users(admin: str = Depends(require_admin)):
-    return _ok(users=store.list_users(), mail_enabled=mailer.enabled(), roles=store.ROLES, statuses=store.STATUSES)
+    return _ok(users=store.list_users(), mail_enabled=mailer.enabled(), roles=constants.ROLES, statuses=constants.STATUSES)
 
 @router.post("/auth/admin/invite")
 async def admin_invite(request: Request, admin: str = Depends(require_admin)):
