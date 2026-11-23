@@ -315,7 +315,7 @@ async def init_source(request: Request, user=Depends(functions.basic_auth)):
     return JSONResponse({"status": status, "content": data, "type": type, "points": points})
 
 def _pli_point(pli_path: str) -> list | None:
-    """Toạ độ [lat, lon] của điểm đầu tiên trong file .pli (dòng 3: 'lon  lat')."""
+    """Coordinates [lat, lon] of the first point in the .pli file (line 3: 'lon  lat')."""
     if not os.path.exists(pli_path): return None
     try:
         with open(pli_path, 'r', encoding=functions.encoding_detect(pli_path)) as f:

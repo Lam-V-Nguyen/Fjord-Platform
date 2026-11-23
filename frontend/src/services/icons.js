@@ -1,5 +1,5 @@
-// Bộ icon SVG nội tuyến (nét 24x24, kiểu lucide) dùng cho giao diện Dashboard.
-// Dùng: icon('map') -> chuỗi <svg>; icon('map', 18, 'cls') để đổi kích thước/lớp CSS.
+// Inline SVG icon set (24x24 stroke, lucide style) used by the Dashboard UI.
+// Usage: icon('map') -> <svg> string; icon('map', 18, 'cls') to change the size/CSS class.
 
 const P = {
     user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',

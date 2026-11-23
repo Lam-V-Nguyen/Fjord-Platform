@@ -530,7 +530,7 @@ async function loadScenario(scenarioName){
     obj.initTemperature.value = data.content.initTemperature;
     // Get source data if exist
     const src = await updateTable(obj.sourceRemoveTable, obj.sourceSelectorRemove, scenarioName);
-    // Vẽ các đối tượng của kịch bản lên bản đồ (cùng icon/kiểu như khi tạo mới)
+    // Draw the scenario's objects on the map (same icons/styles as when creating them)
     signalSender('drawScenario', {
         obs: data.content.obsPointTable || [], crossSection: data.content.crossSectionTable || [],
         boundary: data.content.boundaryTable || [], sources: src?.points || [], fit: true

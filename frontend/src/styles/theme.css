@@ -1,10 +1,10 @@
 /* =====================================================================
-   theme.css – Design tokens cho giao diện Dashboard mới (theme tối)
-   Mọi màu sắc/khoảng cách dùng chung đều khai báo ở đây; các file CSS khác
-   chỉ tham chiếu biến, nên đổi nhận diện thương hiệu chỉ cần sửa file này.
+   theme.css – Design tokens for the new Dashboard UI (dark theme)
+   All shared colours/spacings are declared here; the other CSS files
+   only reference the variables, so changing the branding only requires editing this file.
    ===================================================================== */
 :root {
-    /* Nền & bề mặt */
+    /* Background & surfaces */
     --bg: #070d18;
     --bg-elev: #0b1424;
     --surface: #0e192b;
@@ -14,21 +14,21 @@
     --border: rgba(148, 170, 200, 0.13);
     --border-strong: rgba(148, 170, 200, 0.26);
 
-    /* Chữ */
+    /* Text */
     --text: #e7eef8;
     --text-2: #b9c6d8;
     --muted: #7f91aa;
     --faint: #56677f;
 
-    /* Nhấn */
-    --accent: #34d399;          /* xanh ngọc – trạng thái active, nút chính */
+    /* Accent */
+    --accent: #34d399;          /* emerald – active state, primary buttons */
     --accent-soft: rgba(52, 211, 153, 0.14);
-    --accent-2: #38bdf8;        /* xanh nước */
+    --accent-2: #38bdf8;        /* water blue */
     --accent-2-soft: rgba(56, 189, 248, 0.14);
     --accent-3: #a78bfa;
     --accent-4: #f59e0b;
 
-    /* Mức độ cảnh báo */
+    /* Alert levels */
     --sev-high: #f43f5e;
     --sev-high-soft: rgba(244, 63, 94, 0.16);
     --sev-medium: #f59e0b;
@@ -38,7 +38,7 @@
     --sev-info: #60a5fa;
     --sev-info-soft: rgba(96, 165, 250, 0.16);
 
-    /* Bảng màu cho chuỗi dữ liệu (biểu đồ, lớp bản đồ) */
+    /* Palette for data series (charts, map layers) */
     --series-1: #38bdf8;
     --series-2: #34d399;
     --series-3: #f59e0b;
@@ -46,7 +46,7 @@
     --series-5: #f472b6;
     --series-6: #facc15;
 
-    /* Hình khối */
+    /* Shapes */
     --radius-lg: 14px;
     --radius: 10px;
     --radius-sm: 7px;
@@ -76,20 +76,20 @@ button { cursor: pointer; }
 .ico { flex: 0 0 auto; display: block; }
 .num { font-variant-numeric: tabular-nums; }
 
-/* Thanh cuộn */
+/* Scrollbars */
 * { scrollbar-width: thin; scrollbar-color: #24385a transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-thumb { background: #24385a; border-radius: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
 
-/* Màu theo mức độ */
+/* Colours by level */
 .sev-high   { --sev: var(--sev-high);   --sev-soft: var(--sev-high-soft); }
 .sev-medium { --sev: var(--sev-medium); --sev-soft: var(--sev-medium-soft); }
 .sev-low    { --sev: var(--sev-low);    --sev-soft: var(--sev-low-soft); }
 .sev-info   { --sev: var(--sev-info);   --sev-soft: var(--sev-info-soft); }
 
 /* ---------------------------------------------------------------------
-   Ghi đè giao diện cũ (index.css, gridLayout.css) cho đồng bộ theme tối
+   Overrides for the legacy UI (index.css, gridLayout.css) to match the dark theme
    --------------------------------------------------------------------- */
 .loading-container {
     background: rgba(5, 10, 20, 0.78) !important;
@@ -124,13 +124,13 @@ button { cursor: pointer; }
 
 .pm-modal { background: var(--panel) !important; border: 1px solid var(--border-strong); color: var(--text); }
 
-/* Ô tìm múi giờ (giữ id/class cũ: #tz-search, #tz-results) */
+/* Time zone search box (keeps the old id/class: #tz-search, #tz-results) */
 .tz-search { background: var(--bg-elev) !important; color: var(--text) !important; border: 1px solid var(--border-strong) !important; }
 .tz-result-item:hover, .tz-result-item.highlighted { background: var(--panel-hover) !important; }
 .tz-result-item.active { background: var(--accent-soft) !important; color: var(--accent); }
 .tz-result-item .tz-offset { color: var(--muted) !important; }
 
-/* Leaflet theo theme tối */
+/* Leaflet in the dark theme */
 .leaflet-container { background: #0a1220 !important; font-family: var(--font) !important; }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip {
     background: var(--panel-2) !important; color: var(--text) !important;

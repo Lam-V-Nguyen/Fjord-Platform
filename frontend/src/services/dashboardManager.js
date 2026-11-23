@@ -1,11 +1,11 @@
-// Điều phối trang Overview (Dashboard) – nội dung chính là KẾT QUẢ MÔ PHỎNG HYD / WAQ:
-//  - Catalog: kịch bản HYD/WAQ, biến bản đồ & trạm, trạm, mốc thời gian (/dashboard/catalog)
-//  - KPI, giám sát, trạng thái chất lượng nước, nguồn/xả, rủi ro, cảnh báo (/dashboard/summary, /alerts)
-//  - Bản đồ trường mô phỏng + thanh thời gian (/dashboard/mesh, /field)
-//  - Profile thẳng đứng & chuỗi thời gian tại trạm (/dashboard/profile, /station)
-//  - Khi dự án chưa có kết quả: hiển thị các bước mô hình, mỗi bước mở công cụ tương ứng
-//  - Trạng thái (period, end, field, layer, station) đồng bộ vào URL để chia sẻ
-//  - Lớp bổ sung "Flow movement (HYD)", "Wflow results" và "Pollutant spread (WAQ)": sáng khi có dữ liệu, mờ khi chưa có
+// Overview (Dashboard) page controller – the main content is the HYD / WAQ SIMULATION RESULTS:
+//  - Catalog: HYD/WAQ scenarios, map & station variables, stations, time stamps (/dashboard/catalog)
+//  - KPIs, monitoring, water quality status, sources/discharges, risk, alerts (/dashboard/summary, /alerts)
+//  - Simulation field map + time bar (/dashboard/mesh, /field)
+//  - Vertical profile & time series at stations (/dashboard/profile, /station)
+//  - When the project has no results yet: show the modelling steps, each opening its tool
+//  - State (period, end, field, layer, station) synced to the URL for sharing
+//  - Extra layers "Flow movement (HYD)", "Wflow results" and "Pollutant spread (WAQ)": enabled when data exists, greyed out otherwise
 
 import { icon } from './icons.js';
 import { DashboardMap, fmtVal } from './dashboardMap.js';
@@ -30,7 +30,7 @@ const SEV_ICON = { high: 'alert', medium: 'alert', low: 'check', info: 'info' };
 const STEP_ICONS = { data: 'clipboard', grid: 'grid', hyd: 'waves', waq: 'flask', calibration: 'sliders' };
 const WIDTH_KEY = 'ui-sidebar-width';
 const MIN_W = 200, MAX_W = 420, MOBILE_MAX = 980;
-// Lớp bổ sung: lớp JS, tên hiển thị, tiêu đề bảng ⚙, mở bảng ⚙ ngay khi bật
+// Extra layers: JS class, display name, ⚙ panel title, open the ⚙ panel as soon as it is switched on
 const EXTRAS = {
     movement: { Cls: MovementLayer, name: 'Flow movement', title: 'Flow movement settings' },
     wflow: { Cls: WflowLayer, name: 'Wflow results', title: 'Wflow results settings' },
@@ -80,9 +80,9 @@ function debounce(fn, ms) {
     return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
-// Hint tự động cho chữ bị cắt bằng dấu "…" (CSS text-overflow: ellipsis):
-//  - chỉ gắn title khi chữ THỰC SỰ bị cắt; giữ hint sẵn có của khối cha (vd. KPI) ở dòng sau
-//  - <select>: hint = nhãn gốc + mục đang chọn (tên biến dài bị cắt trong ô chọn)
+// Automatic hints for text truncated with "…" (CSS text-overflow: ellipsis):
+//  - only sets title when the text is REALLY truncated; keeps an existing hint of the parent block (e.g. KPI) on the next line
+//  - <select>: hint = original label + selected item (long variable names are cut off in the select box)
 const HINT_SEL = ['.m-label', '.m-sub', '.m-value', '.panel-title', '.panel-sub', '.kpi-label', '.kpi-name', '.kpi-sub',
     '.dl-name', '.q-name', '.b-name', '.alert-title', '.alert-meta', '.lf-title', '.lr-name', '.layer-name',
     '.w-label', '#page-title', '#page-subtitle', '.project-chip .label', 'select'].join(',');
@@ -96,7 +96,7 @@ export function initAutoHints(root = document) {
             el.title = [el.dataset.baseTitle, cur].filter(Boolean).join(': ');
             return;
         }
-        if (el.title && !el.dataset.autoHint) return;          // phần tử đã có hint riêng
+        if (el.title && !el.dataset.autoHint) return;          // element already has its own hint
         const text = el.textContent.replace(/\s+/g, ' ').trim();
         if (text && el.scrollWidth > el.clientWidth + 1) {
             const parent = el.parentElement?.closest('[title]:not([data-auto-hint])')?.title || '';
@@ -151,7 +151,7 @@ export class Dashboard {
         this.map.registerExtra('wflow3d', (on) => this.toggleExtra('wflow3d', on), () => this.openLayerSettings('wflow3d'));
         this.map.registerExtra('pollution', (on) => this.toggleExtra('pollution', on), () => this.openLayerSettings('pollution'));
         this.renderSkeletons(); this.bindToolbar(); this.bindPanels(); this.weather.init();
-        initAutoHints();     // tên bị cắt (…) -> hint hiện đầy đủ khi rê chuột
+        initAutoHints();     // truncated names (…) -> full hint on mouse-over
         window.addEventListener('resize', () => this.resize());
         api('thresholds').then(t => { this.thresholds = t; }).catch(() => {});
         return this.refresh();
@@ -211,10 +211,10 @@ export class Dashboard {
     }
 
     bindPanels() {
-        // Trường mô phỏng
+        // Simulation field
         $('field-var').addEventListener('change', (e) => { this.state.field = e.target.value; this.saveState(); this.onFieldVarChanged(); });
         $('field-layer').addEventListener('change', (e) => { this.state.layer = e.target.value; this.saveState(); this.loadField(); this.updateUrl(); });
-        // Thanh thời gian
+        // Time bar
         const slider = $('tb-slider');
         const fetchDebounced = debounce(() => this.loadField(), 140);
         slider.addEventListener('input', () => { this.state.tIndex = +slider.value; this.updateTimeLabel(); fetchDebounced(); });
@@ -222,17 +222,17 @@ export class Dashboard {
         // Profile
         $('profile-station').addEventListener('change', (e) => this.selectStation(e.target.value));
         $('profile-var').addEventListener('change', (e) => { this.state.profileVar = e.target.value; this.saveState(); this.loadProfile(); });
-        // Chuỗi thời gian
+        // Time series
         $('ts-var').addEventListener('change', (e) => { this.state.tsVar = e.target.value; this.saveState(); this.loadSeries(); });
         $('ts-layer').addEventListener('change', (e) => { this.state.tsLayer = e.target.value; this.saveState(); this.loadSeries(); });
-        // Tab trạng thái
+        // Status tabs
         $('status-tabs').addEventListener('click', (e) => {
             const b = e.target.closest('[data-tab]');
             if (!b) return;
             $('status-tabs').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
             this.state.statusTab = b.dataset.tab; this.renderStatus();
         });
-        // Cảnh báo
+        // Alerts
         $('btn-all-alerts').addEventListener('click', () => this.openAlertsModal());
         document.querySelectorAll('[data-close-modal]').forEach(b => b.addEventListener('click', () => b.closest('.modal-backdrop').classList.remove('show')));
         $('alerts-modal').addEventListener('click', (e) => { if (e.target.id === 'alerts-modal') e.currentTarget.classList.remove('show'); });
@@ -254,15 +254,15 @@ export class Dashboard {
             const catalog = await api('catalog', this.body());
             const changed = force || !this.catalog || catalog.version !== this.catalog.version || catalog.project !== this.catalog.project;
             this.catalog = catalog; this.loadWaqScenarios();
-            if (force) {   // Refresh / Reload thresholds / Save: lấy ngưỡng mới cho biểu đồ
+            if (force) {   // Refresh / Reload thresholds / Save: fetch the new thresholds for the charts
                 try { 
                     this.thresholds = await api('thresholds'); 
                     this.weather.load(true)
-                } catch (e) { /* giữ bản cũ */ }
+                } catch (e) { /* keep the old version */ }
             } else this.weather.onProjectChanged();
             const [summary, alerts] = await Promise.all([api('summary', this.body()), api('alerts', this.body({ limit: 100 }))]);
             this.summary = summary; this.alerts = alerts.alerts || [];
-            if (force) this.contextLoaded = false;       // Refresh -> đọc lại lớp nền (file trong 'others' có thể vừa thêm)
+            if (force) this.contextLoaded = false;       // Refresh -> re-read the base layers (files in 'others' may have just been added)
             this.loadContext(); this.updateExtras();
             if (!catalog.has_results || summary.mode === 'empty') { this.renderEmpty(summary); return; }
             $('dash-overview').classList.remove('is-empty');
@@ -272,7 +272,7 @@ export class Dashboard {
             renderDonut('donut-chart', summary.risk_distribution);
             this.renderDonutLegend(summary.risk_distribution);
             this.renderFooter(summary); this.renderAlerts();
-            // Thời điểm bản đồ = cuối cửa sổ phân tích (trừ khi người dùng đã kéo thanh thời gian)
+            // Map time = end of the analysis window (unless the user has dragged the time bar)
             if (this.state.tIndex === null || !changed) this.state.tIndex = this.indexOf(this.fieldSource(), summary.window?.end);
             this.syncSlider();
             await Promise.all([this.loadField(), this.loadSeries(), this.loadProfile()]);
@@ -280,14 +280,14 @@ export class Dashboard {
             if (force) toast('Dashboard refreshed');
         } catch (err) {
             console.error(err); this.renderError(err);
-            // Dự án không tồn tại / không đọc được: xoá bản đồ, mọi lớp mờ
+            // Project does not exist / cannot be read: clear the map, grey out all layers
             this.catalog = null; this.meshVersion = null; this.contextLoaded = false;
             this.map.setMesh(null); this.map.setStations([]); this.map.setAlerts([]); this.map.setContext(null);
             this.updateExtras();
         } finally { this.loading = false; btn.classList.remove('spinning'); }
     }
 
-    // Bộ chọn nhanh kịch bản WAQ (cách 2, song song với Visualization): danh sách từ /dashboard/waq_scenarios
+    // Quick WAQ scenario switch (option 2, alongside Visualization): list from /dashboard/waq_scenarios
     async loadWaqScenarios() {
         const field = $('waq-field'), sel = $('waq-scenario');
         try {
@@ -300,8 +300,8 @@ export class Dashboard {
             if (!sel.value && list.length) sel.insertAdjacentHTML('afterbegin', '<option value="" selected disabled>Select WAQ scenario</option>');
         } catch (err) { console.warn('waq scenarios', err); field.hidden = true; }
     }
-    // Đổi kịch bản WAQ: dùng đúng endpoint /setup_database như Visualization -> config.json, cache dự án,
-    // lớp WAQ… cập nhật giống hệt; sau đó dashboard tải lại toàn bộ.
+    // Switching the WAQ scenario: uses the same /setup_database endpoint as Visualization -> config.json, project cache,
+    // WAQ layers… are updated identically; then the dashboard reloads everything.
     async switchWaq(name) {
         const sel = $('waq-scenario'), info = this.waqInfo || {};
         const sc = (info.scenarios || []).find(s => s.name === name);
@@ -314,7 +314,7 @@ export class Dashboard {
                     waqName: name, waqModel: sc.model_type, gisChanged: false }),
             }).then(r => r.json());
             if (!res || res.status === 'error') throw new Error(res?.message || res?.detail || 'Cannot open the WAQ scenario');
-            // Lớp ô nhiễm giữ danh sách chất của kịch bản cũ -> dựng lại (tự bật lại nếu đang tick)
+            // The pollution layer keeps the old scenario's substance list -> rebuild it (re-enabled if it was ticked)
             this.extraLayers.pollution?.destroy(); delete this.extraLayers.pollution;
             this.closeLayerSettings('pollution'); this.map.setExtraLegend('pollution', null);
             this.state.tIndex = null;
@@ -332,12 +332,12 @@ export class Dashboard {
             const res = await api('layers', this.body());
             this.map.setContext(res.layers); this.contextLoaded = this.getProject();
             if (!this.catalog?.has_results) this.map.fit();
-        } catch (err) { console.warn('context layers', err); this.map.setContext(null); }   // lớp nền: mờ
+        } catch (err) { console.warn('context layers', err); this.map.setContext(null); }   // base layers: greyed out
     }
 
     async setupSimulation() {
         const c = this.catalog;
-        // Bộ chọn biến bản đồ (nhóm theo HYD/WAQ)
+        // Map variable selector (grouped by HYD/WAQ)
         const groups = { hyd: 'Hydrodynamics (HYD)', waq: 'Water quality (WAQ)' };
         const opt = (v) => `<option value="${v.source}|${esc(v.name)}">${esc(v.label)}${v.unit ? ` (${esc(v.unit)})` : ''}</option>`;
         const build = (vars) => Object.entries(groups).map(([src, label]) => {
@@ -345,15 +345,15 @@ export class Dashboard {
             return list.length ? `<optgroup label="${label}">${list.map(opt).join('')}</optgroup>` : '';
         }).join('');
         $('field-var').innerHTML = build(c.map_variables);
-        // Không có file map -> chỉ kết quả tại trạm: ẩn bộ chọn trường & thanh thời gian
+        // No map file -> station results only: hide the field selector & time bar
         $('dash-overview').classList.toggle('no-map', !c.map_variables.length);
         if (!c.map_variables.some(v => `${v.source}|${v.name}` === this.state.field) && c.map_variables.length) {
             this.state.field = `${c.map_variables[0].source}|${c.map_variables[0].name}`;
         }
         $('field-var').value = this.state.field;
         $('field-layer').value = this.state.layer;
-        // Trạm: gộp HYD & WAQ cùng tên CHỈ KHI cùng vị trí (< 150 m) hoặc một bên chưa có toạ độ;
-        // nếu cùng tên mà khác vị trí thì giữ hai điểm riêng (toạ độ WAQ lấy từ kịch bản WAQ).
+        // Stations: merge HYD & WAQ with the same name ONLY IF at the same location (< 150 m) or one has no coordinates yet;
+        // same name but different location -> keep two separate points (WAQ coordinates from the WAQ scenario).
         const distM = (a, b) => {
             const R = 6371000, toRad = Math.PI / 180;
             const dLat = (b.lat - a.lat) * toRad, dLon = (b.lon - a.lon) * toRad * Math.cos(((a.lat + b.lat) / 2) * toRad);
@@ -377,10 +377,10 @@ export class Dashboard {
         }
         $('profile-station').innerHTML = stationNames.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
         $('profile-station').value = this.state.station || '';
-        // Biến trạm
+        // Station variables
         const his = c.his_variables;
         $('ts-var').innerHTML = build(his);
-        // Biến vẽ được profile: his có lớp, hoặc biến map tương ứng có lớp (WAQ his thường chỉ có lớp mặt)
+        // Variables that can be drawn as a profile: his with layers, or the matching map variable with layers (WAQ his usually has the surface layer only)
         const profVars = c.profile_variables || his.filter(v => v.layered);
         $('profile-var').innerHTML = build(profVars);
         const critical = this.summary?.gauges?.critical?.[0];
@@ -391,7 +391,7 @@ export class Dashboard {
         $('ts-var').value = this.state.tsVar; $('profile-var').value = this.state.profileVar; $('ts-layer').value = this.state.tsLayer;
         this.map.selectStation(this.state.station);
         this.map.setStations(this.stations);
-        // Lưới
+        // Mesh
         if (this.meshVersion !== c.version) {
             try {
                 const res = await api('mesh', this.body());
@@ -423,7 +423,7 @@ export class Dashboard {
         const meta = this.fieldMeta();
         $('field-layer').disabled = !meta.layered;
         $('field-layer').title = meta.layered ? 'Layer' : 'Single-layer variable';
-        // Đổi nguồn HYD <-> WAQ: giữ cùng thời điểm
+        // Switch source HYD <-> WAQ: keep the same time
         const times = this.catalog?.times?.[meta.source] || [];
         const iso = this._currentTime;
         if (iso) this.state.tIndex = this.indexOf(meta.source, iso);
@@ -448,10 +448,10 @@ export class Dashboard {
         this.extraTimeDebounced();
     }
 
-    // lớp bổ sung: movement & Wflow
+    // extra layers: movement & Wflow
     async updateExtras() {
         const project = this.getProject();
-        if (this.extrasProject !== project) {          // đổi dự án -> huỷ lớp cũ
+        if (this.extrasProject !== project) {          // project changed -> dispose of the old layers
             Object.values(this.extraLayers).forEach(l => l.destroy());
             this.extraLayers = {}; this.extrasProject = project;
             this.closeLayerSettings();
@@ -463,7 +463,7 @@ export class Dashboard {
             const st = status[EXTRAS[key].statusKey || key] || { available: false };
             this.map.setAvailability(key, st);
             if (!st.available && this.extraLayers[key]) { this.extraLayers[key].destroy(); delete this.extraLayers[key]; this.closeLayerSettings(key); }
-            // Đã bật từ lần trước và có dữ liệu -> bật lại
+            // Enabled last time and data available -> enable again
             if (st.available && this.map.isOn(key) && !this.extraLayers[key]?.visible) this.toggleExtra(key, true);
         }
     }
@@ -483,7 +483,7 @@ export class Dashboard {
             }
             layer.setPlaying?.(this.playing);
             await layer.setTime(this._currentTime);
-            if (!this.map.isOn(key)) return;            // người dùng đã tắt trong lúc chờ
+            if (!this.map.isOn(key)) return;            // the user switched it off while waiting
             layer.show();
             this.map.setExtraLegend(key, layer.legend());
             if (EXTRAS[key].openOnShow && $('layer-settings')?.dataset.key !== key) this.openLayerSettings(key);
@@ -492,13 +492,13 @@ export class Dashboard {
         } finally { this.map.setLoading(key, false); }
     }
 
-    // Bảng ⚙ nổi trên bản đồ: nội dung do từng lớp dựng (renderSettings).
-    // Kéo tiêu đề để di chuyển, kéo góc dưới-phải để đổi kích thước; vị trí/kích thước lưu theo lớp.
-    // Nút × đóng bảng VÀ tắt lớp (bỏ tick trong Map Layers); bấm lại ⚙ chỉ đóng bảng.
+    // Floating ⚙ panel on the map: content built by each layer (renderSettings).
+    // Drag the title to move, drag the bottom-right corner to resize; position/size are saved per layer.
+    // The × button closes the panel AND switches the layer off (unticks it in Map Layers); clicking ⚙ again only closes the panel.
     openLayerSettings(key) {
         const layer = this.extraLayers[key];
         let panel = $('layer-settings');
-        if (panel?.dataset.key === key) { this.closeLayerSettings(); return; }   // bấm lại ⚙ = đóng bảng
+        if (panel?.dataset.key === key) { this.closeLayerSettings(); return; }   // clicking ⚙ again = close the panel
         this.closeLayerSettings();
         if (!layer?.renderSettings) { toast('Layer is still loading…'); return; }
         const title = EXTRAS[key].title; panel = document.createElement('div');
@@ -509,16 +509,16 @@ export class Dashboard {
             <div class="ls-grip ls-grip-e" data-dir="e"></div><div class="ls-grip ls-grip-s" data-dir="s"></div>
             <div class="ls-grip ls-grip-se" data-dir="se" title="Drag to resize"></div>`;
         const host = $('panel-map');
-        host.appendChild(panel); panel.style.overflow = 'hidden';     // chỉ .ls-scroll cuộn -> tay nắm resize cố định ở góc
+        host.appendChild(panel); panel.style.overflow = 'hidden';     // only .ls-scroll scrolls -> the resize grip stays fixed in the corner
         if (window.L) { L.DomEvent.disableClickPropagation(panel); L.DomEvent.disableScrollPropagation(panel); }
         panel.querySelector('.ls-close').onclick = () => {
             this.closeLayerSettings();
-            this.map.toggle(key, false);                 // bỏ tick + ẩn lớp (gọi toggleExtra(key, false))
+            this.map.toggle(key, false);                 // untick + hide the layer (calls toggleExtra(key, false))
         };
         this.restorePanelRect(panel, key);
         this.makePanelDraggable(panel, key);
         this.makePanelResizable(panel, key);
-        // Dòng trạng thái (số hạt đang chạy, khung thời gian…) – cập nhật mỗi giây khi bảng mở
+        // Status line (running particles, time frame…) – updated every second while the panel is open
         panel._timer = setInterval(() => {
             const st = panel.querySelector('.ls-status');
             if (st && layer.status) st.textContent = layer.status();
@@ -526,8 +526,8 @@ export class Dashboard {
         layer.renderSettings(panel.querySelector('.ls-body'), {
             refreshLegend: () => { if (layer.visible) this.map.setExtraLegend(key, layer.legend()); },
             busy: (on) => this.map.setLoading(key, on), toast,
-            // Mở công cụ trong Workspace (mainManager bắt click trên [data-tool] ở document;
-            // bảng nổi chặn lan truyền click nên phát một click riêng)
+            // Open a tool in the Workspace (mainManager catches clicks on [data-tool] on document;
+            // the floating panel stops click propagation, so a separate click is dispatched)
             openTool: (id) => {
                 const a = document.createElement('a');
                 a.dataset.tool = id; a.hidden = true; document.body.appendChild(a); a.click(); a.remove();
@@ -551,7 +551,7 @@ export class Dashboard {
             if (Number.isFinite(r.x)) { panel.style.left = `${r.x}px`; panel.style.top = `${r.y}px`; }
         }
         this.clampPanel(panel);
-        // Lưu kích thước khi người dùng kéo góc resize
+        // Save the size when the user drags the resize corner
         let t = 0;
         panel._ro = new ResizeObserver(() => { 
             clearTimeout(t); t = setTimeout(() => this.savePanelRect(panel, key), 200); 
@@ -566,7 +566,7 @@ export class Dashboard {
         try { localStorage.setItem(`dash.layerSettings.rect.${key}`, JSON.stringify(r)); } catch (e) { /* ignore */ }
     }
 
-    // Giữ bảng nằm trong khung bản đồ
+    // Keep the panel inside the map frame
     clampPanel(panel) {
         const host = $('panel-map');
         const maxX = Math.max(0, host.clientWidth - panel.offsetWidth), maxY = Math.max(0, host.clientHeight - 40);
@@ -576,8 +576,8 @@ export class Dashboard {
         panel.style.maxHeight = `${Math.max(160, hMax)}px`;
     }
 
-    // Đổi kích thước bằng tay nắm riêng (cạnh phải, cạnh dưới, góc dưới-phải) – không dựa vào
-    // CSS resize vì thanh cuộn của nội dung che mất góc resize trên Windows.
+    // Resize with dedicated grips (right edge, bottom edge, bottom-right corner) – not relying on
+    // CSS resize because the content scrollbar hides the resize corner on Windows.
     makePanelResizable(panel, key) {
         panel.querySelectorAll('.ls-grip').forEach(grip => {
             grip.addEventListener('pointerdown', (e) => {
@@ -631,7 +631,7 @@ export class Dashboard {
             head.addEventListener('pointermove', move); head.addEventListener('pointerup', up);
             head.addEventListener('pointercancel', up);
         });
-        head.addEventListener('dblclick', () => {           // nhấp đúp tiêu đề: về vị trí/kích thước mặc định
+        head.addEventListener('dblclick', () => {           // double-click the title: back to the default position/size
             try { localStorage.removeItem(`dash.layerSettings.rect.${key}`); } catch (e) { /* ignore */ }
             panel.style.left = panel.style.top = panel.style.width = panel.style.height = '';
             this.clampPanel(panel);
@@ -664,7 +664,7 @@ export class Dashboard {
         const token = ++this.fieldToken;
         try {
             const res = await api('field', this.body({ source: meta.source, name: meta.name, layer: meta.layered ? this.state.layer : 'surface', time: times[this.state.tIndex] }));
-            if (token !== this.fieldToken) return;     // đã có yêu cầu mới hơn
+            if (token !== this.fieldToken) return;     // a newer request exists
             const layerLbl = meta.layered ? ` · ${$('field-layer').selectedOptions[0]?.textContent.toLowerCase()}` : '';
             this.map.setField({ ...res, label: `${res.label}${layerLbl}`, palette: this.paletteFor(meta) });
             if (!this.playing) this.profileDebounced();
@@ -687,7 +687,7 @@ export class Dashboard {
             await this.loadField();
             await new Promise(r => setTimeout(r, Math.max(120, 450 - (performance.now() - t0))));
         }
-        if (!this.playing) this.loadProfile();   // dừng -> cập nhật profile tại thời điểm hiện tại
+        if (!this.playing) this.loadProfile();   // paused -> update the profile at the current time
     }
 
     // station / profile / series
@@ -703,7 +703,7 @@ export class Dashboard {
 
     async loadProfile() {
         if (!this.catalog?.has_results || !this.state.profileVar || !this.state.station) { showEmpty('profile-chart', 'Select a station'); return; }
-        // Backend tự lấy profile từ file map khi file his không có lớp hoặc không có trạm này
+        // The backend takes the profile from the map file when the his file has no layers or not this station
         const [source, name] = this.state.profileVar.split('|');
         const times = this.catalog.map_variables.length ? (this.catalog.times[this.fieldSource()] || []) : [];
         try {
@@ -765,7 +765,7 @@ export class Dashboard {
                 const sevCls = k.key === 'quality' ? `sev-${k.severity || 'info'}` : '';
                 sub = `<span class="kpi-status ${sevCls}">${esc(k.status)}</span>`;
             } else sub = `<span>${esc(k.hint || '')}</span>`;
-            // Ngưỡng vật lý (nhiệt độ, dòng chảy): nhãn nhỏ cạnh tên KPI khi vượt mức medium/high
+            // Physical thresholds (temperature, current): small label next to the KPI name when medium/high is exceeded
             const lim = k.limit, flagged = lim && (lim.severity === 'high' || lim.severity === 'medium');
             const flag = flagged ? `<span class="kpi-flag sev-${lim.severity}">${lim.severity === 'high' ? 'High' : 'Medium'}</span>` : '';
             const tip = [k.hint || k.label, lim?.text].filter(Boolean).join('\n');
@@ -885,7 +885,7 @@ export class Dashboard {
     }
 
     focusAlert(a) {
-        // Nhảy tới trạm, chọn trạm, hiển thị chất tương ứng trong chuỗi thời gian & bản đồ
+        // Jump to the station, select it, show the matching substance in the time series & map
         if (a.source === 'waq' && this.catalog?.his_variables.some(v => v.source === 'waq' && v.name === a.key)) {
             this.state.tsVar = `waq|${a.key}`; $('ts-var').value = this.state.tsVar;
             const mapVar = this.catalog.map_variables.find(v => v.source === 'waq' && (v.name === a.key || v.name === `mesh2d_${a.key}`));
@@ -1016,7 +1016,7 @@ export function initSidebarResize({ app, sidebar, onResize = () => {} }) {
     const clamp = (w) => Math.round(Math.min(MAX_W, Math.max(MIN_W, w)));
     const current = () => sidebar.getBoundingClientRect().width;
     let frame = null;
-    const notify = () => {                       // bản đồ / biểu đồ co giãn theo, tối đa 1 lần mỗi khung hình
+    const notify = () => {                       // map / charts resize along, at most once per frame
         if (frame) return;
         frame = requestAnimationFrame(() => { frame = null; onResize(); });
     };
@@ -1034,11 +1034,11 @@ export function initSidebarResize({ app, sidebar, onResize = () => {} }) {
     };
     sash.setAttribute('aria-valuemin', String(MIN_W));
     sash.setAttribute('aria-valuemax', String(MAX_W));
-    // Độ rộng đã lưu
+    // Saved width
     let saved = null;
     try { saved = Number(localStorage.getItem(WIDTH_KEY)); } catch (e) { /* ignore */ }
     if (saved) apply(saved, false);
-    // Kéo bằng chuột / cảm ứng
+    // Drag with mouse / touch
     let startX = 0, startW = 0;
     sash.addEventListener('pointerdown', (e) => {
         if (e.button !== 0 || app.classList.contains('sidebar-collapsed') || window.innerWidth <= MOBILE_MAX) return;
@@ -1057,12 +1057,12 @@ export function initSidebarResize({ app, sidebar, onResize = () => {} }) {
         sash.releasePointerCapture(e.pointerId);
         document.body.classList.remove('sash-dragging');
         sash.classList.remove('active');
-        apply(current());                        // lưu giá trị cuối
+        apply(current());                        // save the final value
     };
     sash.addEventListener('pointerup', end);
     sash.addEventListener('pointercancel', end);
     sash.addEventListener('dblclick', reset);
-    // Bàn phím
+    // Keyboard
     sash.addEventListener('keydown', (e) => {
         const step = e.shiftKey ? 40 : 10;
         if (e.key === 'ArrowLeft') apply(current() - step);

@@ -1,7 +1,7 @@
-// Bộ vẽ hạt chuyển động dùng chung cho các lớp bổ sung (Flow movement HYD, Wflow results).
-// Lưới đều theo kinh/vĩ độ: ô (ix, iy) có tâm lon0 + ix·dlon, lat0 + iy·dlat (hàng 0 = phía nam).
-// Vận tốc cho từng ô hợp lệ (theo thứ tự mask): u (đông), v (bắc) m/s, NaN = khô.
-// Hiển thị trên canvas trong pane riêng; mọi thiết lập đọc trực tiếp từ đối tượng settings S:
+// Moving-particle renderer shared by the extra layers (Flow movement HYD, Wflow results).
+// Regular lon/lat grid: cell (ix, iy) has centre lon0 + ix·dlon, lat0 + iy·dlat (row 0 = south).
+// Velocity per valid cell (in mask order): u (east), v (north) m/s, NaN = dry.
+// Drawn on a canvas in its own pane; every setting is read directly from the settings object S:
 //   count, pspeed, trail, width, curve (linear|sqrt|log), pcolor (speed|white|cyan|yellow|blue), opacity
 
 import { paletteColor } from './dashboardMap.js';
@@ -16,18 +16,18 @@ export const PARTICLE_COLORS = {
 const CURVES = {
     linear: (x) => x,
     sqrt: (x) => Math.sqrt(x),
-    log: (x) => Math.log1p(100 * x) / Math.log1p(100),       // giống công cụ Flow Estimation (LOG_K = 100)
+    log: (x) => Math.log1p(100 * x) / Math.log1p(100),       // same as the Flow Estimation tool (LOG_K = 100)
 };
-const MAX_SUB = 60;          // số bước con tối đa mỗi khung
+const MAX_SUB = 60;          // maximum number of sub-steps per frame
 const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 
 export class ParticleField {
     /**
      * @param map       Leaflet map
-     * @param S         đối tượng cài đặt (đọc trực tiếp, có thể thay đổi bất cứ lúc nào)
-     * @param pane      tên pane, zIndex
-     * @param palette   bảng màu khi pcolor = 'speed'
-     * @param shouldRun () => bool – false thì "đóng băng" hạt (vd. chỉ chạy khi đang phát)
+     * @param S         settings object (read directly, may change at any time)
+     * @param pane      pane name, zIndex
+     * @param palette   colour palette when pcolor = 'speed'
+     * @param shouldRun () => bool – false "freezes" the particles (e.g. only run while playing)
      */
     constructor(map, { S, pane = 'particles', zIndex = 410, palette = 'speed_light', shouldRun = () => true }) {
         this.map = map; this.S = S; this.paneName = pane; this.zIndex = zIndex;
@@ -39,7 +39,7 @@ export class ParticleField {
         this.onMoveStart = () => { this.moving = true; this.clear(); };
     }
 
-    // grid: {nx, ny, lon0, lat0, dlon, dlat}; cells: chỉ số k = iy·nx + ix của các ô hợp lệ (thứ tự dữ liệu)
+    // grid: {nx, ny, lon0, lat0, dlon, dlat}; cells: indices k = iy·nx + ix of the valid cells (data order)
     setGrid(grid, cells, speedMax) {
         this.grid = grid; this.cells = Int32Array.from(cells);
         this.idx = new Int32Array(grid.nx * grid.ny).fill(-1);
@@ -51,8 +51,8 @@ export class ParticleField {
         if (this.visible) this.resetView();
     }
 
-    // f: {u, v} theo thứ tự ô hợp lệ. Danh sách ô "ướt" (vận tốc hữu hạn, khác 0) dùng để sinh hạt –
-    // hạt không bị đặt vào ô khô/đứng yên (vốn chỉ tạo các chấm không chuyển động).
+    // f: {u, v} in valid-cell order. The list of "wet" cells (finite, non-zero velocity) is used to spawn particles –
+    // particles are not placed in dry/still cells (which would only produce motionless dots).
     setFrame(f) {
         this.frame = f;
         if (f && !f.wet) {
@@ -65,8 +65,8 @@ export class ParticleField {
         }
     }
 
-    // Vận tốc nội suy song tuyến từ 4 ô lân cận (bỏ qua ô khô/ngoài miền), như Flow Estimation.
-    // Nhờ vậy hạt đi được dọc các dòng sông hẹp 1 ô thay vì "chết" ngay khi lệch khỏi tâm ô.
+    // Velocity bilinearly interpolated from the 4 neighbouring cells (skipping dry/out-of-domain cells), as in Flow Estimation.
+    // This lets particles travel along 1-cell-wide rivers instead of "dying" as soon as they leave the cell centre.
     sample(gx, gy, out) {
         const g = this.grid, f = this.frame;
         const ic = Math.round(gx), jc = Math.round(gy);
@@ -112,7 +112,7 @@ export class ParticleField {
         this.applyOpacity();
         this.map.on('movestart zoomstart', this.onMoveStart);
         this.map.on('moveend zoomend resize viewreset', this.onView);
-        // Bản đồ có thể chưa có kích thước khi lớp được bật (đang ở view khác) -> theo dõi khung chứa
+        // The map may have no size yet when the layer is enabled (another view is shown) -> watch the container
         this._ro = new ResizeObserver(() => {
             const el = this.map.getContainer();
             if (!el.clientWidth || !el.clientHeight || !this.canvas) return;
@@ -144,18 +144,18 @@ export class ParticleField {
         if (!this.canvas || !this.grid) return;
         this.moving = false;
         const size = this.map.getSize(), dpr = window.devicePixelRatio || 1;
-        if (!size.x || !size.y) { this.moving = false; return; }       // bản đồ chưa có kích thước
+        if (!size.x || !size.y) { this.moving = false; return; }       // the map has no size yet
         this.canvas.width = size.x * dpr; this.canvas.height = size.y * dpr;
         this.canvas.style.width = `${size.x}px`; this.canvas.style.height = `${size.y}px`;
         L.DomUtil.setPosition(this.canvas, this.map.containerPointToLayerPoint([0, 0]));
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        // Ánh xạ tuyến tính lon -> x, mercator(lat) -> y (đúng cho Web Mercator)
+        // Linear mapping lon -> x, mercator(lat) -> y (exact for Web Mercator)
         const g = this.grid, lat = g.lat0, lon = g.lon0;
         const p0 = this.map.latLngToContainerPoint([lat, lon]);
         const p1 = this.map.latLngToContainerPoint([lat + 0.01, lon + 0.01]);
         this.P.ax = (p1.x - p0.x) / 0.01; this.P.bx = p0.x - this.P.ax * lon;
         this.P.ay = (p1.y - p0.y) / (merc(lat + 0.01) - merc(lat)); this.P.by = p0.y - this.P.ay * merc(lat);
-        // Bước dịch chuyển: tốc độ lớn nhất ~1.6 px/khung × hệ số tốc độ hạt, độc lập với mức zoom
+        // Step length: maximum speed ~1.6 px/frame × particle speed factor, independent of the zoom level
         this.pxPerM = Math.max(1e-9, Math.abs(this.P.ax) * g.dlon / this.dxm);
         this.spawnAll();
     }
@@ -168,7 +168,7 @@ export class ParticleField {
         this.clear();
     }
 
-    // Sinh lại hạt trong một ô ướt (nếu chưa có khung: ô bất kỳ của miền)
+    // Respawn a particle in a wet cell (no frame yet: any cell of the domain)
     respawn(i, randomAge = false) {
         const wet = this.frame?.wet, nx = this.grid?.nx;
         const pool = wet?.length ? wet : null;
@@ -184,10 +184,10 @@ export class ParticleField {
             this.age[i] = randomAge ? (Math.random() * this.life[i]) | 0 : 0;
             return;
         }
-        this.age[i] = this.life[i] = 0;          // thử lại ở khung sau
+        this.age[i] = this.life[i] = 0;          // retry in the next frame
     }
 
-    // Trạng thái để hiển thị trong bảng ⚙ (giúp biết vì sao chưa thấy hạt)
+    // Status shown in the ⚙ panel (helps to see why no particles appear)
     status() {
         if (!this.visible) return 'Particles hidden';
         if (!this.grid || !this.cells?.length) return 'No valid water cells in the grid';
@@ -201,15 +201,15 @@ export class ParticleField {
         if (!this.ctx || !this.frame || !this.px || this.moving || document.hidden || !this.shouldRun()) return;
         const ctx = this.ctx, g = this.grid, f = this.frame, S = this.S;
         const w = this.canvas.width, h = this.canvas.height;
-        // Làm mờ vệt cũ: trail càng lớn vệt càng dài
+        // Fade old trails: the larger the trail, the longer the trails
         ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalCompositeOperation = 'destination-in'; ctx.fillStyle = `rgba(0,0,0,${S.trail})`; ctx.fillRect(0, 0, w, h);
         ctx.restore(); ctx.globalCompositeOperation = 'source-over';
         const byColor = S.pcolor === 'speed';
         const paths = Array.from({ length: byColor ? BUCKETS : 1 }, () => []);
         const vmax = this.speedMax, P = this.P, curve = CURVES[S.curve] || CURVES.linear;
-        // Quãng đường mỗi khung (m): ~1.5 px × hệ số tốc độ × curve(|v|/vmax); đi theo nhiều bước con
-        // (≤ nửa ô) và lấy lại vận tốc ở mỗi bước -> hạt bám theo dòng chảy (như Flow Estimation).
+        // Distance per frame (m): ~1.5 px × speed factor × curve(|v|/vmax); travelled in several sub-steps
+        // (≤ half a cell), re-sampling the velocity at each step -> particles follow the flow (as in Flow Estimation).
         const pxLen = (1.5 * (S.pspeed || 1)) / this.pxPerM, maxStep = 40 / this.pxPerM;
         const cellM = Math.min(this.dxm, this.dym), vel = this._v || (this._v = new Float64Array(2));
         for (let i = 0; i < this.px.length; i++) {

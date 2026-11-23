@@ -1,5 +1,5 @@
 /* =====================================================================
-   layout.css – Khung ứng dụng: sidebar, topbar, các view, popover, modal
+   layout.css – Application shell: sidebar, topbar, views, popovers, modals
    ===================================================================== */
 .app {
     display: grid; grid-template-columns: var(--sidebar-w) 1fr;
@@ -68,7 +68,7 @@
 }
 .nav-section-title button:hover { color: var(--accent); }
 
-/* Danh sách lớp bản đồ trong sidebar */
+/* Map layer list in the sidebar */
 .layer-list { display: flex; flex-direction: column; gap: 1px; padding: 0 2px; }
 .layer-item {
     display: flex; align-items: center; gap: 9px; padding: 5px 8px;
@@ -89,7 +89,7 @@
 .layer-item .swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; margin-left: auto; }
 .layer-item .layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Chân sidebar: nguồn dữ liệu, dự án, cập nhật */
+/* Sidebar footer: data sources, project, updates */
 .sidebar-footer {
     border-top: 1px solid var(--border); padding: 12px 16px 14px;
     display: flex; flex-direction: column; gap: 8px; font-size: 11.5px;
@@ -103,15 +103,15 @@
 .pipeline span { flex: 1; height: 4px; border-radius: 2px; background: var(--panel-2); }
 .pipeline span.done { background: var(--accent); }
 
-/* Giữ lại class cũ (.project-note / .time-zone / .github-last-update) – các iframe
-   đọc .project-note qua postMessage GET_USER, nên KHÔNG được đổi tên. */
+/* Legacy classes kept (.project-note / .time-zone / .github-last-update) – the iframes
+   read .project-note via postMessage GET_USER, so they must NOT be renamed. */
 .sidebar-footer .project-note, .sidebar-footer .time-zone, .sidebar-footer .github-last-update {
     all: unset; display: block; color: var(--text-2); font-size: 11.5px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .sidebar-footer .github-last-update { color: var(--faint); font-size: 10.5px; }
 
-/* Sidebar thu gọn */
+/* Collapsed sidebar */
 .app.sidebar-collapsed .brand-text, .app.sidebar-collapsed .nav-item .label,
 .app.sidebar-collapsed .nav-item .badge, .app.sidebar-collapsed .nav-item .chev,
 .app.sidebar-collapsed .nav-section-title, .app.sidebar-collapsed .layer-list,
@@ -186,14 +186,14 @@
 
 /*  Views */
 .views { position: relative; flex: 1; min-height: 0; }
-/* Dùng visibility thay vì display:none để Leaflet/Gridstack/Plotly luôn giữ kích thước */
+/* Use visibility instead of display:none so Leaflet/Gridstack/Plotly always keep their size */
 .view {
     position: absolute; inset: 0; overflow: auto; padding: 14px 16px 16px;
     visibility: hidden; opacity: 0; pointer-events: none; transition: opacity .18s ease;
 }
 .view.active { visibility: visible; opacity: 1; pointer-events: auto; }
 
-/* Workspace (Gridstack – các công cụ cũ) */
+/* Workspace (Gridstack – legacy tools) */
 #view-workspace { padding: 10px 10px 30px; }
 .workspace-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -266,14 +266,14 @@
     .toolbar { flex-wrap: wrap; }
 }
 
-/* Nút Filters khi đang có bộ lọc */
+/* Filters button while a filter is active */
 .btn.active-filter { position: relative; }
 .btn.active-filter::after {
     content: ""; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px;
     border-radius: 50%; background: var(--sev-medium); box-shadow: 0 0 0 2px var(--bg);
 }
 
-/* Tiêu đề trong modal/popover không dùng kiểu h3 gradient của index.css */
+/* Headings in modals/popovers do not use the gradient h3 style of index.css */
 .modal-head h3, .pm-modal h3 {
     background: none !important; -webkit-text-fill-color: currentColor !important;
     color: var(--text) !important; text-align: left; font-size: 15px;
@@ -286,8 +286,8 @@
 }
 
 /* ---------
-   Hộp thoại chọn dự án (projectManager.js -> .pm-overlay / .pm-modal)
-   Định nghĩa đầy đủ tại đây để luôn nằm giữa màn hình, không phụ thuộc index.css
+   Project picker dialog (projectManager.js -> .pm-overlay / .pm-modal)
+   Fully defined here so it is always centred on screen, independent of index.css
    --------- */
 .pm-overlay {
     position: fixed; inset: 0; z-index: 5000;
@@ -318,18 +318,18 @@
 .pm-modal #okBtn { background: var(--accent-soft); color: var(--accent); border-color: rgba(52, 211, 153, 0.45); }
 .pm-modal #okBtn:hover { background: rgba(52, 211, 153, 0.24); }
 
-/* Sidebar resize (sash kiểu VS Code) */
+/* Sidebar resize (VS Code-style sash) */
 .sidebar-sash {
     position: absolute; top: 0; right: 0; bottom: 0; width: 6px; z-index: 20;
     cursor: col-resize; touch-action: none; outline: none;
 }
-/* Vạch sáng ở mép khi rê chuột / đang kéo / focus bàn phím */
+/* Highlight line on the edge on hover / while dragging / keyboard focus */
 .sidebar-sash::before {
     content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px;
     background: var(--accent-2); opacity: 0; transition: opacity .15s ease .1s;
 }
 .sidebar-sash:hover::before, .sidebar-sash.active::before, .sidebar-sash:focus-visible::before { opacity: .9; }
-/* Tay nắm 3 chấm xếp dọc ở giữa chiều cao */
+/* Vertical 3-dot grip at mid-height */
 .sash-grip {
     position: absolute; top: 50%; right: 0; transform: translateY(-50%);
     width: 6px; height: 34px; border-radius: 4px 0 0 4px;
@@ -340,6 +340,10 @@
 .sash-grip i { width: 3px; height: 3px; border-radius: 50%; background: var(--text-2); }
 .sidebar-sash:hover .sash-grip, .sidebar-sash.active .sash-grip, .sidebar-sash:focus-visible .sash-grip { opacity: 1; width: 8px; }
 .sidebar-sash.active .sash-grip i, .sidebar-sash:hover .sash-grip i { background: var(--accent-2); }
-/* Trong lúc kéo: con trỏ ↔ toàn trang, không bôi đen chữ, iframe/bản đồ không "nuốt" chuột */
+/* While dragging: ↔ cursor on the whole page, no text selection, iframes/map do not "swallow" the mouse */
 body.sash-dragging { cursor: col-resize !important; user-select: none; }
 body.sash-dragging iframe, body.sash-dragging .leaflet-container { pointer-events: none; }
+
+/* Settings: shorter time zone list; the panel never exceeds the screen height */
+#settings-popover { max-height: calc(100vh - 20px); overflow-y: auto; box-sizing: border-box; }
+#settings-popover .tz-results { max-height: 132px; }          /* ~5 rows, scrolls when there are more */

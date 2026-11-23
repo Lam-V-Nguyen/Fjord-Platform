@@ -76,7 +76,7 @@ async def process_internal(query: str, key: str, redis, project_cache, project_n
         temp, message = functions.hydCreator(project_cache.get("hyd_his"))
         data = json.loads(temp.to_json())
     elif key in ['wq_obs', 'wq_loads']:
-        waq_obs_raw = await redis.hget(project_name, "waq_obs")
+        waq_obs_raw = await redis.hget(functions.cache_key(project_name), "waq_obs")
         waq_obs = msgpack.unpackb(waq_obs_raw, raw=False)
         data = json.loads(functions.obsCreator(waq_obs[key]).to_json())
     elif key == 'sources':
@@ -91,7 +91,7 @@ async def process_internal(query: str, key: str, redis, project_cache, project_n
         )
         data = { 'columns': temp.columns.tolist(), 'rows': temp.values.tolist() }
     elif key == 'substance_check':
-        substance_raw = await redis.hget(project_name, 'config')
+        substance_raw = await redis.hget(functions.cache_key(project_name), 'config')
         substance = msgpack.unpackb(substance_raw, raw=False)[query]
         if len(substance) > 0: 
             data = sorted(substance)
@@ -130,7 +130,7 @@ async def process_data(request: Request, user=Depends(functions.basic_auth)):
         body = await request.json()
         query, key, redis = body.get('query'), body.get('key'), request.app.state.redis
         project_name, _ = functions.project_definer(body.get('projectName'), user)
-        project_cache = request.app.state.project_cache.setdefault(project_name)
+        project_cache = request.app.state.project_cache.setdefault(functions.cache_key(project_name))
         lock, time_zone = redis.lock(f"{project_name}:{key}", timeout=10), body.get('timeZone')
         async with lock:
             message, data = await process_internal(
@@ -150,15 +150,15 @@ async def initiate_options(request: Request, user=Depends(functions.basic_auth))
         async with lock:
             if key == 'vector': data = functions.getVectorNames()
             elif key == 'layer_hyd':
-                layer_reverse_raw = await redis.hget(project_name, "layer_reverse_hyd")
+                layer_reverse_raw = await redis.hget(functions.cache_key(project_name), "layer_reverse_hyd")
                 layer_reverse = msgpack.unpackb(layer_reverse_raw, raw=False)
                 if layer_reverse: data = [(idx, value) for idx, value in layer_reverse.items()]
             elif key == 'sigma_waq':
-                layer_reverse_raw = await redis.hget(project_name, "layer_reverse_waq")
+                layer_reverse_raw = await redis.hget(functions.cache_key(project_name), "layer_reverse_waq")
                 layer_reverse = msgpack.unpackb(layer_reverse_raw, raw=False)
                 if layer_reverse: data = [(idx, value) for idx, value in layer_reverse.items()]
             elif key == 'thermocline_waq':
-                config_raw = await redis.hget(project_name, "config")
+                config_raw = await redis.hget(functions.cache_key(project_name), "config")
                 config = msgpack.unpackb(config_raw, raw=False)
                 item = [x for x in config.keys() if x.startswith('waq_map_') and x.endswith('_selector')]
                 if len(item) > 0: 
@@ -187,7 +187,7 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
         body = await request.json()
         redis, query, key = request.app.state.redis, body.get('query'), body.get('key')
         project_name, _ = functions.project_definer(body.get('projectName'), user)
-        project_cache = request.app.state.project_cache.setdefault(project_name)
+        project_cache = request.app.state.project_cache.setdefault(functions.cache_key(project_name))
         if not project_cache: 
             return JSONResponse({"status": "error", "message": "Project is not available in memory"})
         hyd_his, hyd_map = project_cache.get("hyd_his"), project_cache.get("hyd_map")
@@ -207,7 +207,7 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
         # Load dynamic cache from Redis
         raw_cache = await redis.get(dynamic_cache_key)
         if not raw_cache:
-            layer_reverse_raw = await redis.hget(project_name, f"layer_reverse_{dataset_type}")
+            layer_reverse_raw = await redis.hget(functions.cache_key(project_name), f"layer_reverse_{dataset_type}")
             layer_reverse = msgpack.unpackb(layer_reverse_raw, raw=False)
             dynamic_cache = {"layer_reverse": layer_reverse, "layers": {}}
         else: dynamic_cache = msgpack.unpackb(raw_cache, raw=False)
@@ -268,9 +268,9 @@ async def load_vector_dynamic(request: Request, user=Depends(functions.basic_aut
         query, key, time_zone = body.get('query'), body.get('key'), body.get('timeZone')
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         redis, vector_cache_key = request.app.state.redis, f"{project_name}:vector_cache"
-        project_cache = request.app.state.project_cache.setdefault(project_name)
+        project_cache = request.app.state.project_cache.setdefault(functions.cache_key(project_name))
         if not project_cache: return JSONResponse({"status": "error", "message": "Project is not available in memory"})  
-        layer_reverse_raw = await redis.hget(project_name, "layer_reverse_hyd")
+        layer_reverse_raw = await redis.hget(functions.cache_key(project_name), "layer_reverse_hyd")
         layer_reverse = msgpack.unpackb(layer_reverse_raw, raw=False)
         value_type, row_idx = layer_reverse[key], len(layer_reverse) - int(key) - 2
         data_ds, fnm = project_cache.get("hyd_map"), functions.numberFormatter
@@ -310,7 +310,7 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
         key, query, idx = body.get('key'), body.get('query'), body.get('idx')
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         redis, points, time_zone = request.app.state.redis, body.get('points'), body.get('timeZone')
-        project_cache = request.app.state.project_cache.setdefault(project_name)
+        project_cache = request.app.state.project_cache.setdefault(functions.cache_key(project_name))
         if not project_cache: return JSONResponse({"status": "error", "message": "Project is not available in memory"})
         hyd_map, waq_map = project_cache.get("hyd_map"), project_cache.get("waq_map")
         lock = redis.lock(f"{project_name}:select_meshes", timeout=20)
@@ -325,7 +325,7 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
             if idx == 'load':
                 # Initialize mesh cache in Redis if not exists
                 await redis.delete(mesh_cache_key)
-                layer_reverse_raw = await redis.hget(project_name, f"layer_reverse_{dataset_type}")
+                layer_reverse_raw = await redis.hget(functions.cache_key(project_name), f"layer_reverse_{dataset_type}")
                 layer_reverse = msgpack.unpackb(layer_reverse_raw, raw=False)
                 depth_values = [float(v.split(' ')[1]) for k, v in layer_reverse.items() if int(k) >= 0]
                 max_layer = float(max(np.array(depth_values), key=abs))
@@ -415,7 +415,7 @@ async def select_thermocline(request: Request, user=Depends(functions.basic_auth
         idx, time_zone = body.get('idx'), body.get('timeZone')
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         redis, thermo_cache_key = request.app.state.redis, f"{project_name}:thermocline_cache"
-        project_cache = request.app.state.project_cache.setdefault(project_name)
+        project_cache = request.app.state.project_cache.setdefault(functions.cache_key(project_name))
         hyd_map, waq_map = project_cache.get("hyd_map"), project_cache.get("waq_map")
         lock = redis.lock(f"{project_name}:thermocline", timeout=30, blocking_timeout=25)
         async with lock:
@@ -440,7 +440,7 @@ async def select_thermocline(request: Request, user=Depends(functions.basic_auth
                 ]
                 # Load layer reverse from Redis
                 layer_key = "layer_reverse_hyd" if is_hyd else "layer_reverse_waq"
-                layer_reverse_raw = await redis.hget(project_name, layer_key)
+                layer_reverse_raw = await redis.hget(functions.cache_key(project_name), layer_key)
                 layer_reverse = msgpack.unpackb(layer_reverse_raw, raw=False)
                 layers_values = [float(v.split(' ')[1]) for k, v in layer_reverse.items() if int(k) >= 0]
                 max_values = int(abs(np.min(layers_values)))

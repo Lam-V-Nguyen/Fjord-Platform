@@ -1,8 +1,8 @@
 // =====================================================================
-// dashboardWeather.js – Khu vực "Weather Conditions" trên Overview
-// Khí tượng thời gian thực tại vùng mô hình: nhiệt độ không khí, mưa, áp suất, độ ẩm.
-// Dữ liệu: POST /dashboard/weather (backend chọn nguồn: MET Frost / MET Locationforecast / Open-Meteo,
-// có cache theo nguồn). Tự cập nhật theo chu kỳ người dùng chọn (lưu trong localStorage).
+// dashboardWeather.js – "Weather Conditions" section on the Overview
+// Real-time weather over the model area: air temperature, precipitation, pressure, humidity.
+// Data: POST /dashboard/weather (the backend picks the source: MET Frost / MET Locationforecast / Open-Meteo,
+// cached per source). Refreshes automatically at the interval chosen by the user (saved in localStorage).
 // =====================================================================
 import { icon } from './icons.js';
 import { cssVar, showEmpty } from './dashboardCharts.js';
@@ -10,8 +10,8 @@ import { getLastTimeZone } from './constant.js';
 
 const Plotly = window.Plotly;
 const STORE_KEY = 'dash-weather';
-const DEFAULTS = { variable: 'temperature', sources: null, interval: 30 };   // sources null = mặc định của backend
-// Màu & kiểu nét cố định theo nguồn để so sánh dễ đọc
+const DEFAULTS = { variable: 'temperature', sources: null, interval: 30 };   // sources null = backend default
+// Fixed colour & line style per source so comparisons are easy to read
 const SOURCE_STYLE = {
     frost: { color: '--text', short: 'Frost obs.', abbr: 'OBS', width: 2.4 },
     metno: { color: '--series-2', short: 'MET forecast', abbr: 'MET', width: 1.8 },
@@ -28,18 +28,18 @@ function readStore() {
     try { 
         st = { ...DEFAULTS, ...(JSON.parse(localStorage.getItem(STORE_KEY)) || {}) }; 
     } catch (e) { st = { ...DEFAULTS }; }
-    if (!Array.isArray(st.sources) || !st.sources.length) st.sources = null;   // bản cũ lưu 'source' (chuỗi)
+    if (!Array.isArray(st.sources) || !st.sources.length) st.sources = null;   // older versions saved 'source' (string)
     delete st.source;
     return st;
 }
 
 function timeZone() {
     const tz = getLastTimeZone();
-    try { if (tz) { new Intl.DateTimeFormat('en-GB', { timeZone: tz }); return tz; } } catch (e) { /* tz không hợp lệ */ }
+    try { if (tz) { new Intl.DateTimeFormat('en-GB', { timeZone: tz }); return tz; } } catch (e) { /* invalid tz */ }
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-// ISO UTC -> 'YYYY-MM-DD HH:mm' theo múi giờ người dùng (Plotly không xử lý múi giờ)
+// ISO UTC -> 'YYYY-MM-DD HH:mm' in the user's time zone (Plotly does not handle time zones)
 function toLocal(iso, tz) {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
@@ -62,21 +62,21 @@ export class WeatherPanel {
     constructor({ getProject }) {
         this.getProject = getProject;
         this.state = readStore();
-        this.data = null; this.chartSize = null;      // kích thước khung biểu đồ lần vẽ trước (vẽ lại khi đổi / khi hiện ra)
+        this.data = null; this.chartSize = null;      // chart frame size at the previous draw (redraw when it changes / becomes visible)
         this.timer = null; this.loading = false; this.lastLoad = 0; this.project = null;
     }
 
     init() {
         $('weather-interval').value = String(this.state.interval);
         $('weather-var').addEventListener('change', (e) => this.selectVariable(e.target.value));
-        // Danh sách nguồn có ô tích (popover)
+        // Source list with checkboxes (popover)
         const btn = $('weather-source-btn'), pop = $('weather-source-pop');
         btn.addEventListener('click', (e) => { e.stopPropagation(); pop.classList.toggle('show'); });
         pop.addEventListener('click', (e) => e.stopPropagation());
         document.addEventListener('click', () => pop.classList.remove('show'));
         pop.addEventListener('change', () => {
             const chosen = [...pop.querySelectorAll('input[data-src]:checked')].map(i => i.dataset.src);
-            if (!chosen.length) {                  // luôn giữ ít nhất 1 nguồn
+            if (!chosen.length) {                  // always keep at least 1 source
                 pop.querySelector(`input[data-src="${this.selected()[0]}"]`).checked = true; return;
             }
             this.state.sources = chosen; this.save(); this.load();
@@ -89,13 +89,13 @@ export class WeatherPanel {
             const t = e.target.closest('[data-wvar]');
             if (t) this.selectVariable(t.dataset.wvar);
         });
-        // Tab bị ẩn lâu (máy ngủ, chuyển tab): khi quay lại thì cập nhật nếu đã quá chu kỳ
+        // Tab hidden for a long time (sleep, tab switch): on return, refresh if the interval has passed
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible' && this.state.interval > 0
                 && Date.now() - this.lastLoad > this.state.interval * 60000) this.load();
         });
-        // Biểu đồ được vẽ theo kích thước THẬT của khung. Khi panel bị ẩn (Map View, chưa có kết quả)
-        // Plotly sẽ dùng kích thước mặc định (~700×450) và tràn khỏi panel -> vẽ lại khi khung hiện ra / đổi cỡ.
+        // The chart is drawn at the REAL size of its frame. When the panel is hidden (Map View, no results yet)
+        // Plotly uses its default size (~700×450) and overflows the panel -> redraw when the frame appears / resizes.
         const wrap = $('weather-chart')?.parentElement;
         if (wrap && window.ResizeObserver) {
             new ResizeObserver(() => {
@@ -118,7 +118,7 @@ export class WeatherPanel {
         this.renderNote();
     }
 
-    // Gọi khi đổi dự án (vị trí mô hình đổi) hoặc khi Overview làm mới
+    // Called when the project changes (model location changes) or when the Overview refreshes
     onProjectChanged() {
         if (this.project !== this.getProject()) { this.project = this.getProject(); this.load(); }
     }
@@ -160,7 +160,7 @@ export class WeatherPanel {
         return this.data?.selected || this.state.sources || [];
     }
 
-    // Các nguồn đang hiển thị: nguồn đã chọn chạy được + nguồn thay thế tự thêm (backend: 'shown')
+    // Sources displayed: selected sources that worked + fallback sources added automatically (backend: 'shown')
     okSources() {
         const r = this.data?.results || {};
         return (this.data?.shown || this.selected()).filter(k => r[k]?.status === 'ok');
@@ -191,14 +191,14 @@ export class WeatherPanel {
         this.renderNow(); this.renderChart(); this.renderNote();
     }
 
-    // Dòng phụ đề: trạm thời tiết gần nhất đang lấy số đo, hoặc điểm lưới của nguồn thay thế
+    // Subtitle line: nearest weather station providing measurements, or the grid point of the fallback source
     renderSite() {
         const sub = $('weather-sub'), d = this.data, site = d?.site, loc = d?.location, fb = d?.fallback;
         const ll = (o) => `${fmt(o.lat, 3)}°N, ${fmt(o.lon, 3)}°E`;
         const elev = (o) => o.elevation != null ? ` · ${fmt(o.elevation, 0)} m a.s.l.` : '';
         let text, tip = []; const km = (o) => o?.distance_km != null ? `${fmt(o.distance_km, 1)} km` : 'distance unknown';
         if (site?.kind === 'station') {
-            // Khoảng cách đứng ngay sau tên trạm (trạm gần nhất có số đo, không giới hạn khoảng cách)
+            // Distance right after the station name (nearest station with measurements, no distance limit)
             text = `Station ${site.name} (${site.id}) · ${km(site)} from model area · ${ll(site)}${elev(site)}`
                 + `${site.others?.length ? ` · +${site.others.length} station${site.others.length > 1 ? 's' : ''}` : ''}`;
             tip.push(`Nearest MET Norway station with observations: ${site.name} (${site.id}), ${km(site)} from the model area:`);
@@ -218,16 +218,16 @@ export class WeatherPanel {
         if (loc) tip.push(`Model area: ${ll(loc)} (${loc.basis})`);
         sub.textContent = text;
         sub.title = tip.join('\n');
-        sub.classList.toggle('warn', site?.kind === 'model' && !!fb);   // cam: KHÔNG có số đo trạm (thay thế toàn bộ)
+        sub.classList.toggle('warn', site?.kind === 'model' && !!fb);   // orange: NO station measurements (fully replaced)
     }
 
-    // Popover nguồn: ô tích + trạng thái; nguồn không dùng được (vd. Frost chưa có client ID) bị khoá
+    // Source popover: checkbox + status; unusable sources (e.g. Frost without a client ID) are locked
     renderSourceList() {
         const list = this.data?.sources || [], sel = this.selected(), res = this.data?.results || {};
         if (!list.length) return;
         $('weather-source-pop').innerHTML = list.map(s => {
             const err = res[s.key]?.status === 'error' ? res[s.key].message : '';
-            const auto = !sel.includes(s.key) && (this.data?.shown || []).includes(s.key);   // nguồn thay thế tự thêm
+            const auto = !sel.includes(s.key) && (this.data?.shown || []).includes(s.key);   // fallback source added automatically
             const dot = `<span class="w-src-dot" style="background:${cssVar(SOURCE_STYLE[s.key]?.color || '--muted')}"></span>`;
             return `<label class="w-src-item ${s.available ? '' : 'disabled'}" title="${esc(err || s.note || s.kind)}">
                 <input type="checkbox" data-src="${s.key}" ${sel.includes(s.key) ? 'checked' : ''} ${s.available ? '' : 'disabled'}>
@@ -242,7 +242,7 @@ export class WeatherPanel {
     renderNow() {
         const p = this.primary();
         if (this.data?.status !== 'ok' || !p) return;
-        // Giá trị hiện tại từng biến (backend gộp: ưu tiên số đo trạm, thiếu thì nguồn thay thế)
+        // Current value per variable (merged by the backend: station measurements first, else the fallback source)
         const cur = this.data.current || p.current || {}, main = this.data.primary;
         const node = $('weather-now');
         node.title = `Latest values · ${timeZone()}`;
@@ -265,7 +265,7 @@ export class WeatherPanel {
         const node = $('weather-chart');
         if (!node || this.data?.status !== 'ok' || !Plotly) return;
         const wrap = node.parentElement, W = wrap.clientWidth, H = wrap.clientHeight;
-        if (!W || !H) { this.chartSize = null; return; }         // panel đang ẩn -> vẽ khi hiện ra (ResizeObserver)
+        if (!W || !H) { this.chartSize = null; return; }         // panel hidden -> draw when it appears (ResizeObserver)
         this.chartSize = [W, H];
         const v = this.meta(), tz = timeZone();
         const nowIso = this.data.server_now, nowT = new Date(nowIso).getTime();
@@ -278,12 +278,12 @@ export class WeatherPanel {
             const color = cssVar(style.color), x = s.x.map(t => toLocal(t, tz));
             const past = s.x.map(t => new Date(t).getTime() <= nowT);
             if (v.key === 'precipitation') {
-                // Cột cạnh nhau theo nguồn; phần dự báo (sau 'now') nhạt hơn
+                // Side-by-side bars per source; the forecast part (after 'now') is lighter
                 traces.push({ type: 'bar', name: style.short, x, y: s.y, hovertemplate: hover(style.short),
                     marker: { color, opacity: past.map(p => p ? 0.95 : 0.45) } });
                 return;
             }
-            // Số đo: nét liền. Mô hình/dự báo: quá khứ liền mảnh, tương lai nét chấm; nối liền tại 'now'
+            // Measurements: solid line. Model/forecast: past thin solid, future dotted; joined at 'now'
             const lastPast = past.lastIndexOf(true);
             const ys = (cond) => s.y.map((y, i) => cond(i) ? y : null);
             if (k === 'frost') {
@@ -305,7 +305,7 @@ export class WeatherPanel {
         const layout = { width: W, height: H, autosize: false,
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', showlegend: multi,
             barmode: 'group', bargap: 0.15, bargroupgap: 0.05, hovermode: 'x unified',
-            // Biểu đồ thấp: chú thích 1 dòng phía trên, căn phải (không che đường), lề tối thiểu
+            // Low chart: one-line legend on top, right-aligned (does not cover the lines), minimal margins
             legend: { orientation: 'h', x: 1, y: 1, xanchor: 'right', yanchor: 'bottom', 
                 font: { size: 9.5, color: cssVar('--text-2') }, bgcolor: 'rgba(0,0,0,0)', itemwidth: 24 },
             font: { family: cssVar('--font', 'Inter, sans-serif'), size: 10, color: muted },
@@ -323,7 +323,7 @@ export class WeatherPanel {
         Plotly.react(node, traces, layout, { displayModeBar: false, responsive: false });
     }
 
-    // Chú giải nguồn: góc dưới phải, chữ nhỏ
+    // Source legend: bottom-right corner, small text
     renderNote() {
         const note = $('weather-note');
         if (!note) return;
@@ -335,7 +335,7 @@ export class WeatherPanel {
             note.textContent = d ? `Weather: ${d.message || 'unavailable'}${next}` : '';
             return;
         }
-        // Một dòng cho mỗi nguồn đã chọn (tooltip đầy đủ); dòng hiển thị gọn: các nguồn nối bằng ' | '
+        // One line per selected source (full tooltip); compact display line: sources joined with ' | '
         const shown = this.okSources(), list = [...new Set([...this.selected(), ...shown])];
         const parts = [], tips = [], multi = shown.length > 1; let failed = false;
         list.forEach(k => {
@@ -349,7 +349,7 @@ export class WeatherPanel {
             const names = [...new Map(st.map(x => [x.id, x])).values()]
                 .map(x => `${x.name}${x.distance_km != null ? ` (${fmt(x.distance_km, 1)} km)` : ''}`).join(', ');
             const link = (t) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(t)}</a>`;
-            parts.push(multi   // nhiều nguồn: dạng gọn (đầy đủ trong tooltip)
+            parts.push(multi   // several sources: compact form (full text in the tooltip)
                 ? `${link(SOURCE_STYLE[k]?.short || s.label)}${names ? ` (${esc(names)})` : ''} ${hhmm(r.fetched_at, tz)}`
                 : `${link(s.label)} – ${esc(s.kind.toLowerCase())}, ${esc(s.resolution)}${names ? ` · station ${esc(names)}` : ''}`
                   + ` · data ${hhmm(r.fetched_at, tz)}`);
@@ -370,7 +370,7 @@ export class WeatherPanel {
     }
 
     resize() {
-        this.renderChart();       // vẽ lại theo kích thước khung hiện tại (bỏ qua nếu panel đang ẩn)
+        this.renderChart();       // redraw at the current frame size (skipped while the panel is hidden)
     }
 
     destroy() {
