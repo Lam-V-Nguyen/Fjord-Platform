@@ -28,7 +28,7 @@ from services import era5_function, flow_functions, constants
 from dask import delayed, compute
 
 try: HAS_DASK = True
-except ImportError:
+except ImportError:                      # dask not installed -> sequential processing
     delayed = compute = None
     HAS_DASK = False
 
@@ -122,7 +122,7 @@ def _write_forcing_meta(json_path, times_utc, time_zone=None):
     return meta
 
 def _open_sources(files, time_window):
-    if flow_functions.HAS_DASK:
+    if HAS_DASK:
         return xr.open_mfdataset(files, combine="nested", concat_dim="time", chunks={"time": time_window},
             data_vars="minimal", coords=cast(Any, "minimal"), compat="override", parallel=False)
     parts = []
@@ -175,7 +175,7 @@ def _build_forcing_file(src_info, dem_info, forcing_path, tmp_path, download_dir
             logger.info(f"Temperature lapse-rate correction ON (source terrain {zs.min():.0f}–{zs.max():.0f} m, "
                 f"DEM {dem[~mask_nan].min():.0f} - {dem[~mask_nan].max():.0f} m)")
         logger.info(f"Processing: {n_total} hours × {ny}×{nx} cells | window {tw} h × {cy} rows | "
-            f"{'dask, ' + str(n_workers) + ' threads' if flow_functions.HAS_DASK else 'sequential (dask not installed)'}")
+            f"{'dask, ' + str(n_workers) + ' threads' if HAS_DASK else 'sequential (dask not installed)'}")
         if os.path.exists(tmp_path): os.remove(tmp_path)
         nc = Dataset(tmp_path, "w", format="NETCDF4")
         nc.createDimension("time", None); nc.createDimension("y", ny); nc.createDimension("x", nx)
@@ -214,7 +214,7 @@ def _build_forcing_file(src_info, dem_info, forcing_path, tmp_path, download_dir
             era5_function.check_cancel(processes, process_key)
             w1 = min(w0 + tw, n_total)
             win = _source_window(src, w0, w1)
-            if flow_functions.HAS_DASK:
+            if HAS_DASK:
                 tasks = [delayed(process_block)(r0, r1, win, w0, w1) for r0, r1 in row_blocks]
                 compute(*tasks, scheduler="threads", num_workers=n_workers)
             else:

@@ -25,6 +25,13 @@ const OTHER_SOURCES = {
             'grid cell. Free use is non-commercial only. TOA radiation is computed astronomically.'
     },
 };
+// API key notes: shown at the top of each service tab while no key is saved for the signed-in account
+const KEY_INFO = {
+    met: { tab: 'eklima-tab', name: 'Frost API key', url: 'https://frost.met.no/auth/requestCredentials.html' },
+    nve: { tab: 'nve-tab', name: 'NVE HydAPI key', url: 'https://hydapi.nve.no/Users' },
+    regnbyge: { tab: 'regnbyge-tab', name: 'Regnbyge.no login (client name, secret, username and password)', url: '' },
+    era5: { tab: 'era5-tab', name: 'Copernicus CDS API key', url: 'https://cds.climate.copernicus.eu/profile' },
+};
 
 window._uploadedGISFiles = {}; window._gisFileIdCounter = 0;
 
@@ -91,7 +98,8 @@ let plotChecked = true, waterFlowLayer = null, waterLevelLayer = null,
 
 setupTabs(document); await getProject();
 const mapObj = await initMap('leaflet-map-data'); mapOptions(mapObj);
-savePassword(); await loadClient(key); updateManager();
+savePassword(); for (const k of ['nve', 'regnbyge', 'era5']) await loadClient(k);
+await loadClient(key); updateManager();
 
 
 async function getProject() {
@@ -124,6 +132,7 @@ function savePassword() {
         };
         const response = await jsonLoader('save_client', content);
         alert(response.message); if (response.status === "error") { return; }
+        await loadClient(key);
     });
     obj.clientRememberNVE.addEventListener('click', async () => {
         if (key === '') { key = 'nve'; }
@@ -137,6 +146,7 @@ function savePassword() {
         };
         const response = await jsonLoader('save_client', content);
         alert(response.message); if (response.status === "error") { return; }
+        await loadClient(key);
     });
     obj.clientRememberRegnbyge.addEventListener('click', async () => {
         if (key === '') { key = 'regnbyge'; }
@@ -151,6 +161,7 @@ function savePassword() {
         };
         const response = await jsonLoader('save_client', content);
         alert(response.message); if (response.status === "error") { return; }
+        await loadClient(key);
     });
     obj.clientRememberEra5.addEventListener('click', async () => {
         if (key === '') { key = 'era5'; }; nameID = obj.apikeyEra5.value;
@@ -160,14 +171,43 @@ function savePassword() {
         const content = { projectName: currentProject, key: key, clientName: nameID };
         const response = await jsonLoader('save_client', content);
         alert(response.message); if (response.status === "error") { return; }
+        await loadClient(key);
     });
+}
+
+function keyNote(key, message, level = 'warn') {
+    const info = KEY_INFO[key];
+    const panel = info && document.querySelector(`.main-panel[data-panel="${info.tab}"]`);
+    if (!panel) return;
+    let note = panel.querySelector(':scope > .api-key-note');
+    if (!message) { note?.remove(); return; }
+    if (!note) {
+        note = document.createElement('div'); note.className = 'api-key-note'; note.setAttribute('role', 'status');
+        const title = panel.querySelector(':scope > h3');
+        title ? title.after(note) : panel.prepend(note);
+    }
+    note.dataset.level = level; note.textContent = message;
+    if (info.url && level === 'warn') {
+        const a = document.createElement('a');
+        a.href = info.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = 'Get a key';
+        note.append(' ', a);
+    }
 }
 
 async function loadClient(key) {
     const content = { projectName: currentProject, key: key };
-    const response = await jsonLoader('load_client', content);
-    nameID = response.content.client_id; secret = response.content.client_secret;
-    userName = response.content.client_username; password = response.content.client_password;
+    let response = null;
+    try { response = await jsonLoader('load_client', content); } catch (e) { response = null; }
+    if (!response || response.status === 'error' || !response.content) {
+        keyNote(key, `Could not load the saved ${KEY_INFO[key]?.name || 'API key'}: ` +
+            `${response?.message || 'no response from the server'}.`, 'error');
+        return;
+    }
+    nameID = response.content.client_id || ''; secret = response.content.client_secret || '';
+    userName = response.content.client_username || ''; password = response.content.client_password || '';
+    const missing = key === 'regnbyge' ? !(nameID && secret && userName && password) : !nameID;
+    keyNote(key, missing ? `No ${KEY_INFO[key]?.name || 'API key'} saved for your account. Enter it under ` +
+        `"Login" and click "Remember me" (it is stored encrypted and used for all your projects).` : null);
     if (key === 'met') {
         obj.clientIdMet.value = nameID;
     } else if (key === 'nve') {

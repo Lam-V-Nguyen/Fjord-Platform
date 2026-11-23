@@ -58,7 +58,6 @@ async def check_download_status(request: Request, user=Depends(functions.basic_a
 async def save_client(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
-        project_name, _ = functions.project_definer(body.get('projectName'), user)
         path = os.path.join(PROJECT_ROOT, user if user != 'admin' else 'demo', 'credentials.json')   # always the signed-in user's own
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(path):
@@ -78,7 +77,6 @@ async def save_client(request: Request, user=Depends(functions.basic_auth)):
 @router.post("/load_client")
 async def load_client(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
-    project_name, _ = functions.project_definer(body.get('projectName'), user)
     path = os.path.join(PROJECT_ROOT, user if user != 'admin' else 'demo', 'credentials.json')   # always the signed-in user's own
     temp = {'client_id': '', 'client_secret': '', 'client_username': '', 'client_password': ''}
     if os.path.exists(path):

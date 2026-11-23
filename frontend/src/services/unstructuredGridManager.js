@@ -26,7 +26,9 @@ const obj = {
     interpolateDelete: $("interpolate-grid-delete"), interpolateHide: $("interpolate-grid-hide"),
     interpolateGrid: $("interpolate-grid"), interpolateMapBtn: $("interpolate-grid-pick-btn"),
     interpolateCSVBtn: $("interpolate-grid-csv-btn"), interpolateFile: $("interpolate-grid-csv"),
-    iterationValue: $("iterations"), valueFrom: $("detail-level-from"), 
+    iterationValue: $("iterations"), valueFrom: $("detail-level-from"),
+    autoOptCheckbox: $("grid-op-auto-checkbox"), customeOptCheckbox: $("grid-op-level-checkbox"),
+    iterationContainer: $("iteration-container"), levelContainer: $("level-container"),
     valueTo: $("detail-level-to"), optimizeBtn: $("optimize-grid"), reCheckGridFile: $("recheck-grid-file"),
     progressbarGrid: $("progressbar-grid"), progressTextGrid: $("progress-text-grid"),
     baseMap: $("basemap-btn"), leafletMap: $("leaflet-map-lakes"), saveDepth: $("export-depth-btn"),
@@ -34,7 +36,6 @@ const obj = {
     colorBarContainer: $("custom-colorbar-grid"), colorBarColor: $("colorbar-gradient"),
     colorBarTitle: $("colorbar-title"), colorBarLabel: $("colorbar-label"),
     optimizeCloseBtn: $("optimization-close"), 
-
 };
 
 const row = ['Name', 'Municipality', 'Area', 'Perimeter', 
@@ -276,15 +277,13 @@ async function lakeOptions() {
         const value = e.target.value.trim(); 
         if (e.type === 'input') clearTimeout(timeOut); 
         if (e.type === 'click') { 
-            obj.lakeSelector.style.display = 'none'; 
-            obj.lakeLabel.style.display = 'none'; 
+            obj.lakeSelector.style.display = 'none'; obj.lakeLabel.style.display = 'none'; 
         } 
         if (value === "") {
             obj.menuContent.style.display = "none"; resetMap(mapObj);
         }
         await addItems(currentProject, value); 
-        obj.municipalityName.value = ''; 
-        obj.municipalityList.style.display = "none"; 
+        obj.municipalityName.value = ''; obj.municipalityList.style.display = "none"; 
     }; 
     ['click', 'input'].forEach(evt => { 
         obj.lakeSearcher.addEventListener(evt, handleLakeSearchEvent); 
@@ -305,11 +304,8 @@ async function lakeOptions() {
             data.name, data.region, data.area, 
             data.perimeter, data.min, data.max, data.avg
         ]]; 
-        obj.tableContent.style.display = "block"; 
-        fillTable(contents, obj.lakeTable, true);
-        obj.polygonCheckbox.checked = true;
-        obj.depthCheckbox.checked = true;
-        obj.orthoCheckbox.checked = false; 
+        obj.tableContent.style.display = "block"; fillTable(contents, obj.lakeTable, true);
+        obj.polygonCheckbox.checked = true; obj.depthCheckbox.checked = true; obj.orthoCheckbox.checked = false; 
         // Plot depth grid on map
         depthLayer = clearMap(depthLayer, mapObj);
         depthLayer = gridPlotter(
@@ -332,8 +328,7 @@ async function dataBaseOptions() {
         if (selectedLake === "All Municipalities" ) { 
             signalSender('showOverlay', 'Loading Lakes for entire Norway.\nPlease wait...');
             entireNorway = true; obj.tableContent.style.display = "none"; 
-            obj.menuContent.style.display = "none"; 
-            obj.lakeSelector.style.display = "none"; 
+            obj.menuContent.style.display = "none"; obj.lakeSelector.style.display = "none"; 
             obj.colorBarContainer.style.display = "none";
             const response = await jsonLoader('load_lakes', { 
                 projectName: currentProject, lakeName: 'all'
@@ -477,8 +472,10 @@ function unGridManager() {
                 ); signalSender('hideOverlay');
             }
         } else { 
-            depthLayer = clearMap(depthLayer, mapObj);
-            obj.colorBarContainer.style.display = 'none';
+            if (depthLayer) {
+                depthLayer = clearMap(depthLayer, mapObj); obj.colorBarContainer.style.display = 'none';
+            } else { 'No depth layer found. Please export depth data first.'; return; }
+            
         }
     });
     obj.exportDepth.addEventListener('click', async () => {
@@ -498,8 +495,13 @@ function unGridManager() {
         if (e.target.checked) { 
             if (depthPointLayer !== null) {
                 mapObj.addLayer(depthPointLayer);
-            } else { e.target.checked = false; }
-        } else { mapObj.removeLayer(depthPointLayer); }
+            } else { 
+                alert('No depth points found. Please export depth data first.');
+                e.target.checked = false; 
+            }
+        } else { 
+            if (depthPointLayer) { mapObj.removeLayer(depthPointLayer); }
+        }
     });
     obj.saveDepth.addEventListener('click', async () => {
         if (depthPointLayer === null) { alert("No point layer found on the map."); return; }
@@ -664,7 +666,14 @@ function unGridManager() {
             if (!obj.depthCheckbox.checked) { obj.colorBarContainer.style.display = 'none'; } 
         }
     });
+    obj.customeOptCheckbox.addEventListener('change', async (e) => {
+        if (e.target.checked) {
+            obj.iterationContainer.style.display = 'flex'; obj.levelContainer.style.display = 'flex';
+        } else { obj.iterationContainer.style.display = 'none'; obj.levelContainer.style.display = 'none'; }
+    });
     obj.optimizeBtn.addEventListener('click', async () => {
+        const autoChecked = obj.autoOptCheckbox.checked, customChecked = obj.customeOptCheckbox.checked;
+        if (!autoChecked && !customChecked) { alert('Please select at least one mode to continue.'); return; }
         obj.progressbarGrid.value = 0; obj.progressTextGrid.innerText = ''; 
         gridLayer = clearMap(gridLayer, mapObj);
         if (isRunning) { alert("Grid optimization is running."); return; }
@@ -677,23 +686,23 @@ function unGridManager() {
         }
         const pointCollection = [];
         pointLayer.eachLayer(layer => {
-            const latlng = layer.getLatLng();
-            pointCollection.push([latlng.lat, latlng.lng]);
+            const latlng = layer.getLatLng(); pointCollection.push([latlng.lat, latlng.lng]);
         });
         if (pointCollection.length === 0) { alert("No vertexes found."); return; }
         pointCollection.push(pointCollection[0]);
         // Reset UI
         activeProject = currentProject; isRunning = true;
-        obj.leafletContainer.style.display = 'none'; 
-        obj.plotContainer.style.display = 'flex'; 
-        obj.menuContent.style.display = 'none';
-        obj.optimizeCloseBtn.innerText = 'Stop';
+        obj.leafletContainer.style.display = 'none'; obj.plotContainer.style.display = 'flex'; 
+        obj.menuContent.style.display = 'none'; obj.optimizeCloseBtn.innerText = 'Stop';
         const contents = { projectName: currentProject, pointCollection: pointCollection,
-            iterations: iterations, levelFrom: levelFrom, levelTo: levelTo
+            autoMode: autoChecked, customMode: customChecked, iterations: iterations, levelFrom: levelFrom, levelTo: levelTo
         };
         try {
             const start = await jsonLoader('start_grid_optimization', contents);
-            if (start.status === "error") { isRunning = false; alert(start.message); return; }
+            if (start.status === "error") { 
+                obj.leafletContainer.style.display = 'flex'; obj.plotContainer.style.display = 'none'; 
+                isRunning = false; alert(start.message); return; 
+            }
             updateLog(currentProject, obj.chartDiv, obj.progressbarGrid, obj.progressTextGrid, 1, mapObj);
         } catch (error) {
             obj.progressTextGrid.innerText = 'Failed to start optimization.';
@@ -793,7 +802,7 @@ function unGridManager() {
             const writable = await fileHandle.createWritable();
             await writable.write(await response.blob()); await writable.close();
             alert('Grid saved successfully.');
-        } catch (error) { alert(`Error saving grid: ${error.message}`); }
+        } catch (error) { alert(error.message); }
         finally { signalSender('hideOverlay'); }
     });
     obj.reCheckGrid.addEventListener('click', () => obj.reCheckGridFile.click());
@@ -985,7 +994,7 @@ function addPointLayer(points, map, checkMove=false) {
                     }
                     if (pointContainer.length === 1) { html = "Select end point to delete."; }
                     if (pointContainer.length === 2) { 
-                        await pointRemoval(pointContainer); pointContainer = []; 
+                        await pointRemoval(pointContainer, map); pointContainer = []; 
                         obj.deleteCheckbox.dispatchEvent(new Event('change'));
                         if (hoverTooltip) map.closeTooltip(hoverTooltip); 
                         return;
@@ -1064,8 +1073,7 @@ async function pointRemoval(pointIds, map) {
     }
     const response = await jsonLoader('vertex_remover', contents); signalSender('hideOverlay');
     if (response.status === "error") { alert(response.message); return; }
-    const polygon = response.content.polygon, point = response.content.point;
-    resetMap(map);
+    const polygon = response.content.polygon, point = response.content.point; resetMap(map);
     lakeLayer = polygonPlotter(polygon, map, false, false); 
     pointLayer = addPointLayer(point, map, false);
     obj.orthoCheckbox.checked = false; 
