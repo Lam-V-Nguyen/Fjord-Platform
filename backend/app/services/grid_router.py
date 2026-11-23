@@ -282,19 +282,27 @@ async def start_grid_optimization(request: Request, background_tasks: Background
         lock = redis.lock(process_key, timeout=1000, blocking_timeout=10)
         async with lock:
             info = processes.get(process_key)
-            # Check if optimization already running
-            if info and info["status"] == "running":
+            if info and info["status"] == "running":               # already running: report progress
                 return JSONResponse({
-                    "status": info["status"], "progress": info["progress"], 
+                    "status": info["status"], "progress": info["progress"],
                     "message": info["message"], "his": info["history"]
                 })
-            processes[process_key] = {
-                "status": "running", "progress": 0.0, "history": [], "grid": None,
-                "message": 'Preparing data for optimization ...', "stop": False
-            }
-            info = processes[process_key]
-            iterations, points = int(body.get('iterations')), np.array(body.get('pointCollection'))
-            level_from, level_to = float(body.get('levelFrom')), float(body.get('levelTo'))
+            # validate BEFORE marking the process as running (an early return must not leave it "running")
+            auto_mode, custom_mode = bool(body.get('autoMode')), bool(body.get('customMode'))
+            if not (auto_mode or custom_mode):
+                return JSONResponse({"status": "error", "message": 'Select at least Auto mode or Custom mode.'})
+            try: iterations = int(body.get('iterations'))
+            except (TypeError, ValueError): iterations = 0
+            if not 1 <= iterations <= 5000:
+                return JSONResponse({"status": "error", "message": 'Iterations must be a whole number between 1 and 5000.'})
+            level_range = None
+            if custom_mode:    # the level range only matters for custom mode
+                try: level_from, level_to = float(body.get('levelFrom')), float(body.get('levelTo'))
+                except (TypeError, ValueError): level_from = level_to = 0.0
+                if not (0 < level_from < level_to):
+                    return JSONResponse({"status": "error", "message": 'Level range must satisfy 0 < From < To.'})
+                level_range = [level_from, level_to]
+            points = np.array(body.get('pointCollection'))
             gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(points[:, 1], points[:, 0]), crs="EPSG:4326")
             utm_crs = gdf.estimate_utm_crs()
             utm_crs_str = utm_crs.to_string() if utm_crs is not None else "EPSG:4326"
@@ -305,14 +313,20 @@ async def start_grid_optimization(request: Request, background_tasks: Background
             except grid_functions.GridError as e:
                 return JSONResponse({"status": "error", "message": str(e)})
             polygon = GeometryList(x, y)
+            modes = (['auto'] if auto_mode else []) + (['custom'] if custom_mode else [])
             params = {
-                "level": [level_from, level_to], 'mode': ['auto', 'custom'],
+                "level": level_range, "mode": modes,
                 "outer_iterations": [1, 10], "boundary_iterations": [1, 50],
                 "inner_iterations": [1, 50], "smoothing_factor": [0, 1]
             }
+            # everything is valid: now mark it as running and start
+            processes[process_key] = {
+                "status": "running", "progress": 0.0, "history": [], "grid": None,
+                "message": 'Preparing data for optimization ...', "stop": False
+            }
             background_tasks.add_task(
-                grid_functions.run_grid_optimization, processes, process_key, iterations, 
-                polygon, params, project_cache, utm_crs_str
+                grid_functions.run_grid_optimization, processes, process_key,
+                iterations, polygon, params, project_cache, utm_crs_str
             )
         return JSONResponse({"status": "ok", "message": f"Grid optimization started."})
     except Exception as e: functions.error('/start_grid_optimization', e)
@@ -396,11 +410,17 @@ async def grid_saver(request: Request, user=Depends(functions.basic_auth)):
         grid_uds = project_cache.get('grid_uds')
         if grid_uds is None:
             return JSONResponse({"status": "error", "message": "Grid is not available."})
-        grid = functions.unstructuredGridCreator(grid_uds)
-        nodes = functions.nodes_from_grid(grid)
+        node_x = np.asarray(grid_uds['mesh2d_node_x'].values, dtype=float)
+        node_y = np.asarray(grid_uds['mesh2d_node_y'].values, dtype=float)
+        # Target = the grid nodes IN NODE ORDER (mesh2d_node_z[i] belongs to node i).
+        # nodes_from_grid() returns them in random set() order -> depths ended up on the wrong nodes.
+        nodes = gpd.GeoDataFrame(geometry=gpd.points_from_xy(node_x, node_y), crs="EPSG:4326")
+        depth_col = next((c for c in points.columns if c.lower() == 'depth'), None)   # interpolated nodes carry 'Depth'
+        if depth_col is None:
+            return JSONResponse({"status": "error", "message": "The interpolated points have no depth values. Interpolate the grid again."})
         x_array = points['lon'].to_numpy(dtype=float)
         y_array = points['lat'].to_numpy(dtype=float)
-        z_array = points['depth'].to_numpy(dtype=float)
+        z_array = points[depth_col].to_numpy(dtype=float)
         depth = functions.interpolation_Z(nodes, x_array, y_array, z_array, geo_type='point')
         grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(depth.astype(np.float32)))
         with tempfile.NamedTemporaryFile(suffix='.nc', delete=False) as temp_file:

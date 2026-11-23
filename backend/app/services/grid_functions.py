@@ -6,7 +6,6 @@ from shapely.geometry import Polygon, MultiPolygon
 from meshkernel import MeshKernel, GeometryList, OrthogonalizationParameters, ProjectToLandBoundaryOption
 from services import functions, constants
 from pyproj import CRS
-from optuna.pruners import MedianPruner
 from functools import partial
 import multiprocessing as mp, queue, time
 
@@ -165,6 +164,22 @@ def netCDF_creator(mk: MeshKernel, depth: gpd.GeoDataFrame | None = None):
     grid_uds.attrs.update({ "institution": 'Private', "references": 'vanlnNTNU@gmail.com'})
     return grid_uds
 
+def ugrid_to_wgs84(ds: xr.Dataset, src_crs: str) -> xr.Dataset:
+    """UGRID dataset whose coordinates are in `src_crs` (e.g. the UTM grid of the optimization) -> lon/lat (EPSG:4326),
+    so every saved grid uses the same coordinate system as the grids made by /grid_creator."""
+    if CRS.from_user_input(src_crs).equals(CRS.from_epsg(4326)): return ds
+    from pyproj import Transformer
+    tr = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+    ds = ds.copy()
+    for xv, yv in (("mesh2d_node_x", "mesh2d_node_y"), ("mesh2d_edge_x", "mesh2d_edge_y"),
+        ("mesh2d_face_x", "mesh2d_face_y"), ("mesh2d_face_x_bnd", "mesh2d_face_y_bnd")):
+        if xv not in ds or yv not in ds: continue
+        lon, lat = tr.transform(np.asarray(ds[xv].values, dtype=np.float64), np.asarray(ds[yv].values, dtype=np.float64))
+        ds[xv] = (ds[xv].dims, da.from_array(np.asarray(lon, dtype=np.float32)), ds[xv].attrs)
+        ds[yv] = (ds[yv].dims, da.from_array(np.asarray(lat, dtype=np.float32)), ds[yv].attrs)
+    ds["crs"].attrs.update({"grid_mapping_name": "latitude_longitude", "crs_wkt": CRS.from_epsg(4326).to_wkt()})
+    return ds
+
 def grid_creator_sync(points, level):
     scale = None if level in ('', None) else float(level)
     if scale is not None and not (np.isfinite(scale) and scale > 0):
@@ -269,13 +284,26 @@ def meshkernel_to_Ugrid(mk: MeshKernel, crs: str):
     ds = ds.set_coords(["mesh2d_node_x", "mesh2d_node_y"])
     return ds
 
-def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=None):
+def _start_kernel(mode, level, polygon, base_meshes=None) -> MeshKernel:
+    """Triangular mesh to orthogonalize. 'auto' always gives the same mesh -> reuse the one built once
+    (base_meshes['auto']) instead of triangulating the polygon again in every trial."""
+    mk = MeshKernel()
+    base = (base_meshes or {}).get('auto') if mode == 'auto' else None
+    if base is not None: mk.mesh2d_set(base)
+    elif mode == 'auto': mk.mesh2d_make_triangular_mesh_from_polygon(polygon)
+    else: mk.mesh2d_make_triangular_mesh_from_polygon(polygon, scale_factor=float(level))
+    return mk
+
+def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=None, base_meshes=None):
     if stop_checker and stop_checker():
         trial.study.stop()
         raise optuna.TrialPruned("Stopped by user before execution.")
     try:
         type_choice = trial.suggest_categorical("mode", space['mode'])
-        level = trial.suggest_float("level", space['level'][0], space['level'][1])
+        # 'level' (scale factor) is only used by custom mode -> only sampled there (log scale: range spans decades)
+        level = (trial.suggest_float("level", space['level'][0], space['level'][1], log=True)
+            if type_choice == 'custom' else None
+        )
         outer_iterations = trial.suggest_int(
             "outer_iterations", space['outer_iterations'][0], space['outer_iterations'][1]
         )
@@ -288,17 +316,10 @@ def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=N
         smoothing_factor = trial.suggest_float(
             "smoothing_factor", space['smoothing_factor'][0], space['smoothing_factor'][1]
         )
-        # Remove outliers
-        if type_choice == 'custom' and level <= 0:
-            trial.set_user_attr("min", None); trial.set_user_attr("mean", None)
-            return 1e6
-        mk = MeshKernel()
-        if type_choice == 'auto': mk.mesh2d_make_triangular_mesh_from_polygon(polygon)
-        else: mk.mesh2d_make_triangular_mesh_from_polygon(polygon, scale_factor=float(level))        
+        mk = _start_kernel(type_choice, level, polygon, base_meshes)
         ortho_params = OrthogonalizationParameters(
             outer_iterations=outer_iterations, boundary_iterations=boundary_iterations,
-            inner_iterations=inner_iterations,
-            orthogonalization_to_smoothing_factor=smoothing_factor
+            inner_iterations=inner_iterations, orthogonalization_to_smoothing_factor=smoothing_factor
         )        
         mk.mesh2d_compute_orthogonalization(
             project_to_land_boundary_option=ProjectToLandBoundaryOption.DO_NOT_PROJECT_TO_LANDBOUNDARY,
@@ -309,11 +330,9 @@ def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=N
         if len(orth_valid) == 0: 
             trial.set_user_attr("min", None); trial.set_user_attr("mean", None)
             return 1e6
-        min_value = float(np.min(orth_valid))
-        mean_value = float(np.mean(orth_valid))
+        min_value = float(np.min(orth_valid)); mean_value = float(np.mean(orth_valid))
         max_value = float(np.max(orth_valid))
-        trial.set_user_attr("min", min_value)
-        trial.set_user_attr("mean", mean_value)
+        trial.set_user_attr("min", min_value); trial.set_user_attr("mean", mean_value)
         if stop_checker and stop_checker(): trial.study.stop()
         if max_value <= 0.01: trial.study.stop()
         return max_value
@@ -331,11 +350,12 @@ def optuna_callback(study: optuna.study.Study, trial: optuna.trial.FrozenTrial, 
     try:
         best_trial = study.best_trial; best_ortho = best_trial.value
         best_type = best_trial.params.get("mode", "")
-        best_level = best_trial.params.get("level", 0.0)
+        best_level = best_trial.params.get("level")          # None when the best trial used auto mode
     except ValueError:
-        best_ortho, best_type, best_level = current_ortho, "", 0.0
-    message = f"Completed: {progress:.1f}% ({trial.number}/{n}) - Current orthogonality: {current_ortho:.4f}"
-    message += f" [Best orthogonality: {best_ortho:.4f} (mode: '{best_type:^6}' - level: {best_level:.2f})]"
+        best_ortho, best_type, best_level = current_ortho, "", None
+    level_txt = f"{best_level:.2f}" if best_level is not None else "-"
+    message = f"Completed: {progress:.1f}% ({iteration}/{n}) - Current orthogonality: {current_ortho:.4f}"
+    message += f" [Best orthogonality: {best_ortho:.4f} (mode: '{best_type:^6}' - level: {level_txt})]"
     info["progress"], info["message"] = progress, message
     info["history"].append({"iteration": iteration, "min": min_value, "mean": mean_value, "max": current_ortho})
     if info.get("stop"): study.stop()
@@ -347,13 +367,24 @@ def run_grid_optimization(processes: dict, key: str, iterations: int,
         def stop_checker():
             current = processes.get(key)
             return current.get("stop", False) if current else True
+        base_meshes = {}
+        if 'auto' in space['mode']:
+            # Auto mode: the triangular mesh does not depend on any parameter -> build it ONCE (in a separate
+            # process, so a MeshKernel crash cannot take the server down); trials only tune the orthogonalization
+            info["message"] = "Generating the base grid (auto mode) ..."
+            try:
+                base_meshes['auto'] = build_triangular_mesh(
+                    np.asarray(polygon.x_coordinates, dtype=np.float64), np.asarray(polygon.y_coordinates, dtype=np.float64)
+                ).mesh2d_get()
+            except GridError as e:
+                if space['mode'] == ['auto']:                 # auto only: nothing left to optimize
+                    info["status"], info["message"], info["grid"] = "failed", f"Auto grid generation failed: {e}", None
+                    return
+                space = {**space, 'mode': [m for m in space['mode'] if m != 'auto']}   # continue with custom only
         optuna_func = partial(
-            objective_function, polygon=polygon, space=space, stop_checker=stop_checker
+            objective_function, polygon=polygon, space=space, stop_checker=stop_checker, base_meshes=base_meshes
         )
-        study = optuna.create_study(
-            sampler=optuna.samplers.TPESampler(seed=42), direction="minimize", 
-            pruner=MedianPruner(n_startup_trials=10, n_warmup_steps=20),
-        )
+        study = optuna.create_study(sampler=optuna.samplers.TPESampler(seed=42), direction="minimize")
         callback = partial(optuna_callback, info=info, n=iterations)
         study.optimize(optuna_func, n_trials=iterations, callbacks=[callback])
         completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
@@ -367,37 +398,29 @@ def run_grid_optimization(processes: dict, key: str, iterations: int,
         if "[" in notice: notice = notice.split("[", 1)[1].split("(", 1)[0]
         info["status"], info["message"] = 'finalizing', "Generating final grid..."
         try:
-            mk = mk_from_params(best_params, polygon)
+            mk = mk_from_params(best_params, polygon, base_meshes)
         except Exception as grid_err:
             info["status"] = "stopped" if info.get("stop") else "failed"
             info["message"] = f"Optimization found best params but grid generation failed: {grid_err}"
             info["grid"], info["best_params"] = None, best_params
             return
         project_cache["mk"], project_cache["mk_crs"] = mk, utm_crs
-        grid_uds = netCDF_creator(mk)
+        # The optimization works in metres (UTM); the grid that is shown / saved / interpolated is in lon/lat
+        # (netCDF_creator labels it EPSG:4326, so it must really be lon/lat – before, it held UTM metres)
+        grid_uds = ugrid_to_wgs84(netCDF_creator(mk), utm_crs)
         best_grid = functions.unstructuredGridCreator(grid_uds)
-        best_grid = best_grid.set_crs(utm_crs, allow_override=True).to_crs("EPSG:4326")
         info["grid"] = json.loads(best_grid.to_json())
-        display_params = dict(best_params)
-        display_params["level"] = f'{best_params["level"]:.3f}'
-        display_params["mode"] = f'{best_params["mode"]:^6}'
-        display_params["outer_iterations"] = f'{best_params["outer_iterations"]:.3f}'
-        display_params["boundary_iterations"] = f'{best_params["boundary_iterations"]:.3f}'
-        display_params["inner_iterations"] = f'{best_params["inner_iterations"]:.3f}'
-        display_params["smoothing_factor"] = f'{best_params["smoothing_factor"]:.3f}'
+        # 'level' exists only when the best trial used custom mode (auto has no level -> was KeyError: 'level')
+        display_params = {k: (f"{v:.3f}" if isinstance(v, float) else v) for k, v in best_params.items()}
         notice += f" - Best parameters: {display_params})"
-        project_cache['grid_uds'] = grid_uds
-        info["best_params"] = study.best_params
-        info["status"] = "finished"
-        info["message"] = f"Completed: {notice}"
+        project_cache['grid_uds'] = grid_uds; info["best_params"] = study.best_params
+        info["status"] = "finished"; info["message"] = f"Completed: {notice}"
     except Exception as e:
         if info:
             info["status"], info["message"] = "failed", f"Internal Error: {e}"
 
-def mk_from_params(params, polygon):
-    mk = MeshKernel()
-    if params['mode'] == 'auto': mk.mesh2d_make_triangular_mesh_from_polygon(polygon)
-    else: mk.mesh2d_make_triangular_mesh_from_polygon(polygon, scale_factor=float(params['level']))
+def mk_from_params(params, polygon, base_meshes=None):
+    mk = _start_kernel(params['mode'], params.get('level'), polygon, base_meshes)
     ortho_params = OrthogonalizationParameters(
         outer_iterations=params['outer_iterations'],
         boundary_iterations=params['boundary_iterations'],

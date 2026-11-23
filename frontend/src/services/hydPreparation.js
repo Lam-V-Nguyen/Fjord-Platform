@@ -14,7 +14,7 @@ const hoverTooltip = L.tooltip({
 const $ = (id) => document.getElementById(id);
 const obj = {
     sourceRemember: $('nve-remember-btn'), sourceAPIKey: $('nve-client-id'),
-    sourceBtn: $('nve-stations-btn'), sourceStart: $('nve-start'), sourceEnd: $('nve-end'),
+    sourceBtn: $('nve-stations-btn'), sourceStart: $('hyd-start'), sourceEnd: $('hyd-end'),
     stationID: $('station-id'), stationName: $('station-name'), basinArea: $('basin-area'), 
     downloadBtn: $('nve-download-btn'), dischargeContainer: $('discharge-container'),
     dischargeLogText: $('discharge-log-text'), dischargeLogContainer: $('discharge-log-container'),
@@ -268,10 +268,9 @@ async function meteoManagement() {
     obj.meteoLocation.addEventListener('click', () => { picker = 'meteo'; });
     obj.meteoSource.addEventListener('change', (e) => {
         const value = e.target.value; 
-        if (value === '') { return; } 
-        else {
+        if (value !== '') {
             obj.meteoLog.value = ''; deleteTable(obj.meteoTable);
-            const row = ["YYYY-MM-DD HH:MM:SS", "Humidity", "Air temperature", "Cloud coverage"];
+            const row = ["YYYY-MM-DD HH:MM:SS", "Relative humidity", "Air temperature", "Cloud coverage"];
             addRowToTable(obj.meteoTable, row);
         }
         obj.meteoERA5Container.style.display = value === 'era5' ? 'flex': 'none';
@@ -385,7 +384,7 @@ async function weatherManagement() {
                     obj.weatherLog, obj.weatherTable, obj.weatherSave, obj.weatherCancel
                 ); return;
             }
-            obj.weatherLog.value = ''; weatherFollowing = false;
+            obj.weatherLog.value = ''; weatherFollowing = false; obj.weatherSave.style.display = 'none';
             const content = { 
                 projectName: currentProject, lat: lat, lon: lon, source: source, timeZone: getLastTimeZone(),
                 startTime: start, endTime: end, logFile: logFile, key: WEATHER_KEY, apiKey: apiKey
@@ -404,7 +403,7 @@ async function weatherManagement() {
                 try { meteo = await jsonLoader('upload_era5_csv', csv); }
                 finally { signalSender('hideOverlay'); }
                 if (meteo.status !== 'ok') { alert(meteo.message); return; }
-                addDataToTable(obj.weatherTable, meteo.columns, meteo.content);
+                addDataToTable(obj.weatherTable, meteo.columns, meteo.content); obj.weatherSave.style.display = 'block';
             }, logFile);
         } catch (error) { alert(error.message || error); return; }
     });

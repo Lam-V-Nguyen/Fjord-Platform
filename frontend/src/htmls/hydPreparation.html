@@ -27,12 +27,12 @@
                         <div class="tile" style="grid-column: span 2;"><h3>Download Period</h3>
                             <div class="row">
                                 <div class="field-inline">
-                                    <label for="nve-start">Start Time:</label>
-                                    <input type="text" class="datetime" id="nve-start" placeholder="YYYY-MM-DD HH:MM:SS">
+                                    <label for="hyd-start">Start Time:</label>
+                                    <input type="text" class="datetime" id="hyd-start" placeholder="YYYY-MM-DD HH:MM:SS">
                                 </div>
                                 <div class="field-inline">
-                                    <label for="nve-end">End Time:</label>
-                                    <input type="text" class="datetime" id="nve-end" placeholder="YYYY-MM-DD HH:MM:SS">
+                                    <label for="hyd-end">End Time:</label>
+                                    <input type="text" class="datetime" id="hyd-end" placeholder="YYYY-MM-DD HH:MM:SS">
                                 </div>
                             </div>
                         </div>
@@ -47,7 +47,7 @@
                                     <div class="field-row">
                                         <label for="nve-client-id">NVE API Key:</label>
                                         <div class="input-with-icon">
-                                            <input type="password" id="nve-client-id">
+                                            <input type="password" id="nve-client-id" autocomplete="new-password">
                                             <button type="button" data-target="nve-client-id" class="toggle-password">👁️</button>
                                         </div>
                                         <button type="button" id="nve-remember-btn" style="max-width: 100px;">Remember</button>
@@ -180,7 +180,7 @@
                                 <div class="field-row" id="era5-meteo-container" style="display: none;">
                                     <label for="era5-meteo-id">ERA5 API Key:</label>
                                     <div class="input-with-icon">
-                                        <input type="password" id="era5-meteo-id">
+                                        <input type="password" id="era5-meteo-id" autocomplete="new-password">
                                         <button type="button" data-target="era5-meteo-id" class="toggle-password">👁️</button>
                                     </div>
                                     <button type="button" id="era5-meteo-remember-btn" style="max-width: 100px;">Remember</button>
@@ -241,7 +241,7 @@
                                 <div class="field-row" id="gts-container" style="display: none;">
                                     <label for="gts-weather-id">NVE API Key:</label>
                                     <div class="input-with-icon">
-                                        <input type="password" id="gts-weather-id">
+                                        <input type="password" id="gts-weather-id" autocomplete="new-password">
                                         <button type="button" data-target="gts-weather-id" class="toggle-password">👁️</button>
                                     </div>
                                     <button type="button" id="gts-weather-remember-btn" style="max-width: 100px;">Remember</button>
@@ -249,7 +249,7 @@
                                 <div class="field-row" id="era5-container" style="display: none;">
                                     <label for="era5-weather-id">ERA5 API Key:</label>
                                     <div class="input-with-icon">
-                                        <input type="password" id="era5-weather-id">
+                                        <input type="password" id="era5-weather-id" autocomplete="new-password">
                                         <button type="button" data-target="era5-weather-id" class="toggle-password">👁️</button>
                                     </div>
                                     <button type="button" id="era5-weather-remember-btn" style="max-width: 100px;">Remember</button>
@@ -327,7 +327,7 @@
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script>
         flatpickr(".datetime", {
-            enableTime: true, enableSeconds: true, dateFormat: "Y-m-d H:i:s", time_24hr: true,
+            enableTime: true, enableSeconds: true, dateFormat: "Y-m-d H:i:S", time_24hr: true,
             defaultHour: 0, defaultMinute: 0, defaultSecond: 0
         });
     </script>

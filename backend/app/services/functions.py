@@ -147,8 +147,9 @@ def split_project_ref(ref, username: str) -> tuple[str, str]:
 def _require_project_dir(path: str, ref) -> None:
     """404 when PROJECT_ROOT/<path> is not an existing project folder."""
     if not os.path.isdir(os.path.join(PROJECT_ROOT, path)):
-        raise HTTPException(status_code=404, detail=f"Project '{ref}' does not exist. "
-                            "Create a new project or open an existing one first.")
+        raise HTTPException(status_code=404, detail=f"Project '{ref}' does not exist or is 'read-only'.\n"
+            "Create a new project or open an existing one first."
+        )
 
 def project_definer(old_name, username='admin', for_copy: bool = False, must_exist: bool = True):
     """'<owner>/<project>' path relative to PROJECT_ROOT (legacy account 'admin' -> shared demo project).

@@ -493,7 +493,7 @@ def wind_job(directory, logger, workdir, csv_path, **kwargs):
     start_utc, end_utc = _parse_period(start, end, time_zone)
     t0 = start_utc.tz_convert(None)
     t1 = (end_utc - pd.Timedelta(hours=1)).tz_convert(None)
-    hours = weather_functions.hours(t0, t1)
+    hours = weather_functions.hours_range(t0, t1)
     if len(hours) == 0: raise ERA5Error("No full hour in the requested time range.")
     label = constants.SOURCES[source]["label"]
     logger.info(f"Source: {label} | location lat={la}, lon={lo}")
