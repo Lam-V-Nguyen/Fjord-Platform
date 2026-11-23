@@ -1,11 +1,11 @@
 // =====================================================================
-// mainManager.js – điểm vào của giao diện mới
-//  1. Đăng nhập (auth_check), ghi chú dự án/múi giờ (giữ class .project-note cho iframe)
-//  2. Điều hướng: Overview | Map View | Workspace (hash #overview / #map / #workspace)
-//  3. Sidebar công cụ sinh từ toolRegistry.js -> mở widget Gridstack như trước
-//  4. Bus postMessage với các iframe cũ (GET_USER, addMapWidget, hyd-waq, showOverlay, ...)
-//     được giữ NGUYÊN hành vi.
-//  5. Settings: múi giờ (get_timezone), reset layout, nạp lại ngưỡng cảnh báo
+// mainManager.js – entry point of the new UI
+//  1. Sign-in (auth_check), project/time zone note (keeps the .project-note class for iframes)
+//  2. Navigation: Overview | Map View | Workspace (hash #overview / #map / #workspace)
+//  3. Tool sidebar generated from toolRegistry.js -> opens Gridstack widgets as before
+//  4. postMessage bus with the legacy iframes (GET_USER, addMapWidget, hyd-waq, showOverlay, ...)
+//     behaviour kept UNCHANGED.
+//  5. Settings: time zone (get_timezone), reset layout, reload alert thresholds
 // =====================================================================
 import { pdfOpener, projectModifier } from "./projectManager.js";
 import { initGrid, addWidget, loadWidget, saveWidget, hasWidget } from "./widgetFunctions.js";
@@ -17,6 +17,8 @@ import { renderPreview, currentMap } from "./mapManager.js";
 import { TOOL_GROUPS, QUICK_TOOLS, getTool, groupOf, standaloneLabel } from "./toolRegistry.js";
 import { icon } from "./icons.js";
 import { initThresholdEditor } from "./thresholdEditor.js";
+import { initAccountMenu } from "./accountMenu.js";
+import { initShareDialog, projectLabel } from "./shareDialog.js";
 import { Dashboard, toast, initSidebarResize } from "./dashboardManager.js";
 
 const app = document.getElementById('app');
@@ -40,7 +42,7 @@ showGitHubLastUpdate('Lam-V-Nguyen', 'Fjord-Platform', 'main');
 
 
 // =====================================================================
-// 1. Đăng nhập & ghi chú
+// 1. Sign-in & note
 // =====================================================================
 async function login() {
     currentTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -53,12 +55,12 @@ async function login() {
     }
     const project = getLastProject();
     showNotes(`${userName}/${project}`);
-    document.getElementById('project-chip-label').textContent = project;
+    document.getElementById('project-chip-label').textContent = projectLabel(project);
     selectedTimeZone = getLastTimeZone(); showTimeZone(currentTimeZone, selectedTimeZone);
 }
 
 export function showNotes(note) {
-    // Định dạng "Project: user/project" được iframe đọc qua GET_USER -> không đổi
+    // The "Project: user/project" format is read by iframes via GET_USER -> do not change
     const noteDiv = document.querySelector('.project-note');
     if (!noteDiv) return;
     noteDiv.textContent = `Project: ${note}`;
@@ -73,7 +75,7 @@ function showTimeZone(current, selected) {
 }
 
 // =====================================================================
-// 2. Điều hướng
+// 2. Navigation
 // =====================================================================
 function initialView() {
     const hash = location.hash.replace('#', '');
@@ -100,7 +102,7 @@ function setView(view, { replace = false } = {}) {
     const url = new URL(location.href); url.hash = view;
     replace ? history.replaceState(null, '', url) : history.pushState(null, '', url);
     app.classList.remove('sidebar-open');
-    // Leaflet / Plotly / Gridstack cần tính lại kích thước sau khi đổi view
+    // Leaflet / Plotly / Gridstack must recompute their size after a view change
     const refit = isDash && (prevView === 'map' || view === 'map') && prevView !== view;
     requestAnimationFrame(() => {
         dashboard?.resize(refit);
@@ -139,24 +141,24 @@ function renderToolNav() {
             </div>
         </div>`;
     }).join('');
-    // Khôi phục nhóm đang mở
+    // Restore the open group
     const open = JSON.parse(localStorage.getItem('ui-open-groups') || '[]');
     open.forEach(id => nav.querySelector(`[data-group="${id}"]`)?.classList.add('open'));
 
-    // Nút nhanh khi workspace trống
-    // Nút nhanh: nhãn đầy đủ ngữ cảnh + icon của nhóm (HYD / WAQ / Wflow…) để phân biệt các công cụ trùng tên ngắn
+    // Quick buttons when the workspace is empty
+    // Quick buttons: full context label + group icon (HYD / WAQ / Wflow…) to tell apart tools with the same short name
     document.getElementById('quick-tools').innerHTML = QUICK_TOOLS
         .map(id => getTool(id)).filter(Boolean)
         .map(t => `<button class="btn small" data-tool="${t.id}" title="${t.title}">${icon(groupOf(t.id)?.icon || t.icon, 15)}${standaloneLabel(t)}</button>`).join('');
 }
 
 function bindShell() {
-    // Chọn view
+    // Select view
     document.getElementById('nav-main').addEventListener('click', (e) => {
         const b = e.target.closest('[data-view]');
         if (b) setView(b.dataset.view);
     });
-    // Mở công cụ (sidebar, nút nhanh, mục System)
+    // Open a tool (sidebar, quick buttons, System items)
     document.addEventListener('click', (e) => {
         const t = e.target.closest('[data-tool]');
         if (t) { e.preventDefault(); openTool(t.dataset.tool); return; }
@@ -171,7 +173,7 @@ function bindShell() {
             localStorage.setItem('ui-open-groups', JSON.stringify(open));
         }
     });
-    // Thu gọn sidebar (desktop) / mở drawer (mobile)
+    // Collapse the sidebar (desktop) / open the drawer (mobile)
     if (localStorage.getItem(SIDEBAR_KEY) === '1') app.classList.add('sidebar-collapsed');
     document.getElementById('sidebar-toggle').addEventListener('click', () => {
         if (window.innerWidth <= 980) { app.classList.toggle('sidebar-open'); return; }
@@ -179,12 +181,12 @@ function bindShell() {
         localStorage.setItem(SIDEBAR_KEY, app.classList.contains('sidebar-collapsed') ? '1' : '0');
         setTimeout(() => { dashboard?.resize(); window.dispatchEvent(new Event('resize')); }, 220);
     });
-    // Kéo mép phải sidebar để đổi độ rộng
+    // Drag the right edge of the sidebar to change its width
     initSidebarResize({
         app, sidebar: document.getElementById('sidebar'),
         onResize: () => { dashboard?.resize(); window.dispatchEvent(new Event('resize')); },
     });
-    // Đổi dự án (dùng modal sẵn có của projectManager)
+    // Switch project (uses the existing projectManager modal)
     document.getElementById('project-chip').addEventListener('click', () => projectModifier(userName));
     // Settings popover
     const settings = document.getElementById('settings-popover');
@@ -192,19 +194,24 @@ function bindShell() {
         e.stopPropagation();
         const r = e.currentTarget.getBoundingClientRect();
         settings.style.left = `${Math.min(r.right + 8, window.innerWidth - 310)}px`;
-        settings.style.top = `${Math.max(10, r.top - 220)}px`;
         settings.classList.toggle('show');
         if (settings.classList.contains('show')) {
             const input = document.getElementById('tz-search');
-            input.value = ''; input.focus();
+            input.value = '';
             await renderTimezoneList(document.getElementById('tz-results'), '');
+            // Position from the panel's REAL height: panel bottom level with the button bottom, never off-screen
+            const h = settings.offsetHeight;
+            settings.style.top = `${Math.max(10, Math.min(r.bottom - h, window.innerHeight - h - 10))}px`;
+            input.focus();
         }
     });
     settings.addEventListener('click', (e) => e.stopPropagation());
     bindTimezoneSearch();
+    initAccountMenu({ toast, beforeOpen: () => settings.classList.remove('show') })
+        .then(me => initShareDialog({ toast, me, beforeOpen: () => settings.classList.remove('show') }));
     initThresholdEditor({
         toast, beforeOpen: () => settings.classList.remove('show'),
-        onSaved: () => dashboard?.refresh(true),          // tính lại cảnh báo / WQI theo ngưỡng mới
+        onSaved: () => dashboard?.refresh(true),          // recompute alerts / WQI with the new thresholds
     });
     document.getElementById('reset-layout').addEventListener('click', () => {
         if (!confirm('Close all widgets and reset the workspace layout?')) return;
@@ -220,7 +227,7 @@ function bindShell() {
     document.getElementById('ws-close-all').addEventListener('click', () => {
         if (confirm('Close all open tools?')) closeAllWidgets();
     });
-    // Đóng popover khi bấm ra ngoài / Esc
+    // Close popovers on outside click / Esc
     document.addEventListener('click', () => {
         document.querySelectorAll('.popover.show').forEach(p => p.classList.remove('show'));
     });
@@ -231,14 +238,14 @@ function bindShell() {
 }
 
 // =====================================================================
-// 4. Workspace (Gridstack) – mở / đóng widget
+// 4. Workspace (Gridstack) – open / close widgets
 // =====================================================================
 function initWorkspace() {
     const grid = initGrid();
     loadWidget();
     grid.on('added removed', () => setTimeout(updateWorkspaceState, 0));
     setTimeout(updateWorkspaceState, 150);
-    // Đóng widget & sửa tiêu đề (giống bản cũ)
+    // Close widgets & edit titles (as in the old version)
     document.addEventListener('click', (e) => {
         if (e.target.classList.contains('remove-btn')) {
             const widget = e.target.closest('.grid-stack-item');
@@ -253,7 +260,7 @@ function initWorkspace() {
 
 function removeWidget(widgetId) {
     saveWidget();
-    // Đóng widget bản đồ đi kèm (vd. new-hyd -> new-hyd-map)
+    // Close the attached map widget (e.g. new-hyd -> new-hyd-map)
     const mapEl = document.querySelector(`[gs-id="${widgetId}-map"]`);
     if (mapEl) removeWidget(`${widgetId}-map`);
     const grid = initGrid();
@@ -295,7 +302,7 @@ function openTool(id) {
 }
 
 // =====================================================================
-// 5. Bus postMessage với các iframe 
+// 5. postMessage bus with the iframes 
 // =====================================================================
 function updateComponent() {
     clearPendingRequest();
@@ -329,7 +336,7 @@ function updateComponent() {
             renderPreview({ requestId: msg.type });
         } else if (msg.type === 'clearBoundary') {
             renderPreview({ requestId: msg.type });
-        } else if (msg.type === 'drawScenario') {     // vẽ đối tượng của kịch bản HYD đã có
+        } else if (msg.type === 'drawScenario') {     // draw the objects of an existing HYD scenario
             renderPreview({ requestId: msg.type, content: msg.content });
         } else if (msg.type === 'waqPoint' || msg.type === 'loadsPoint') {
             renderPreview({ requestId: msg.type, content: msg.content });
@@ -340,7 +347,7 @@ function updateComponent() {
         } else if (msg.type === 'showNote') {
             showNotes(msg.content);
             const proj = String(msg.content || '').split('/').pop();
-            if (proj) document.getElementById('project-chip-label').textContent = proj;
+            if (proj) document.getElementById('project-chip-label').textContent = projectLabel(proj);
         } else if (msg.type === 'updateUIState') {
             const { requestId } = msg.content;
             if (requestId && pendingRequests.has(requestId)) {
@@ -358,7 +365,7 @@ function updateComponent() {
 }
 
 // =====================================================================
-// 6. Múi giờ (dùng endpoint get_timezone sẵn có)
+// 6. Time zone (uses the existing get_timezone endpoint)
 // =====================================================================
 function bindTimezoneSearch() {
     const searchInput = document.getElementById('tz-search');

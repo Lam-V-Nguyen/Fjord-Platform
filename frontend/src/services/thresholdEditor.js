@@ -1,7 +1,7 @@
-// thresholdEditor.js – Xem / sửa ngưỡng cảnh báo (backend/src/dashboard_thresholds.json) từ Settings
-//  - Mở: nạp giá trị hiện tại từ /dashboard/thresholds
-//  - Sửa trực tiếp trong bảng; thêm / xoá chất (WAQ); nhóm "physics" cố định khoá
-//  - Save: kiểm tra phía trình duyệt rồi gửi {save: {...}} -> backend kiểm tra lại, ghi đè file (giữ bản .bak)
+// thresholdEditor.js – View / edit alert thresholds (backend/src/dashboard_thresholds.json) from Settings
+//  - Open: load the current values from /dashboard/thresholds
+//  - Edit directly in the table; add / remove substances (WAQ); the "physics" group has fixed keys
+//  - Save: validated in the browser, then {save: {...}} is sent -> the backend validates again and overwrites the file (keeps a .bak copy)
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const FIELDS = ['label', 'unit', 'direction', 'medium', 'high', 'category'];
@@ -17,7 +17,7 @@ async function post(body) {
 }
 
 function rowHtml(group, key, r = {}) {
-    const fixed = group === 'physics';                     // khoá physics do code dùng -> không đổi tên / xoá
+    const fixed = group === 'physics';                     // physics keys are used by the code -> cannot be renamed / removed
     const num = (k, v) => `<input type="number" step="any" data-f="${k}" value="${esc(v)}">`;
     const txt = (k, v, ph = '') => `<input type="text" data-f="${k}" value="${esc(v)}" placeholder="${ph}">`;
     return `<tr data-group="${group}">
@@ -48,7 +48,7 @@ function render(data) {
         `<div class="thr-error" id="thr-error"></div>`;
 }
 
-// Đọc bảng -> {substances, physics}; trả về danh sách lỗi
+// Read the table -> {substances, physics}; returns the list of errors
 function collect() {
     const out = { substances: {}, physics: {} }, errors = [];
     document.querySelectorAll('#thresholds-modal-body tr[data-group]').forEach((tr, i) => {
@@ -89,7 +89,7 @@ export function initThresholdEditor({ toast = () => {}, onSaved = () => {}, befo
             tb.lastElementChild.querySelector('[data-f="key"]').focus();
         }
     });
-    $('thr-reload').addEventListener('click', () => load(true));     // bỏ thay đổi chưa lưu, đọc lại file
+    $('thr-reload').addEventListener('click', () => load(true));     // discard unsaved changes, re-read the file
     $('thr-save').addEventListener('click', async () => {
         const { data, errors } = collect();
         if (errors.length) { showError(errors); return; }

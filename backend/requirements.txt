@@ -2,7 +2,12 @@
 # 2. Active:
 # (Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& c:\Envs\myfirstproject\Scripts\Activate.ps1)
 # python.exe -m pip install --upgrade pip
-# 3. Install: pip install -r .\backend\requirements.txt 
+# 3. Install: pip install -r .\backend\requirements.txt
+
+# python tools/manage_users.py import-json ..\backend\allowed_users.json --admin vlnguyen
+# python tools/manage_users.py list
+
+
 uvicorn==0.46.0
 fastapi==0.136.1
 msgpack==1.1.2
@@ -26,3 +31,12 @@ xugrid>=0.12
 numba-celltree>=0.2
 numba>=0.59
 ruamel.yaml==0.19.1
+# --- Security & operations (added for production)
+argon2-cffi>=23.1          # password hashing (Argon2id)
+cryptography>=42           # encrypts credentials.json
+psutil>=5.9                # stop / count simulation processes (Windows & Linux)
+python-dotenv>=1.0         # reads .env (already used by config.py)
+jinja2>=3.1                # page templates (route_page.py)
+# Testing (python -m pytest -q tests)
+pytest>=8.0
+httpx>=0.27                # required by FastAPI TestClient

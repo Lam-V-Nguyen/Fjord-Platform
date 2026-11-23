@@ -1,5 +1,5 @@
-// Biểu đồ cho Dashboard (Plotly): theme tối thống nhất, gauge, donut, chuỗi thời gian, profile.
-// Mọi hàm nhận id phần tử + dữ liệu đã chuẩn hoá từ /dashboard/*.
+// Dashboard charts (Plotly): unified dark theme, gauge, donut, time series, profile.
+// Every function takes an element id + data already normalised by /dashboard/*.
 
 const Plotly = window.Plotly;
 
@@ -135,7 +135,7 @@ export function renderStationSeries(id, payload, opts = {}) {
 }
 
 // Vertical profile
-// prof: {depth:[], values:[], label, unit, depth_unit, station, time}; compare: profile khác (tuỳ chọn)
+// prof: {depth:[], values:[], label, unit, depth_unit, station, time}; compare: another profile (optional)
 export function renderProfile(id, prof, opts = {}) {
     const node = el(id);
     if (!node) return;

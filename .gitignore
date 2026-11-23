@@ -229,3 +229,5 @@ __marimo__/
 /backend/src/lakes_database
 /test
 /Calibration
+# System data (user database, logs, development key) – never commit
+/backend/data/

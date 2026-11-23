@@ -1,21 +1,21 @@
 """
 Dashboard router
 ================
-API cho trang Overview - nội dung chính là KẾT QUẢ MÔ PHỎNG HYD / WAQ của dự án.
+API for the Overview page - the main content is the project's HYD / WAQ SIMULATION RESULTS.
 
-    POST /dashboard/projects    -> danh sách dự án của người dùng
-    POST /dashboard/catalog     -> thông tin kịch bản HYD/WAQ, biến bản đồ & trạm, trạm, nguồn, mốc thời gian
-    POST /dashboard/summary     -> KPI, gauges, trạng thái chất lượng nước, nguồn/xả, checks, phân bố rủi ro
-    POST /dashboard/alerts      -> cảnh báo (sắp xếp theo mức độ, thời gian)
-    POST /dashboard/mesh        -> lưới tính toán (GeoJSON WGS84, thứ tự = chỉ số ô)
-    POST /dashboard/field       -> giá trị một biến bản đồ tại một thời điểm & lớp (surface|bottom|average|<i>)
-    POST /dashboard/station     -> chuỗi thời gian tại trạm (biến his HYD/WAQ)
-    POST /dashboard/profile     -> profile thẳng đứng tại trạm, một thời điểm
-    POST /dashboard/layers      -> lớp ngữ cảnh: ranh giới hồ, lưu vực, sông, độ sâu mẫu, GIS dự án
-    POST /dashboard/thresholds  -> ngưỡng (reload=true để nạp lại file JSON và xoá cache)
+    POST /dashboard/projects    -> the user's projects
+    POST /dashboard/catalog     -> HYD/WAQ scenario info, map & station variables, stations, sources, time stamps
+    POST /dashboard/summary     -> KPIs, gauges, water quality status, sources/discharges, checks, risk distribution
+    POST /dashboard/alerts      -> alerts (sorted by severity, time)
+    POST /dashboard/mesh        -> computational mesh (GeoJSON WGS84, order = cell index)
+    POST /dashboard/field       -> values of one map variable at one time & layer (surface|bottom|average|<i>)
+    POST /dashboard/station     -> time series at a station (HYD/WAQ his variables)
+    POST /dashboard/profile     -> vertical profile at a station, at one time
+    POST /dashboard/layers      -> context layers: lake boundary, catchment, rivers, sample depths, project GIS
+    POST /dashboard/thresholds  -> thresholds (reload=true reloads the JSON file and clears the cache)
 
 Body chung: {"projectName": "...", "end": "YYYY-MM-DD[THH:MM]", "period": "1d|7d|30d|90d|all"}
-Cache: Redis (nếu có) hoặc bộ nhớ, khoá gồm "phiên bản" file kết quả -> tự làm mới khi chạy lại mô phỏng.
+Cache: Redis (if available) or memory; the key includes the result files' "version" -> refreshed automatically when a simulation is re-run.
 """
 import asyncio, gzip, json, os, time, traceback, msgpack
 from typing import Optional
@@ -75,6 +75,10 @@ async def dashboard_projects(request: Request, user=Depends(functions.basic_auth
         body = await _body(request)
         user_dir, _ = functions.project_definer("", user)
         projects = await asyncio.to_thread(dfn.list_projects, user_dir) if user != "admin" else ["demo"]
+        if user != "admin":                                   # + sample projects + projects shared with this user
+            projects = functions.public_refs() + projects
+            from services import auth_store
+            projects += [f'{s["owner"]}{functions.SHARE_SEP}{s["project"]}' for s in auth_store.list_shares(grantee=user)]
         current = _project(body, user) if body.get("projectName") else None
         return {"status": "ok", "user": user, "projects": projects, "current": current}
     except Exception as e: functions.error("/dashboard/projects", e)
@@ -89,7 +93,7 @@ async def dashboard_catalog(request: Request, user=Depends(functions.basic_auth)
 
 @router.post("/waq_scenarios")
 async def dashboard_waq_scenarios(request: Request, user=Depends(functions.basic_auth)):
-    """Danh sách kịch bản WAQ + kịch bản đang dùng (output/config/config.json) cho bộ chọn nhanh."""
+    """WAQ scenarios + the scenario in use (output/config/config.json) for the quick switch."""
     try:
         project = _project(await _body(request), user)
         data = await asyncio.to_thread(dres.waq_scenarios, project)
@@ -182,7 +186,7 @@ async def dashboard_layers(request: Request, user=Depends(functions.basic_auth))
     except Exception as e: functions.error("/dashboard/layers", e)
 
 async def _clear_summary_cache(request: Request):
-    """Ngưỡng đổi -> checks / WQI / cảnh báo phải tính lại."""
+    """Thresholds changed -> checks / WQI / alerts must be recomputed."""
     _MEMORY_CACHE.clear()
     redis = getattr(request.app.state, "redis", None)
     if redis is not None:
@@ -193,10 +197,11 @@ async def _clear_summary_cache(request: Request):
 
 @router.post("/thresholds")
 async def dashboard_thresholds(request: Request, user=Depends(functions.basic_auth)):
-    """Body: {} -> đọc | {reload: true} -> nạp lại file | {save: {substances, physics}} -> ghi đè file."""
+    """Body: {} -> read | {reload: true} -> reload the file | {save: {substances, physics}} -> overwrite the file."""
     try:
         body = await _body(request)
         if body.get("save") is not None:
+            functions.require_admin(request)        # thresholds are shared by all users -> admins only
             data = await asyncio.to_thread(dfn.save_thresholds, body["save"])
             await _clear_summary_cache(request)
         elif body.get("reload"):
@@ -211,13 +216,13 @@ async def dashboard_thresholds(request: Request, user=Depends(functions.basic_au
 async def dashboard_weather(request: Request, user=Depends(functions.basic_auth)):
     """
     Body: {projectName, sources: ["frost", "metno", "openmeteo"] | null, force: bool}. 
-    Cache theo nguồn trong dweather.
+    Cached per source in dweather.
     """
     try:
         body = await _body(request)
         project = _project(body, user)
         sources = body.get("sources")
-        if not sources and body.get("source") not in (None, "", "auto"):     # tương thích body cũ
+        if not sources and body.get("source") not in (None, "", "auto"):     # compatibility with the old body
             sources = [body["source"]]
         data = await asyncio.to_thread(dweather.get_weather, project, sources or None, bool(body.get("force")))
         return data if data.get("status") == "ok" else JSONResponse(data)
@@ -346,7 +351,7 @@ async def dashboard_movement_mask(request: Request,
 @router.get("/movement/frame/{i}")
 async def dashboard_movement_frame(i: int, request: Request, 
     project_name: str = Query(alias="projectName"), user=Depends(functions.basic_auth)):
-    """Khung i: int16 u | v | depth trên các ô hợp lệ (đọc thẳng frames.npy, không cần /init_movement)."""
+    """Frame i: int16 u | v | depth on the valid cells (reads frames.npy directly, no /init_movement needed)."""
     try:
         project = _project({"projectName": project_name}, user)
         return _bin(request, await asyncio.to_thread(dext.movement_frame_bytes, project, i))
@@ -355,8 +360,8 @@ async def dashboard_movement_frame(i: int, request: Request,
 @router.get("/wflow/velocity/{i}")
 async def dashboard_wflow_velocity(i: int, request: Request, project_name: str = Query(alias="projectName"),
     flow: str = Query(alias="flowName"), user=Depends(functions.basic_auth)):
-    """Trường vận tốc Wflow tại bước i: float16 (2, Nv) = u (đông), v (bắc) m/s trên các ô của mask; NaN = khô.
-    Đọc cache riêng của dashboard (viewer), không phải cache của Flow Estimation."""
+    """Wflow velocity field at step i: float16 (2, Nv) = u (east), v (north) m/s on the mask cells; NaN = dry.
+    Reads the dashboard's own cache (viewer), not the Flow Estimation cache."""
     try:
         model, meta, fc = await asyncio.to_thread(_wflow_ctx, project_name, flow, user)
         if not meta.get("velocity"):

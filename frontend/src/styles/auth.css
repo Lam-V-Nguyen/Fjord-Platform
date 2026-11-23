@@ -1,0 +1,53 @@
+/* auth.css – sign-in (/login) and user administration (/admin) pages; uses the theme.css variables */
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; }
+.auth-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; box-sizing: border-box;
+    background: radial-gradient(1200px 600px at 20% -10%, rgba(56, 189, 248, .10), transparent 60%),
+                radial-gradient(900px 500px at 110% 110%, rgba(52, 211, 153, .08), transparent 60%), var(--bg); }
+.auth-card { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--border-strong);
+    border-radius: 14px; padding: 28px 26px 22px; box-shadow: 0 20px 60px rgba(0, 0, 0, .35); box-sizing: border-box; }
+.auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.auth-brand img { width: 34px; height: 34px; }
+.auth-brand b { font-size: 16px; display: block; } .auth-brand small { color: var(--muted); font-size: 12px; }
+.auth-card h2 { margin: 0 0 4px; font-size: 18px; } .auth-card p.sub { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.auth-form { display: flex; flex-direction: column; gap: 12px; }
+.auth-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-2); }
+.auth-form input, .auth-form textarea, .admin-bar input, .admin-bar select, .admin-table select {
+    height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border-strong); box-sizing: border-box;
+    background: var(--bg-elev); color: var(--text); font: inherit; outline: none; }
+.auth-form textarea { height: 64px; padding: 8px 10px; resize: vertical; }
+.auth-form input:focus, .auth-form textarea:focus { border-color: var(--accent-2); }
+.auth-form .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.auth-form .btn { height: 38px; justify-content: center; font-weight: 600; }
+.auth-links { display: flex; justify-content: space-between; gap: 10px; margin-top: 14px; font-size: 12.5px; }
+.auth-links a { color: var(--accent-2); text-decoration: none; cursor: pointer; } .auth-links a:hover { text-decoration: underline; }
+.auth-msg { font-size: 12.5px; border-radius: 8px; padding: 8px 10px; display: none; }
+.auth-msg.show { display: block; } .auth-msg.err { background: var(--sev-high-soft); color: var(--sev-high); }
+.auth-msg.ok { background: var(--sev-low-soft); color: var(--sev-low); }
+.auth-hint { font-size: 11.5px; color: var(--muted); }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }     /* bot trap */
+.auth-foot { margin-top: 18px; text-align: center; font-size: 11.5px; color: var(--faint); }
+
+/* ------------------------------------------------ admin */
+.admin-page { max-width: 1180px; margin: 0 auto; padding: 22px 18px 40px; }
+.admin-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.admin-head h1 { font-size: 20px; margin: 0; flex: 1; }
+.admin-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+.admin-card h3 { margin: 0 0 10px; font-size: 14px; }
+.admin-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.admin-bar input { width: 170px; height: 32px; } .admin-bar select { height: 32px; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-table th, .admin-table td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.admin-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.admin-table select { height: 28px; font-size: 12.5px; }
+.admin-table .muted { color: var(--muted); font-size: 12px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 600; }
+.pill.active { background: var(--sev-low-soft); color: var(--sev-low); }
+.pill.pending { background: var(--sev-medium-soft); color: var(--sev-medium); }
+.pill.invited { background: var(--sev-info-soft); color: var(--sev-info); }
+.pill.disabled { background: var(--sev-high-soft); color: var(--sev-high); }
+.link-box { display: none; margin-top: 10px; padding: 10px; border-radius: 8px; background: var(--bg-elev);
+    border: 1px dashed var(--border-strong); font-size: 12.5px; word-break: break-all; }
+.link-box.show { display: block; }
+.link-box code { color: var(--accent-2); }
+.admin-actions { display: flex; gap: 6px; flex-wrap: wrap; }

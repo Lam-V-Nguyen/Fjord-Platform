@@ -36,8 +36,8 @@ def _gzip_response(request: Request, data: bytes, headers: dict):
     return Response(data, media_type="application/octet-stream", headers=headers)
 
 def _hyd_map_path(project_name, body):
-    """File HYD map dùng để dựng movement – CÙNG cách chọn với dashboard (dashboard_results.ProjectResults),
-    để Visualization và Overview hiển thị cùng một dữ liệu. body.mapPath (nếu có và tồn tại) được ưu tiên."""
+    """HYD map file used to build movement – SAME selection as the dashboard (dashboard_results.ProjectResults),
+    so Visualization and Overview show the same data. body.mapPath (if given and existing) takes priority."""
     mp = body.get("mapPath")
     if mp:
         cand = mp if os.path.isabs(mp) else os.path.join(PROJECT_ROOT, project_name, mp)
@@ -46,16 +46,16 @@ def _hyd_map_path(project_name, body):
     return ProjectResults(project_name).paths.get("hyd_map")
 
 def _n_layers(map_path):
-    """Số lớp sigma của HYD map (chiều nLayers / laydim), như dashboard."""
+    """Number of sigma layers in the HYD map (nLayers / laydim dimension), as in the dashboard."""
     import xarray as xr
     ds = xr.open_zarr(map_path) if map_path.lower().endswith(".zarr") or os.path.isdir(map_path) else xr.open_dataset(map_path)
     try: return next((int(n) for d, n in ds.sizes.items() if "nLayers" in d or d == "laydim"), 1)
     finally: ds.close()
 
 def _layer_for_file(layer, map_path):
-    """Khoá lớp của menu (layers_hyd.json: "-1" = Average, k = thứ tự TỪ MẶT XUỐNG) -> giá trị cho
-    init_data/reduce_layers ("mean", "surface", hoặc chỉ số lớp trong file, đếm TỪ ĐÁY LÊN).
-    Trước đây khoá được truyền thẳng nên bị đảo (Average -> lớp mặt, surface -> lớp đáy)."""
+    """Menu layer key (layers_hyd.json: "-1" = Average, k = order FROM THE SURFACE DOWN) -> value for
+    init_data/reduce_layers ("mean", "surface", or the layer index in the file, counted FROM THE BOTTOM UP).
+    Previously the key was passed through directly and was therefore inverted (Average -> surface layer, surface -> bottom layer)."""
     s = str(layer if layer is not None else "mean").strip().lower()
     if s in ("", "-1", "mean", "average", "avg"): return "mean"
     if s in ("surface", "top"): return "surface"

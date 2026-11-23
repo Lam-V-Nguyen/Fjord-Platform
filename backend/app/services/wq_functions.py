@@ -82,8 +82,8 @@ def segmentFinder(lat:float, lon:float, grid:gpd.GeoDataFrame) -> int:
     return idx + 1
 
 def boundaryNames(hyd_path: str, n_bnd: int) -> list[tuple[int, str]]:
-    """(số biên DELWAQ 1..n_bnd, tên nhóm) lấy từ file .bnd mà D-Flow FM ghi cạnh file .hyd.
-    Định dạng .bnd: <số nhóm>, rồi mỗi nhóm: <tên>, <số ô biên>, mỗi ô 1 dòng '<-id> x1 y1 x2 y2'."""
+    """(DELWAQ boundary number 1..n_bnd, group name) from the .bnd file D-Flow FM writes next to the .hyd file.
+    .bnd format: <number of groups>, then per group: <name>, <number of boundary cells>, one line per cell '<-id> x1 y1 x2 y2'."""
     names: dict[int, str] = {}
     folder, stem = os.path.dirname(hyd_path), os.path.splitext(os.path.basename(hyd_path))[0]
     cands = [os.path.join(folder, f"{stem}.bnd")] + sorted(glob.glob(os.path.join(folder, "*.bnd")))
@@ -272,7 +272,7 @@ def wqPreparation(parameters:dict, key:str, output_folder:str, includes_folder:s
         params_INC['B6_loads'] += [f"{segment} '{load[0]}' '' ''" for load, segment in valid]
         # Prepare for the config file B6_loads_aliases
         params_INC['B6_loads_aliases'] = [f"USEDATA_ITEM '{load[0]}' FORITEM\n'{load[0]}'" for load, _ in valid]
-        # Prepare for the config file B6_loads_data (không có tải lượng hợp lệ -> không include bảng)
+        # Prepare for the config file B6_loads_data (no valid loads -> the table is not included)
         if valid:
             tbl_path = os.path.normpath(os.path.join(output_folder, 'includes_deltashell', 'load_data_tables', f'{parameters["folder_name"]}.tbl'))
             temp_btl = tbl_path.replace(os.sep, "/")

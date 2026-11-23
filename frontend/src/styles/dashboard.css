@@ -1,5 +1,5 @@
 /* =====================================================================
-   dashboard.css – Trang Overview: KPI, bản đồ, panel bên phải, hàng dưới
+   dashboard.css – Overview page: KPIs, map, right panel, bottom row
    ===================================================================== */
 .overview {
     display: grid; gap: var(--gap); height: 100%; min-height: 620px;
@@ -66,7 +66,7 @@
 .tabs button { border: none; background: transparent; color: var(--muted); font-size: 11.5px; font-weight: 600; padding: 4px 9px; border-radius: 5px; }
 .tabs button.active { background: var(--panel-2); color: var(--accent); }
 
-/* Trạng thái tải / lỗi / trống */
+/* Loading / error / empty states */
 .skeleton { position: relative; overflow: hidden; }
 .skeleton::after {
     content: ""; position: absolute; inset: 0;
@@ -126,7 +126,7 @@
     color: var(--text-2); background: rgba(12, 22, 39, 0.8); padding: 3px 7px; border-radius: 5px; margin-bottom: 22px;
 }
 
-/* Marker tuỳ biến */
+/* Custom markers */
 .dash-marker {
     width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
     background: var(--c); color: #04101c; border: 2px solid rgba(255, 255, 255, .9);
@@ -140,7 +140,7 @@
 .popup-kv span:nth-child(odd) { color: var(--muted); }
 .popup-kv span:nth-child(even) { text-align: right; font-variant-numeric: tabular-nums; }
 
-/* Cột phải */
+/* Right column */
 .side-col { display: grid; grid-template-rows: minmax(150px, 1fr) auto; gap: var(--gap); min-height: 0; }
 .panel-heat .panel-body { padding: 0 12px 12px; display: flex; gap: 8px; }
 #heat-map { flex: 1; border-radius: 8px; min-height: 150px; overflow: hidden; }
@@ -160,7 +160,7 @@
 .bottom-row { display: grid; grid-template-columns: 1fr 1.25fr 0.95fr 1.15fr; gap: var(--gap); }
 .bottom-row .panel { height: 190px; }
 .bottom-row .panel-head { padding: 9px 12px 4px; }
-.bottom-row .panel-body { padding: 4px 12px 8px; overflow-y: auto; }   /* nội dung dài -> thanh cuộn */
+.bottom-row .panel-body { padding: 4px 12px 8px; overflow-y: auto; }   /* long content -> scrollbar */
 .bottom-row .panel-foot { padding: 0 12px 6px; }
 .bottom-row .panel-head > div:first-child { min-width: 0; }
 .bottom-row .panel-title, .bottom-row .panel-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -231,7 +231,7 @@
 .map-coords:empty { display: none; }
 
 /* =====================================================================
-   Nội dung mô phỏng HYD / WAQ
+   HYD / WAQ simulation content
    ===================================================================== */
 select {
     height: 28px; padding: 0 26px 0 9px; border-radius: 6px; font-size: 12px;
@@ -244,7 +244,7 @@ select option { background: var(--panel); color: var(--text); }
 .mini-selects { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .mini-selects select { height: 26px; font-size: 11.5px; max-width: 130px; }
 
-/* Bộ chọn biến trên bản đồ */
+/* Variable selector on the map */
 .field-picker {
     position: absolute; top: 12px; left: 56px; z-index: 900; display: flex; gap: 6px;
     padding: 4px; border-radius: 9px; background: rgba(12, 22, 39, 0.9); border: 1px solid var(--border-strong);
@@ -252,7 +252,7 @@ select option { background: var(--panel); color: var(--text); }
 .field-picker select { height: 28px; background-color: var(--panel); }
 .field-picker #field-var { min-width: 180px; }
 
-/* Thanh thời gian */
+/* Time bar */
 .time-bar {
     position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 900;
     width: min(560px, calc(100% - 360px)); min-width: 280px;
@@ -267,7 +267,7 @@ select option { background: var(--panel); color: var(--text); }
 .time-bar input[type=range] { flex: 1; accent-color: var(--accent); min-width: 80px; }
 .tb-label { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); white-space: nowrap; min-width: 118px; text-align: right; }
 
-/* Chú giải: thang màu của trường */
+/* Legend: colour scale of the field */
 .legend-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; color: var(--text-2); min-width: 0; }
 .legend-field .lf-title { font-weight: 650; color: var(--text); margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .legend-field .lf-bar { height: 9px; border-radius: 5px; }
@@ -277,7 +277,7 @@ select option { background: var(--panel); color: var(--text); }
 .panel-profile .panel-body { padding: 0 8px 8px; }
 #profile-chart { position: absolute; inset: 0 8px 6px 4px; }
 
-/* Thanh trạng thái chất lượng nước */
+/* Water quality status bar */
 .q-row { display: grid; grid-template-columns: 1fr 70px; gap: 4px 10px; align-items: center; font-size: 12.5px; }
 .q-row + .q-row { margin-top: 9px; }
 .q-name { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -288,7 +288,7 @@ select option { background: var(--panel); color: var(--text); }
 .q-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text-2); opacity: .55; border-radius: 1px; }
 .q-tick.med { background: var(--sev-medium); }
 
-/* Trạng thái trống */
+/* Empty state */
 .empty-card {
     display: none; grid-column: 1 / -1;
     margin: 0 auto; max-width: 760px; width: 100%; text-align: center;
@@ -328,7 +328,7 @@ select option { background: var(--panel); color: var(--text); }
 .legend-field .lf-mode button.active { color: var(--accent); border-color: rgba(52, 211, 153, .45); background: var(--accent-soft); }
 .overview.no-map .field-picker, .overview.no-map .time-bar { display: none; }
 
-/* Lớp bổ sung (movement, Wflow): mờ khi chưa có dữ liệu, xoay khi đang chuẩn bị */
+/* Extra layers (movement, Wflow): greyed out without data, spinning while being prepared */
 .layer-item.disabled { opacity: 0.38; cursor: not-allowed; }
 .layer-item.disabled:hover { background: transparent; }
 .layer-item.loading .layer-check {
@@ -340,7 +340,7 @@ select option { background: var(--panel); color: var(--text); }
 .legend-extra + .legend-extra { margin-top: 2px; }
 .movement-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
 
-/* ---------- Nút ⚙ & bảng cài đặt lớp bổ sung (Flow movement, Wflow) ---------- */
+/* ---------- ⚙ button & settings panel of the extra layers (Flow movement, Wflow) ---------- */
 .layer-gear {
     margin-left: auto; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px;
     background: transparent; color: var(--muted); font-size: 13px; line-height: 20px; cursor: pointer;
@@ -410,8 +410,8 @@ select option { background: var(--panel); color: var(--text); }
 .layer-settings.resizing .ls-scroll { pointer-events: none; }
 .ls-status { margin-top: 6px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ls-status:empty { display: none; }
-/* Khung bảng ⚙ không tự cuộn – chỉ phần nội dung (.ls-scroll) cuộn, để tay nắm resize luôn ở
-   góc dưới-phải (nếu cả bảng cuộn, tay nắm absolute sẽ trôi lên giữa cạnh phải). */
+/* The ⚙ panel frame does not scroll – only the content (.ls-scroll) scrolls, so the resize grip always stays in the
+   bottom-right corner (if the whole panel scrolled, the absolute grip would drift up to the middle of the right edge). */
 #layer-settings.layer-settings { overflow: hidden; display: flex; flex-direction: column; resize: none; }
 #layer-settings > .ls-head { flex: 0 0 auto; position: relative; }
 #layer-settings > .ls-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
@@ -428,13 +428,13 @@ select option { background: var(--panel); color: var(--text); }
 .panel-weather .panel-head { padding: 7px 12px 2px; align-items: center; }
 .panel-weather .panel-title { font-size: 13px; }
 .panel-weather .panel-sub { font-size: 11px; margin-top: 0; }
-/* Phụ đề = trạm thời tiết / điểm lưới đang lấy dữ liệu; cam khi đang dùng nguồn thay thế */
+/* Subtitle = weather station / grid point providing the data; orange when a fallback source is used */
 .panel-weather .panel-head > div:first-child { min-width: 0; flex: 1 1 auto; }
 #weather-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
 #weather-sub.warn { color: var(--sev-medium); }
 .panel-weather .mini-selects { flex-wrap: nowrap; flex: 0 0 auto; }
 .w-tile { position: relative; }
-/* Biến không đo được tại trạm -> giá trị từ nguồn mô hình (nhãn nhỏ ở góc ô) */
+/* Variable not measured at the station -> value from the model source (small label in the cell corner) */
 .w-tag {
     position: absolute; top: 2px; right: 3px; padding: 0 3px; border-radius: 3px; font-size: 8.5px; line-height: 12px;
     font-weight: 600; background: var(--sev-medium-soft); color: var(--sev-medium);
@@ -453,7 +453,7 @@ select option { background: var(--panel); color: var(--text); }
 .w-tile .w-label { font-size: 10px; line-height: 1.1; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .w-tile .w-value { font-size: 13.5px; line-height: 1.15; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .w-tile .w-value small { font-size: 10px; font-weight: 500; color: var(--muted); margin-left: 2px; }
-.weather-chart-wrap { position: relative; min-height: 0; overflow: hidden; }   /* không để nhãn trục tràn khỏi panel */
+.weather-chart-wrap { position: relative; min-height: 0; overflow: hidden; }   /* keep axis labels inside the panel */
 #weather-var { max-width: 200px; }
 #weather-chart { position: absolute; inset: 0; }
 .weather-note {
@@ -465,7 +465,7 @@ select option { background: var(--panel); color: var(--text); }
 .weather-note.warn { color: var(--sev-medium); opacity: 1; }
 .mini-selects .btn.small.icon-only { height: 26px; width: 26px; padding: 0; }
 
-/* Danh sách nguồn có ô tích (1 nguồn = riêng lẻ, nhiều nguồn = vẽ chồng) */
+/* Source list with checkboxes (1 source = single, several = overlaid) */
 .w-sources { position: relative; }
 .w-src-btn {
     height: 26px; font-size: 11.5px; padding: 0 24px 0 9px; border-radius: 7px; position: relative;
@@ -520,8 +520,8 @@ select option { background: var(--panel); color: var(--text); }
 .kpi-flag.sev-high { --c: var(--sev-high); }
 .kpi-flag.sev-medium { --c: var(--sev-medium); }
 
-/* Tên dài: cắt bằng "…" thay vì chồng lấn (hint đầy đủ do initAutoHints gắn khi rê chuột) */
-.panel-head > div:first-child { min-width: 0; flex: 1 1 auto; }       /* khối tiêu đề co lại, nhường chỗ ô chọn */
+/* Long names: cut with "…" instead of overlapping (full hint added on mouse-over by initAutoHints) */
+.panel-head > div:first-child { min-width: 0; flex: 1 1 auto; }       /* title block shrinks to make room for the select box */
 .panel-head > .mini-selects, .panel-head > .tabs { flex: 0 0 auto; }
 .monitor-grid > .monitor-cell { overflow: hidden; }
 .legend-row .lr-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

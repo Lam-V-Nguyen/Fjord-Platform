@@ -346,7 +346,7 @@ function compass(deg) {
 
 function expandFrame(compact) {
     const N = S.N, V = S.valid, nv = V.length, ND = S.ND;
-    if (compact.length === 3 * N) return compact;            // dữ liệu cũ (format 1)
+    if (compact.length === 3 * N) return compact;            // old data (format 1)
     if (compact.length !== 3 * nv) throw new Error(`Frame size ${compact.length} ≠ 3 × ${nv}`);
     const full = new Int16Array(3 * N).fill(ND);
     for (let c = 0; c < 3; c++) {
