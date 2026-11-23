@@ -1,11 +1,11 @@
 import os, json, chardet, asyncio, stat, time, re, shapely
-import shutil, base64, signal, subprocess, gc, traceback, logging, secrets as _secrets
+import shutil, base64, signal, subprocess, gc, traceback, logging, contextvars, secrets as _secrets
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from redis.asyncio.lock import Lock
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt, gaussian_filter
-from config import PROJECT_ROOT, COOKIE_NAME, SHOW_ERROR_DETAILS, MAX_SOLVER_PROCESSES
+from config import PROJECT_ROOT, COOKIE_NAME, SHOW_ERROR_DETAILS, MAX_SOLVER_PROCESSES, PUBLIC_PROJECTS, DATA_DIR
 from uuid import uuid4
 from shapely.geometry import Polygon, MultiPolygon
 import numpy as np, xarray as xr, pandas as pd
@@ -82,21 +82,32 @@ def current_user(request: Request):
     request.state.user = auth_store.session_user(request.cookies.get(COOKIE_NAME))
     return request.state.user
 
-def basic_auth(request: Request) -> str:
+_CURRENT_REQUEST: "contextvars.ContextVar[Request | None]" = contextvars.ContextVar("fjord_request", default=None)
+
+async def basic_auth(request: Request) -> str:
     """Keeps the OLD NAME so ~180 routes need no change: returns the session's username, 401 when not signed in.
-    (Previously: HTTP Basic + allowed_users.json.)"""
+    (Previously: HTTP Basic + allowed_users.json.)  Async on purpose: the request is stored in a context variable
+    that project_definer() reads to enforce read-only access to shared projects."""
     user = current_user(request)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    if not user.can_write and request.method not in ("GET", "HEAD") and not _viewer_allowed(request.url.path):
+    if not user.can_write and is_write_request(request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Read-only account (viewer)")
+    _CURRENT_REQUEST.set(request)
     return user.username
 
-# Viewer role: may only call read APIs (POST endpoints that do not write) – extend the list when needed
-_VIEWER_PREFIXES = ("/dashboard/", "/auth/", "/auth_check", "/get_timezone", "/get_config_files", "/load_",
-                    "/check_", "/get_", "/calibration_log_tail", "/plot_station")
-def _viewer_allowed(path: str) -> bool:
-    return path.startswith(_VIEWER_PREFIXES)
+# Read-only API: POST endpoints that only read results (dashboard, Visualization, status checks…).
+# Viewers and users with a 'view' share may call these; every other POST/PUT/DELETE counts as a write.
+_READ_PREFIXES = ("/dashboard/", "/auth/", "/auth_check", "/get_", "/load_", "/check_", "/calibration_log_tail",
+                  "/plot_station")
+_READ_ROUTES = {"/setup_database", "/select_project", "/select_meshes", "/select_thermocline", "/process_data",
+                "/initiate_options", "/check_condition", "/init_movement", "/close_movement", "/load_general_dynamic",
+                "/load_vector_dynamic", "/init_source", "/unstructure_grid_plot"}
+
+def is_write_request(request: Request | None) -> bool:
+    if request is None or request.method in ("GET", "HEAD", "OPTIONS"): return False
+    path = request.url.path
+    return not (path in _READ_ROUTES or path.startswith(_READ_PREFIXES))
 
 def require_admin(request: Request) -> str:
     user = current_user(request)
@@ -106,6 +117,12 @@ def require_admin(request: Request) -> str:
 
 # ---------------------------------------------------------------- safe project names
 _BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+SHARE_SEP = ":"          # a shared project is referenced as "<owner>:<project>" (":" is never part of a folder name)
+PUBLIC_OWNER = "public"  # sample projects: "public:<name>" -> PROJECT_ROOT/<name>, read only except for administrators
+
+def public_refs() -> list[str]:
+    """References of the sample projects that exist on disk, e.g. ['public:demo']."""
+    return [f"{PUBLIC_OWNER}{SHARE_SEP}{p}" for p in PUBLIC_PROJECTS if os.path.isdir(os.path.join(PROJECT_ROOT, p))]
 
 def safe_project_name(name) -> str:
     """Valid project name: no path characters, not '.'/'..', at most 100 characters. 400 otherwise."""
@@ -116,19 +133,88 @@ def safe_project_name(name) -> str:
         raise HTTPException(status_code=400, detail="Invalid project name")
     return name
 
-def project_definer(old_name, username='admin'):
-    """'<username>/<project>' (legacy account 'admin' -> shared demo project). The name is validated and the real
-    path must stay inside the user's folder -> blocks '../other_user/project'."""
-    if username == 'admin': new_name = 'demo'
+def split_project_ref(ref, username: str) -> tuple[str, str]:
+    """'<owner>:<project>' or '<project>' -> (owner, project); both validated."""
+    ref = "" if ref is None else str(ref).strip()
+    if SHARE_SEP in ref:
+        owner, project = ref.split(SHARE_SEP, 1)
+        owner = owner.strip().lower()
+        if not owner or owner in (".", "..") or _BAD_NAME.search(owner) or len(owner) > 64:
+            raise HTTPException(status_code=400, detail="Invalid project owner")
+        return owner, safe_project_name(project)
+    return username, safe_project_name(ref)
+
+def project_definer(old_name, username='admin', for_copy: bool = False):
+    """'<owner>/<project>' path relative to PROJECT_ROOT (legacy account 'admin' -> shared demo project).
+    - own project: '<project>' (or '<username>:<project>')
+    - shared project: '<owner>:<project>' -> allowed only when shared with `username`; a 'view' share
+      refuses write requests (403). The real path must stay inside the owner's folder (no '../').
+    - sample project: 'public:<name>' -> PROJECT_ROOT/<name>; everyone may read it, only administrators may change it
+      (for_copy=True: reading it as the SOURCE of a copy into the user's own folder is allowed).
+    Raises 400 / 403 HTTPException."""
+    if username == 'admin':
+        new_name = 'demo'
     else:
-        old_name = '' if old_name == '' else safe_project_name(old_name)
-        user_dir = os.path.realpath(os.path.join(PROJECT_ROOT, username))
-        target = os.path.realpath(os.path.join(user_dir, old_name))
-        if os.path.commonpath([user_dir, target]) != user_dir:
+        if old_name == '': owner, project = username, ''
+        else: owner, project = split_project_ref(old_name, username)
+        if owner == PUBLIC_OWNER:
+            if project not in PUBLIC_PROJECTS:
+                raise HTTPException(status_code=404, detail=f"Sample project '{project}' not found")
+            req = _CURRENT_REQUEST.get()
+            user = current_user(req) if req is not None else None
+            if is_write_request(req) and not for_copy and not (user is not None and user.is_admin):
+                raise HTTPException(status_code=403, detail="The sample project is read-only. "
+                                    "Copy it to your own projects to make changes.")
+            return project, f'{project}/{uuid4()}'
+        if owner != username:
+            from services import auth_store
+            access = auth_store.share_access(owner, project, username)
+            if access is None:
+                raise HTTPException(status_code=403, detail=f"Project '{owner}:{project}' is not shared with you")
+            if access == 'view' and is_write_request(_CURRENT_REQUEST.get()):
+                raise HTTPException(status_code=403, detail="Read-only shared project (view access)")
+        owner_dir = os.path.realpath(os.path.join(PROJECT_ROOT, owner))
+        target = os.path.realpath(os.path.join(owner_dir, project))
+        if os.path.commonpath([owner_dir, target]) != owner_dir:
             raise HTTPException(status_code=403, detail="Forbidden project path")
-        new_name = f'{username}/{old_name}'.rstrip('/')
+        new_name = f'{owner}/{project}'.rstrip('/')
     name_id = f'{new_name}/{uuid4()}'
     return new_name, name_id
+
+# ---------------------------------------------------------------- per-user view state of other people's projects
+def _viewer_of_other(project_path: str):
+    """The signed-in user when `project_path` (relative to PROJECT_ROOT) is a sample project or a project shared
+    with them – i.e. not their own; None otherwise (own project, administrators on samples, no request)."""
+    req = _CURRENT_REQUEST.get()
+    user = current_user(req) if req is not None else None
+    if user is None or user.username == 'admin': return None
+    owner = project_path.split('/')[0] if '/' in project_path else PUBLIC_OWNER
+    if owner == user.username or (owner == PUBLIC_OWNER and user.is_admin): return None
+    return user
+
+def user_config_path(project_path: str) -> str:
+    """config.json that stores the selected WAQ scenario (+ scanned variables) of a project.
+    Owners (and administrators on sample projects) use the project's own output/config/config.json. Anyone else
+    – sample or shared project – gets a private copy under DATA_DIR/user_state/<user>/, so choosing another WAQ
+    scenario does not change what other users see. The copy starts from the project's current config."""
+    base = os.path.join(PROJECT_ROOT, project_path, 'output', 'config', 'config.json')
+    user = _viewer_of_other(project_path)
+    if user is None: return base
+    path = os.path.join(DATA_DIR, 'user_state', user.username, project_path.replace('/', '__'), 'config.json')
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(base) and os.path.getsize(base) > 0: shutil.copyfile(base, path)
+    return path
+
+def cache_key(project_path: str) -> str:
+    """Key of the Redis hash / in-memory project cache: per user for sample and shared projects (see user_config_path)."""
+    user = _viewer_of_other(project_path)
+    return project_path if user is None else f"{project_path}#{user.username}"
+
+def require_owner(project_path: str, username: str):
+    """Deleting / renaming / copying INTO a project is for its owner only (not for users it is shared with)."""
+    if username != 'admin' and project_path.split('/')[0] != username:
+        raise HTTPException(status_code=403, detail="Only the owner of the project can do this")
 
 def project_reader(user_name, project_name):
     output_dir = os.path.join(PROJECT_ROOT, user_name, project_name, 'output')
@@ -140,7 +226,7 @@ def project_reader(user_name, project_name):
         raise ValueError(
             f"Project '{project_name}' does not contain enough HYD configuration files."
         )
-    config_path = os.path.join(output_dir, 'config', 'config.json')
+    config_path = user_config_path(os.path.join(user_name, project_name).replace(os.sep, '/').strip('/'))
     waq_name, waq_model = '', ''
     if os.path.exists(config_path):
         with open(config_path, 'r', encoding=encoding_detect(config_path)) as f:

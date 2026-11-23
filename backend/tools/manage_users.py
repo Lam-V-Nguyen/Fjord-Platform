@@ -14,7 +14,7 @@ import argparse, getpass, json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", "app"), os.path.join(HERE, "..")]
 from config import ALLOWED_USERS            # noqa: E402
-from services import auth_store as store    # noqa: E402
+from services import auth_store as store, constants    # noqa: E402
 
 def ask_password(username: str) -> str:
     while True:
@@ -31,8 +31,8 @@ def main():
     a = sub.add_parser("import-json"); a.add_argument("path", nargs="?", default=ALLOWED_USERS)
     a.add_argument("--admin", action="append", default=[], help="legacy account that becomes admin (repeatable)")
     a = sub.add_parser("set-password"); a.add_argument("username")
-    a = sub.add_parser("set-role"); a.add_argument("username"); a.add_argument("role", choices=store.ROLES)
-    a = sub.add_parser("set-status"); a.add_argument("username"); a.add_argument("status", choices=store.STATUSES)
+    a = sub.add_parser("set-role"); a.add_argument("username"); a.add_argument("role", choices=constants.ROLES)
+    a = sub.add_parser("set-status"); a.add_argument("username"); a.add_argument("status", choices=constants.STATUSES)
     sub.add_parser("list")
     args = ap.parse_args()
     store.init_db()

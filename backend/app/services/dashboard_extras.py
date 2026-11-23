@@ -1,21 +1,21 @@
 """
 dashboard_extras.py
 ===================
-Hai lớp bản đồ bổ sung cho Dashboard, dùng lại dữ liệu & hàm sẵn có của nền tảng:
+Two extra map layers for the Dashboard, reusing the platform's existing data & functions:
 
-CACHE RIÊNG CỦA DASHBOARD: dashboard KHÔNG đọc/ghi cache của công cụ Visualization hay Flow Estimation,
-không dùng khoá hay bộ nhớ đệm của movement_router / flow_router. Đổi độ phân giải, lớp hay dựng lại
-ở dashboard không ảnh hưởng tới các công cụ đó và ngược lại (đổi lại: tốn thêm dung lượng đĩa).
+DASHBOARD-OWN CACHE: the dashboard does NOT read/write the caches of the Visualization or Flow Estimation tools,
+and does not use the locks or memory caches of movement_router / flow_router. Changing resolution, layer or rebuilding
+in the dashboard does not affect those tools and vice versa (trade-off: more disk space).
 
-1) MOVEMENT (dòng chảy dạng hạt, từ kết quả HYD)
+1) MOVEMENT (particle flow, from HYD results)
    Cache: <project>/output/movement/{meta.json, frames.npy, mask.npy, domain.geojson}
-   (công cụ Visualization dùng <project>/output/movement/). Dựng bằng movement_functions.init_data
-   từ file HYD map của dự án; frontend đọc qua GET /dashboard/movement/{mask,frame/{i}}.
+   (the Visualization tool uses <project>/output/movement/). Built with movement_functions.init_data
+   from the project's HYD map file; the frontend reads it via GET /dashboard/movement/{mask,frame/{i}}.
 
-2) WFLOW (kết quả sau khi chạy mô hình Wflow)
-   Kết quả: <project>/flows/<flow>/wflow_model/run_default/output.nc (chỉ đọc, dùng chung)
-   Cache: <project>/flows/<flow>/wflow_model/viewer/ (công cụ Flow Estimation dùng viewer/).
-   Dựng bằng flow_connection.build_cache(..., view_dir=DASH_VIEW_DIR).
+2) WFLOW (results after running the Wflow model)
+   Results: <project>/flows/<flow>/wflow_model/run_default/output.nc (read only, shared)
+   Cache: <project>/flows/<flow>/wflow_model/viewer/ (the Flow Estimation tool uses viewer/).
+   Built with flow_connection.build_cache(..., view_dir=DASH_VIEW_DIR).
 
 """
 from __future__ import annotations

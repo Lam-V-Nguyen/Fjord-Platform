@@ -1,7 +1,7 @@
-// Danh mục các công cụ (widget) của nền tảng.
-// Thay thế chuỗi if/else trong mainManager cũ và menu hover (mainMenu.html):
-// mỗi mục khai báo id, tiêu đề, file HTML (iframe), kích thước widget trên Gridstack và icon.
-// Sidebar mới được sinh tự động từ danh mục này.
+// Catalogue of the platform's tools (widgets).
+// Replaces the if/else chain in the old mainManager and the hover menu (mainMenu.html):
+// each entry declares the id, title, HTML file (iframe), Gridstack widget size and icon.
+// The new sidebar is generated automatically from this catalogue.
 
 export const TOOL_GROUPS = [
     {
@@ -61,13 +61,13 @@ export function getTool(id) {
 
 export function allTools() { return ALL.slice(); }
 
-// Nhóm chứa công cụ (để lấy icon/tên nhóm khi công cụ đứng riêng, vd. nút nhanh)
+// Group containing the tool (for the group icon/name when the tool stands alone, e.g. quick buttons)
 export function groupOf(id) {
     return TOOL_GROUPS.find(g => g.tools.some(t => t.id === id)) || null;
 }
 
-// Nhãn hiển thị khi công cụ đứng ngoài nhóm của nó:
-// 'label' nếu có, nếu không thì 'short' kèm tên nhóm khi trùng với công cụ khác, cuối cùng là 'title'.
+// Label shown when a tool appears outside its group:
+// 'label' if present, else 'short' plus the group name when it clashes with another tool, finally 'title'.
 export function standaloneLabel(tool) {
     if (tool.label) return tool.label;
     const short = tool.short || tool.title;
@@ -76,5 +76,5 @@ export function standaloneLabel(tool) {
     return duplicates && g ? `${short} (${g.title})` : short;
 }
 
-// Nút nhanh trên Workspace trống, theo thứ tự quy trình mô hình
+// Quick buttons on the empty Workspace, in modelling-workflow order
 export const QUICK_TOOLS = ['data-download', 'preparation-hyd', 'grid-generation', 'new-hyd', 'new-waq', 'flow-preparation', 'visualization'];
