@@ -16,8 +16,8 @@ def client(tmp_path_factory):
     os.environ.update(PROJECT_DES=str(tmp), ENV="development", REQUIRE_REDIS="false")
     from fastapi import APIRouter, Depends, FastAPI, Request
     from fastapi.testclient import TestClient
-    import config; importlib.reload(config)
-    from services import auth_store, auth_router, security, functions
+    import backend.app.config; importlib.reload(backend.app.config)
+    from backend.app.services import auth_store, auth_router, security, functions
     for m in (auth_store, functions, auth_router, security): importlib.reload(m)
     auth_store.init_db()
     app = FastAPI(); security.install(app); app.include_router(auth_router.router)
@@ -37,9 +37,11 @@ def client(tmp_path_factory):
             return {"ok": True}
         except Exception as e: functions.error("/dashboard/read", e)
     app.include_router(r, dependencies=[Depends(functions.basic_auth)])
-    auth_store.create_user("boss", email="boss@x.no", password="Correct-horse-9", role="admin", status="active",
-                           allow_reserved=True)
-    import config as cfg
+    auth_store.create_user(
+        "boss", email="boss@x.no", password="Correct-horse-9", 
+        role="admin", status="active", allow_reserved=True
+    )
+    import backend.app.config as cfg
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "boss", "lake1"), exist_ok=True)
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "demo"), exist_ok=True)          # sample project
     return TestClient(app, base_url="http://localhost:8000"), auth_store
@@ -139,11 +141,12 @@ def test_per_user_waq_choice_on_sample_and_shared_projects(client):
     """Choosing a WAQ scenario on someone else's project (sample / shared) is stored per user."""
     import json, types
     _, store = client
-    from services import functions
-    import config as cfg
+    from backend.app.services import functions
+    import backend.app.config as cfg
     def as_user(name):
-        req = types.SimpleNamespace(state=types.SimpleNamespace(user=store.get_user(name)), method="POST",
-                                    url=types.SimpleNamespace(path="/setup_database"))
+        req = types.SimpleNamespace(
+            state=types.SimpleNamespace(user=store.get_user(name)), method="POST", url=types.SimpleNamespace(path="/setup_database")
+        )
         functions._CURRENT_REQUEST.set(req)
     base = os.path.join(cfg.PROJECT_ROOT, "demo", "output", "config", "config.json")
     os.makedirs(os.path.dirname(base), exist_ok=True)
