@@ -255,7 +255,7 @@ async function sourceManagement() {
         const data = getDataFromTable(obj.sourceTable, true);
         if (data.rows.length === 0) {alert('No data found in the table.'); return;}
         try {
-            const content = [[lat, lon, '', '', ''], data.columns, ...data.rows];
+            const content = [[lat, lon, '', ''], data.columns, ...data.rows];
             const csv = content.map(row => row.join(',')).join('\n');
             await saveFileSmart(csv, `source_${Number(lat).toFixed(4)}_${Number(lon).toFixed(4)}.csv`);
             alert(`Save file successfully.`);
