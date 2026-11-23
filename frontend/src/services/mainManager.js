@@ -11,7 +11,7 @@ import { pdfOpener, projectModifier } from "./projectManager.js";
 import { initGrid, addWidget, loadWidget, saveWidget, hasWidget } from "./widgetFunctions.js";
 import { startLoading, stopLoading, jsonLoader } from "./commonFunctions.js";
 import { setPendingRequest, clearPendingRequest, origin,
-    getLastProject, getLastTimeZone, setLastTimeZone 
+    getLastProject, setLastProject, getLastTimeZone, setLastTimeZone
 } from "./constant.js";
 import { renderPreview, currentMap } from "./mapManager.js";
 import { TOOL_GROUPS, QUICK_TOOLS, getTool, groupOf, standaloneLabel } from "./toolRegistry.js";
@@ -48,8 +48,11 @@ async function login() {
     currentTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (getLastTimeZone() === '') { setLastTimeZone(currentTimeZone); }
     try {
-        const data = await jsonLoader('auth_check', {});
+        const data = await jsonLoader('auth_check', { projectName: getLastProject() });
         userName = data.user === 'admin' ? '' : data.user;
+        // The last project saved in this browser no longer exists for this user (deleted, renamed, saved by
+        // another account on the same browser…) -> go back to the sample project instead of using a missing one
+        if (data.project_exists === false) setLastProject('public:demo');
     } catch (e) {
         console.error('auth_check failed', e); userName = '';
     }
