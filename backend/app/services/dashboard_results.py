@@ -1,19 +1,19 @@
 """
-Đọc kết quả mô phỏng THỦY ĐỘNG LỰC (HYD, D-Flow FM) và CHẤT LƯỢNG NƯỚC (WAQ, D-Water Quality)
-của một dự án cho Dashboard. Đây là nguồn dữ liệu CHÍNH của trang Overview.
+Reads the HYDRODYNAMIC (HYD, D-Flow FM) and WATER QUALITY (WAQ, D-Water Quality) simulation results
+of a project for the Dashboard. This is the MAIN data source of the Overview page.
 
-Quy ước file (giống functions.project_reader):
+File conventions (same as functions.project_reader):
     <project>/output/HYD/<name>_his.zarr, <name>_map.zarr
-    <project>/output/WAQ/<waq>_his.zarr,  <waq>_map.zarr   (+ <waq>.json, hoặc output/config/config.json)
+    <project>/output/WAQ/<waq>_his.zarr,  <waq>_map.zarr   (+ <waq>.json, or output/config/config.json)
 
-Tự nhận dạng chiều:
-    thời gian : 'time' (HYD) | 'nTimesDlwq' (WAQ)
-    trạm      : 'stations' | 'nStations'
-    ô lưới    : '*nFaces*'
-    lớp       : 'laydim' | '*nLayers*' | dim còn lại
-Thứ tự lớp: HYD (sigma) đánh số từ đáy -> mặt (mặt = -1); WAQ (DELWAQ) từ mặt -> đáy (mặt = 0).
+Automatic dimension detection:
+    time      : 'time' (HYD) | 'nTimesDlwq' (WAQ)
+    station   : 'stations' | 'nStations'
+    face      : '*nFaces*'
+    layer     : 'laydim' | '*nLayers*' | remaining dim
+Layer order: HYD (sigma) numbered bottom -> surface (surface = -1); WAQ (DELWAQ) surface -> bottom (surface = 0).
 
-Mọi Dataset/lưới được cache theo (đường dẫn, mtime) nên mở lại rất nhanh.
+All Datasets/meshes are cached by (path, mtime), so reopening is very fast.
 """
 from __future__ import annotations
 import json, math, os, threading, traceback
@@ -110,7 +110,7 @@ def _to_wgs84(x, y, crs):
         return x, y
 
 def _face_geometry(ds: xr.Dataset):
-    """(node_x, node_y, faces) – faces: (nFaces, nMax) chỉ số nút 0-based, -1 = trống; None nếu file không có."""
+    """(node_x, node_y, faces) – faces: (nFaces, nMax) 0-based node indices, -1 = empty; None if the file has none."""
     for nxk, nyk, fk in (("mesh2d_node_x", "mesh2d_node_y", "mesh2d_face_nodes"),
                          ("NetNode_x", "NetNode_y", "NetElemNode")):
         if fk in ds.variables and nxk in ds.variables:
@@ -129,8 +129,8 @@ def _vertex_mean(geom):
 
 def _face_centroids(ds: xr.Dataset):
     """Face centres in the file's own coordinates (no reprojection), or None.
-    Ưu tiên trung bình đỉnh (cách tính GIỐNG NHAU cho mọi file). mesh2d_face_x/y của D-Flow FM là TÂM ĐƯỜNG
-    TRÒN NGOẠI TIẾP (có thể nằm ngoài tam giác) – không so được với trung bình đỉnh của file khác."""
+    Prefer the vertex mean (computed THE SAME WAY for every file). D-Flow FM mesh2d_face_x/y are the CIRCUMCIRCLE
+    CENTRES (may lie outside the triangle) – not comparable with the vertex mean of another file."""
     geom = _face_geometry(ds)
     if geom is not None: return _vertex_mean(geom)
     for xk, yk in (("mesh2d_face_x", "mesh2d_face_y"), ("FlowElem_xcc", "FlowElem_ycc")):
@@ -139,7 +139,7 @@ def _face_centroids(ds: xr.Dataset):
     return None
 
 def _same_frame(display_ds: xr.Dataset, value_ds: xr.Dataset, a, b):
-    """Đưa hai bộ toạ độ về cùng hệ: nếu khác CRS (hoặc một file độ, một file mét) -> cả hai về WGS84."""
+    """Bring two coordinate sets into the same system: different CRS (or one file in degrees, one in metres) -> both to WGS84."""
     ca, cb = _crs_of(display_ds), _crs_of(value_ds)
     geo = lambda xy: np.nanmax(np.abs(xy[0])) <= 360 and np.nanmax(np.abs(xy[1])) <= 90
     if (ca and cb and ca != cb) or geo(a) != geo(b):
@@ -148,7 +148,7 @@ def _same_frame(display_ds: xr.Dataset, value_ds: xr.Dataset, a, b):
     return (np.asarray(a[0], float), np.asarray(a[1], float)), (np.asarray(b[0], float), np.asarray(b[1], float))
 
 def _vertex_keys(geom, q):
-    """Khoá hình học của mỗi ô: tập toạ độ đỉnh (lượng tử hoá theo q, sắp xếp) – không phụ thuộc thứ tự ô/đỉnh."""
+    """Geometric key of each cell: its set of vertex coordinates (quantised by q, sorted) – independent of cell/vertex order."""
     nx, ny, faces = geom
     qx, qy = np.round(nx / q).astype(np.int64), np.round(ny / q).astype(np.int64)
     return [tuple(sorted(zip(qx[r[r >= 0]].tolist(), qy[r[r >= 0]].tolist()))) for r in faces]
@@ -156,13 +156,13 @@ def _vertex_keys(geom, q):
 def face_order(display_ds: xr.Dataset, value_ds: xr.Dataset):
     """
     Cell order of `value_ds` (e.g. DELWAQ map, written on the waqgeom grid) relative to the mesh drawn
-    from `display_ds` (e.g. D-Flow FM map). Returns idx (len = số ô hiển thị) so that values_of_value_ds[..., idx]
+    from `display_ds` (e.g. D-Flow FM map). Returns idx (len = number of display cells) so that values_of_value_ds[..., idx]
     is in display order, or None when both files already use the same order.
-    Các bước (dừng ở bước đầu tiên thành công):
-      1. Khớp CHÍNH XÁC theo toạ độ đỉnh của ô (không phụ thuộc thứ tự ô, thứ tự đỉnh, cách tính tâm)
-      2. Khớp 1–1 theo tâm ô (trung bình đỉnh, cùng cách tính cho cả hai file) trong 1/4 kích thước ô
-      3. Lưới WAQ gộp / khác lưới: mỗi ô hiển thị lấy ô WAQ CHỨA tâm của nó (thiếu thì ô gần nhất trong 2 ô)
-    Raises chỉ khi hai lưới gần như không chồng lên nhau.
+    Steps (stops at the first one that succeeds):
+      1. EXACT match on the cell vertex coordinates (independent of cell order, vertex order and centre definition)
+      2. 1–1 match on cell centres (vertex mean, computed the same way for both files) within 1/4 of the cell size
+      3. Aggregated / different WAQ mesh: each display cell takes the WAQ cell CONTAINING its centre (else the nearest of 2 cells)
+    Raises only when the two meshes barely overlap.
     """
     gd, gv = _face_geometry(display_ds), _face_geometry(value_ds)
     cd, cv = _face_centroids(display_ds), _face_centroids(value_ds)
@@ -171,9 +171,9 @@ def face_order(display_ds: xr.Dataset, value_ds: xr.Dataset):
     cd, cv = _same_frame(display_ds, value_ds, cd, cv)
     n_d, n_v = len(cd[0]), len(cv[0])
     ext = max(np.nanmax(cd[0]) - np.nanmin(cd[0]), np.nanmax(cd[1]) - np.nanmin(cd[1]), 1e-12)
-    cell = ext / max(np.sqrt(n_v), 1.0)                      # kích thước ô điển hình
+    cell = ext / max(np.sqrt(n_v), 1.0)                      # typical cell size
     ident = np.arange(n_d)
-    # 1. Khớp theo đỉnh
+    # 1. Match on vertices
     if gd is not None and gv is not None:
         (dx, dy), (vx, vy) = _same_frame(display_ds, value_ds, gd[:2], gv[:2])
         q = 1e-5 * ext
@@ -193,12 +193,12 @@ def face_order(display_ds: xr.Dataset, value_ds: xr.Dataset):
     pd_ = np.column_stack([np.nan_to_num(cd[0]), np.nan_to_num(cd[1])])
     dist, j = tree.query(pd_)
     order = vid[j].astype(np.int64)
-    # 2. 1–1 theo tâm ô
+    # 2. 1–1 on cell centres
     if n_d == n_v and len(np.unique(order)) == n_d and np.nanmax(dist) < 0.25 * cell:
         if (order == ident).all(): return None
         print(f"[results] WAQ cells matched to the HYD mesh by centroids ({int((order != ident).sum())} of {n_d} reordered)")
         return order
-    # 3. Ô chứa tâm (lưới gộp / khác lưới)
+    # 3. Cell containing the centre (aggregated / different mesh)
     inside = np.zeros(n_d, bool)
     if gv is not None:
         try:
@@ -231,15 +231,15 @@ def bottom_index(source: str, n_layers: int) -> int:
     return 0 if source == "hyd" else n_layers - 1
 
 def _edge_layer(da, ld: str, source: str, which: str):
-    """Lớp mặt/đáy CÓ GIÁ TRỊ tại từng điểm & thời điểm.
-    z-layers (Layertype = 2): lớp dưới đáy / trên mặt nước là NaN -> chỉ số cố định (0 hoặc n-1) cho NaN
-    ở hầu hết trạm -> Stratification ΔT, nhiệt độ đáy rỗng."""
+    """Surface/bottom layer THAT HAS VALUES at each point & time.
+    z-layers (Layertype = 2): layers below the bed / above the water surface are NaN -> a fixed index (0 or n-1) gives NaN
+    at most stations -> empty Stratification ΔT and bottom temperature."""
     n = da.sizes[ld]
     fixed = bottom_index(source, n) if which == "bottom" else surface_index(source, n)
     try:
         idx = xr.DataArray(np.arange(n), dims=ld)
         pos = idx.where(da.notnull())
-        pos = pos.min(ld) if fixed == 0 else pos.max(ld)        # tìm từ phía chỉ số cố định vào trong
+        pos = pos.min(ld) if fixed == 0 else pos.max(ld)        # search inward from the fixed-index side
         pos = pos.fillna(fixed).astype(int).compute()
         return da.isel({ld: pos})
     except Exception:
@@ -415,7 +415,7 @@ class ProjectResults:
             y = np.asarray(ds["station_y"].values, float).ravel()
             candidates = []
             if np.nanmax(np.abs(x)) <= 180 and np.nanmax(np.abs(y)) <= 90:
-                candidates.append((x, y))                         # đã là độ
+                candidates.append((x, y))                         # already in degrees
             for crs in dict.fromkeys(c for c in (_crs_of(ds), _crs_of(self.ds("waq_map")),
                 _crs_of(self.ds("hyd_map")), _crs_of(self.ds("hyd_his"))) if c):
                 lo, la = _to_wgs84(x, y, crs)
@@ -795,8 +795,8 @@ class ProjectResults:
         except Exception: return False
 
 def waq_scenarios(project_name: str) -> dict:
-    """Kịch bản WAQ có kết quả (output/WAQ/<name>_his|_map.zarr|.nc + <name>.json) để chọn nhanh trên dashboard.
-    hyd_params = [HYD his, HYD map] – cùng tham số mà Visualization gửi cho /setup_database."""
+    """WAQ scenarios with results (output/WAQ/<name>_his|_map.zarr|.nc + <name>.json) for the quick switch on the dashboard.
+    hyd_params = [HYD his, HYD map] – the same parameters Visualization sends to /setup_database."""
     pr = ProjectResults(project_name)
     out = []
     if os.path.isdir(pr.waq_dir):
@@ -805,7 +805,7 @@ def waq_scenarios(project_name: str) -> dict:
                         if f.endswith(("_his.zarr", "_map.zarr", "_his.nc", "_map.nc"))})
         for n in names:
             meta = os.path.join(pr.waq_dir, f"{n}.json")
-            if not os.path.exists(meta): continue                 # Visualization cũng chỉ liệt kê kịch bản có <name>.json
+            if not os.path.exists(meta): continue                 # Visualization also lists only scenarios that have <name>.json
             try: model = json.load(open(meta, encoding="utf-8")).get("model_type", "")
             except Exception: model = ""
             out.append({"name": n, "model_type": model,

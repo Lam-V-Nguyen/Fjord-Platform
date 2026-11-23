@@ -51,7 +51,7 @@ const obj = {
 };
 
 setupTabs(document); projectOptions(); waqManager();
-// Vẽ điểm quan trắc / tải lượng trong bảng lên bản đồ (icon waq_obs.png / waq_loads.png như khi chọn điểm)
+// Draw the observation / load points from the table on the map (icons waq_obs.png / waq_loads.png, as when picking points)
 function drawWaqPoints() {
     window.parent.postMessage({ type: 'waqPoint', content: getDataFromTable(obj.obsPointTable, true) }, origin);
     window.parent.postMessage({ type: 'loadsPoint', content: getDataFromTable(obj.loadsPointTable, true) }, origin);

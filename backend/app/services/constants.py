@@ -261,7 +261,7 @@ OM_HOURLY = ("precipitation,temperature_2m,relative_humidity_2m,dew_point_2m,sho
 # Weather Live
 WEATHER_USER_AGENT = "HydroAI-Water-Platform/1.0 (+https://github.com/Lam-V-Nguyen/HydroAI-Fjord-Platform)"
 WEATHER_STATION_COUNT = 15
-WEATHER_FALLBACK_ORDER = ("metno", "openmeteo")   # nguồn thay thế khi không có số đo trạm
+WEATHER_FALLBACK_ORDER = ("metno", "openmeteo")   # fallback sources when there are no station measurements
 WEATHER_PAST_HOURS, WEATHER_FORECAST_HOURS, WEATHER_TIMEOUT = 48, 48, 20
 WEATHER_VARIABLES = [
     {"key": "temperature", "label": "Air temperature", "short": "Temperature", "unit": "°C", "icon": "temperature", "decimals": 1},
@@ -367,9 +367,9 @@ SOIL_DEPTH = {
 SOIL_DEPTH_REVERSE = {v: k for k, v in SOIL_DEPTH.items()}
 
 # Pollution
-GRID_CELLS = 320          # số ô lưới hạt theo cạnh dài của miền
-SAMPLE_STEPS = 24         # số bước thời gian lấy mẫu để tính thang cố định
-FILL_LIMIT = -998.0        # DELWAQ ghi -999 cho ô không hoạt động (z-layers) – không phải nồng độ
+GRID_CELLS = 320          # number of particle grid cells along the longest side of the domain
+SAMPLE_STEPS = 24         # number of sampled time steps used to compute the fixed scale
+FILL_LIMIT = -998.0        # DELWAQ writes -999 for inactive cells (z-layers) – not a concentration
 
 # YAML
 TARGET_UNITS = {
@@ -526,6 +526,6 @@ FRIENDLY = {
         "Cannot triangulate the polygon: it has duplicate/overlapping vertices or zero-length edges, "
         "or the scale factor is too small. Reset the vertexes or increase the scale factor and try again.",
 }
-# Lớp nền (lake, catchment, rivers, bathymetry): thiếu file -> None / [] -> dashboard ẩn lựa chọn tương ứng.
-# Cache theo (đường dẫn, mtime) để file được thêm / sửa / xoá sau khi server chạy vẫn được nhận ra.
+# Base layers (lake, catchment, rivers, bathymetry): missing file -> None / [] -> the dashboard hides the matching option.
+# Cached by (path, mtime) so files added / edited / deleted after the server has started are still picked up.
 CONTEXT_LAYERS = { "lake": "lake.geojson", "catchment": "catchment.geojson", "river": "river.geojson", "bathymetry": "depth.csv" }

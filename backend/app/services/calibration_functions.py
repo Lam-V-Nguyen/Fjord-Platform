@@ -1162,7 +1162,7 @@ def surrogate_model(processes: dict, key: str, df: pd.DataFrame,
         fc(log_path, "Building surrogate model..."); fc(log_path, "="*50)
         col_name = df.columns.tolist()[-1]
         X, y = df.drop(columns=[col_name]), df[col_name].to_numpy(float)
-        # Tham số thang log -> log10 trước khi chuẩn hoá
+        # Log-scale parameters -> log10 before normalisation
         log_cols = []
         params_path = os.path.join(directory, "parameters.json")
         if os.path.exists(params_path):

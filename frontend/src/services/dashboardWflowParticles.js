@@ -1,19 +1,19 @@
-// Hạt dòng chảy mặt cho lớp "Wflow results" – TÁCH RIÊNG khỏi hạt HYD (dashboardMovement.js).
-// Thuật toán chuyển nguyên từ công cụ Flow Estimation (flowRunner.js) để cho kết quả giống hệt:
-//  - vận tốc velocity.npy (float16, 2 × Nv: u đông, v bắc; NaN = khô) theo thứ tự ô hợp lệ của mask
-//  - nội suy song tuyến 4 ô + nội suy tuyến tính giữa 2 bước thời gian (fa, fb, w)
-//  - chặn hạt trong vùng nước (mask = 2) khi "Stop in water" bật, sinh hạt ở ô ướt trên đất
-//  - bước con ≤ nửa ô (res_m), chiều dài ~1.5 px × speed × curve(|v|/vmax), tối đa 40 px
-//  - canvas theo điểm ảnh thiết bị (dpr) như bản gốc; cắt theo đường viền lưu vực (basins) và xoá
-//    vệt trên mặt nước (water area) khi "Stop in water" bật – như drawParticles() của flowRunner
-// Lớp này không dùng chung trạng thái, canvas hay cài đặt với lớp Flow movement (HYD).
+// Surface-runoff particles for the "Wflow results" layer – SEPARATE from the HYD particles (dashboardMovement.js).
+// Algorithm ported as-is from the Flow Estimation tool (flowRunner.js) to give identical results:
+//  - velocity.npy (float16, 2 × Nv: u east, v north; NaN = dry) in the mask's valid-cell order
+//  - bilinear interpolation over 4 cells + linear interpolation between 2 time steps (fa, fb, w)
+//  - particles stop in the water area (mask = 2) when "Stop in water" is on, spawn in wet land cells
+//  - sub-steps ≤ half a cell (res_m), length ~1.5 px × speed × curve(|v|/vmax), at most 40 px
+//  - canvas in device pixels (dpr) as in the original; clipped to the catchment outline (basins) and
+//    trails erased over the water area when "Stop in water" is on – like drawParticles() in flowRunner
+// This layer shares no state, canvas or settings with the Flow movement (HYD) layer.
 
 import { PALETTES } from './dashboardMap.js';
 
 const L = window.L;
 const M_PER_DEG = 111320, LOG_K = 100, MAX_STEP_PX = 40, PBUCKETS = 6, MAX_SUB = 60;
 export const WFLOW_PARTICLE_RAMP = ['#e8f6ff', '#bfe9ff', '#d9f59a', '#ffe066', '#ffab40', '#ff6b3d'];
-PALETTES.wflow_particle = WFLOW_PARTICLE_RAMP;          // để chú giải dùng đúng thang màu
+PALETTES.wflow_particle = WFLOW_PARTICLE_RAMP;          // so the legend uses the right colour scale
 const SOLID = { white: [255, 255, 255], black: [0, 0, 0], dark_blue: [12, 42, 107], blue: [0, 0, 255], cyan: [125, 211, 252] };
 const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
 
@@ -34,7 +34,7 @@ function decodeF16(buf) {
 export class WflowParticles {
     /**
      * @param map Leaflet map
-     * @param S   cài đặt (đọc trực tiếp): on, count, pspeed, trail, curve, pcolor, opacity, water
+     * @param S   settings (read directly): on, count, pspeed, trail, curve, pcolor, opacity, water
      */
     constructor(map, { S }) {
         this.map = map; this.S = S;
@@ -50,8 +50,8 @@ export class WflowParticles {
     }
 
     /**
-     * grid: meta.grid của cache viewer; mask: Uint8Array nx·ny (0 ngoài, 1 đất, 2 nước);
-     * velocity: meta.velocity; times: meta.times; url(i): địa chỉ GET khung vận tốc i
+     * grid: meta.grid of the viewer cache; mask: Uint8Array nx·ny (0 outside, 1 land, 2 water);
+     * velocity: meta.velocity; times: meta.times; url(i): GET address of velocity frame i
      */
     setup({ grid, mask, velocity, times, url, basinGeo = null, waterGeo = null }) {
         this.g = grid; this.mask = mask; this.vinfo = velocity; this.url = url;
@@ -88,8 +88,8 @@ export class WflowParticles {
 
     get stopInWater() { return this.hasWater && this.S.water !== false; }
 
-    // thời gian & dữ liệu
-    // Thời điểm của thanh thời gian -> chỉ số thực (vd. 12.4 = giữa bước 12 và 13)
+    // time & data
+    // Time bar time -> real index (e.g. 12.4 = between steps 12 and 13)
     setTime(iso) {
         const T = this.tms.length;
         if (!T) return;
@@ -180,7 +180,7 @@ export class WflowParticles {
 
     reset() { if (this.age) this.age.fill(0); this.clear(); }
 
-    // Như project() của flowRunner: toạ độ theo điểm ảnh thiết bị
+    // Like project() in flowRunner: coordinates in device pixels
     project() {
         if (!this.canvas || !this.g) return;
         const sz = this.map.getSize(), dpr = window.devicePixelRatio || 1, P = this.P;
@@ -196,7 +196,7 @@ export class WflowParticles {
         this.pathsDirty = true;
     }
 
-    // = buildGeoPath() của flowRunner.js (toạ độ điểm ảnh thiết bị)
+    // = buildGeoPath() in flowRunner.js (device-pixel coordinates)
     buildGeoPath(gj) {
         const path = new Path2D(), P = this.P;
         const X = (lon) => P.ax * lon + P.bx, Y = (lat) => P.ay * merc(lat) + P.by;
@@ -214,7 +214,7 @@ export class WflowParticles {
     gx2x(gx) { return this.P.ax * (this.g.lon0 + gx * this.g.dlon) + this.P.bx; }
     gy2y(gy) { return this.P.ay * merc(this.g.lat0 + gy * this.g.dlat) + this.P.by; }
 
-    // thuật toán (giống flowRunner.js)
+    // algorithm (same as flowRunner.js)
     blocked(k) { return this.cellOf[k] < 0 || (this.stopInWater && this.mask[k] === 2); }
 
     sampleVel(fa, fb, w, gx, gy) {

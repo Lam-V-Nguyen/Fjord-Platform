@@ -1,18 +1,18 @@
 """
 dashboard_wflow3d.py
 ====================
-Dữ liệu bổ sung cho chế độ hiển thị "Wflow 3D" trên Dashboard.
+Extra data for the "Wflow 3D" display mode on the Dashboard.
 
-Module này ĐỘC LẬP với workflow hiện có:
-  - chỉ ĐỌC output Wflow, static grid, forcing và cache viewer của dashboard
-    (<project>/flows/<flow>/wflow_model/<DASH_VIEW_DIR>/, dựng bởi POST /dashboard/wflow/init);
-  - chỉ GHI thêm các file riêng có tiền tố "w3d_" trong thư mục cache đó
-    (w3d_terrain.npy, w3d_scene.json). Xoá chúng không ảnh hưởng tới lớp "Wflow results" 2D.
+This module is INDEPENDENT of the existing workflow:
+  - it only READS the Wflow output, static grid, forcing and the dashboard viewer cache
+    (<project>/flows/<flow>/wflow_model/<DASH_VIEW_DIR>/, built by POST /dashboard/wflow/init);
+  - it only WRITES its own extra files with the "w3d_" prefix in that cache folder
+    (w3d_terrain.npy, w3d_scene.json). Deleting them does not affect the 2D "Wflow results" layer.
 
-Hàm công khai:
-    terrain(project, flow)        -> (bytes float32 (ny, nx), info)  độ cao trên lưới viewer, hàng 0 = phía nam
-    scene(project, flow)          -> dict: cửa ra, hydrograph tại cửa ra, mưa trung bình lưu vực
-    river_series(project, flow, river_id, var=None) -> dict: chuỗi thời gian tại một ô sông
+Public functions:
+    terrain(project, flow)        -> (bytes float32 (ny, nx), info)  elevation on the viewer grid, row 0 = south
+    scene(project, flow)          -> dict: outlet, hydrograph at the outlet, catchment-mean rainfall
+    river_series(project, flow, river_id, var=None) -> dict: time series at one river cell
 """
 from __future__ import annotations
 import glob, json, os, threading, tomllib
@@ -31,7 +31,7 @@ def _lock(key: str) -> threading.Lock:
 
 # helpers
 def _ctx(project: str, flow: str):
-    """(model_dir, meta, fc, paths) – meta là meta.json của cache viewer dashboard."""
+    """(model_dir, meta, fc, paths) – meta is meta.json of the dashboard viewer cache."""
     model, meta, fc = dext.wflow_context(project, flow)
     return model, meta, fc, fc.model_paths(model, constants.DASH_VIEW_DIR)
 
@@ -58,10 +58,10 @@ def _fill_nearest(a: np.ndarray) -> np.ndarray:
 def _viewer_lonlat(g: dict):
     lon = g["lon0"] + np.arange(g["nx"]) * g["dlon"]
     lat = g["lat0"] + np.arange(g["ny"]) * g["dlat"]
-    return np.meshgrid(lon, lat)                          # (ny, nx), hàng 0 = phía nam
+    return np.meshgrid(lon, lat)                          # (ny, nx), row 0 = south
 
 def _sample_static(da: xr.DataArray, xn: str, yn: str, PX: np.ndarray, PY: np.ndarray, order=1) -> np.ndarray:
-    """Nội suy (bilinear) một biến static 2D tại toạ độ PX, PY (cùng CRS với static)."""
+    """Bilinear interpolation of a 2D static variable at coordinates PX, PY (same CRS as the static grid)."""
     a = np.asarray(da.values, dtype=np.float64)
     xs, ys = np.asarray(da[xn].values, float), np.asarray(da[yn].values, float)
     fx = (PX - xs[0]) / (xs[1] - xs[0])
@@ -109,8 +109,8 @@ def terrain(project: str, flow: str) -> tuple[bytes, dict]:
 
 #  scene
 def _river_cells(model: str, meta: dict, fc, p: dict):
-    """Dựng lại danh sách ô sông ĐÚNG thứ tự như flow_connection.build_cache
-    (feature id k trong rivers.geojson = cột k của river_<var>.npy)."""
+    """Rebuild the list of river cells in EXACTLY the same order as flow_connection.build_cache
+    (feature id k in rivers.geojson = column k of river_<var>.npy)."""
     with xr.open_dataset(p["output"]) as ds:
         x, y = ds.x.values.astype(float), ds.y.values.astype(float)
         dsx, dsy = ds.x, ds.y
@@ -129,7 +129,7 @@ def _river_cells(model: str, meta: dict, fc, p: dict):
     domain = np.nan_to_num(basin.astype(float)) > 0
     river = (np.nan_to_num(river.astype(float)) > 0) & domain
     r_i, r_j = np.nonzero(river)
-    if r_i.size != int(meta.get("river_cells") or 0): return None          # cache khác cấu hình -> bỏ qua
+    if r_i.size != int(meta.get("river_cells") or 0): return None          # cache built with another configuration -> skip
     sub = np.nan_to_num(basin.astype(float))[r_i, r_j].astype(int)
     up = np.nan_to_num(uparea.astype(float), nan=-1)[r_i, r_j] if uparea is not None else None
     return {"sub": sub, "uparea": up, "n_domain": int(domain.sum()), "cell_m": cell}
@@ -140,7 +140,7 @@ def _discharge_var(meta: dict) -> Optional[str]:
     return dext.pick_wflow_variable(meta) if any(v["kind"] == "river" for v in vs.values()) else None
 
 def _basin_mean(da: xr.DataArray, ds, p: dict) -> pd.Series:
-    """Trung bình không gian trên lưu vực (mask subcatchment của static grid nếu khớp lưới)."""
+    """Spatial mean over the catchment (subcatchment mask of the static grid if the grids match)."""
     xn, yn = _xy_names(ds)
     mask = None
     if os.path.exists(p["static"]):
@@ -161,8 +161,8 @@ def _basin_mean(da: xr.DataArray, ds, p: dict) -> pd.Series:
     return s
 
 def _precip_series(model: str, meta: dict, p: dict) -> dict:
-    """Mưa trung bình lưu vực (mm/h) tại các bước thời gian của output Wflow.
-    Thứ tự tìm: biến mưa trong output.nc -> file forcing (input.path_forcing trong wflow_sbm.toml)."""
+    """Catchment-mean rainfall (mm/h) at the time steps of the Wflow output.
+    Search order: rainfall variable in output.nc -> forcing file (input.path_forcing in wflow_sbm.toml)."""
     times = pd.to_datetime(meta["times"]); step_h = float(meta.get("step_hours") or 24)
     inp = (_read_toml(model).get("input", {}) or {})
     sources = [("output", [p["output"]], None)]
@@ -184,14 +184,14 @@ def _precip_series(model: str, meta: dict, p: dict) -> dict:
             tf = s.index
             fstep_h = float((tf[1] - tf[0]).total_seconds() / 3600) if tf.size > 1 else step_h
             mmh = (s / max(fstep_h, 1e-9)).astype(float)        # Wflow: mm/Δt -> mm/h
-            if fstep_h < step_h:                                  # forcing mịn hơn output -> trung bình theo bước output
+            if fstep_h < step_h:                                  # forcing finer than the output -> average over each output step
                 mmh = mmh.resample(pd.Timedelta(hours=step_h), label="right", closed="right").mean()
             agg = mmh.reindex(times, method="nearest", tolerance=pd.Timedelta(hours=max(step_h, fstep_h)))
             vals = [None if not np.isfinite(x) else round(float(x), 4) for x in agg.values]
             if not any(x is not None and x > 0 for x in vals): continue
             return {"source": f"{kind}:{os.path.basename(files[0])}:{vn}", "mm_h": vals,
                     "max_mm_h": float(max(x or 0 for x in vals))}
-        except Exception as e:                                   # mưa chỉ là phần phụ
+        except Exception as e:                                   # rainfall is only an extra
             print(f"wflow3d precip: {files[0]}: {e}")
         finally:
             ds.close()
