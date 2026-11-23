@@ -29,7 +29,7 @@ function render() {
     $('#users').innerHTML = USERS.filter(u => !q || JSON.stringify(u).toLowerCase().includes(q)).map(u => `
         <tr>
           <td><b>${esc(u.username)}</b><div class="muted">${esc(u.full_name)}</div></td>
-          <td>${esc(u.email || '–')}<div class="muted">${esc(u.organisation)}</div></td>
+          <td>${esc(u.email || '-')}<div class="muted">${esc(u.organisation)}</div></td>
           <td>${sel('role', ROLES, u.role, u.username)}</td>
           <td><span class="pill ${u.status}">${u.status}</span> ${sel('status', STATUSES, u.status, u.username)}</td>
           <td class="muted">${fmt(u.last_login)}</td>
