@@ -13,8 +13,8 @@ export const TOOL_GROUPS = [
     {
         id: 'hyd', title: 'Hydrodynamics (HYD)', icon: 'waves',
         tools: [
-            { id: 'preparation-hyd', title: 'Data Preparation for HYD Scenario', short: 'Data Preparation', label: 'Data Preparation (HYD)', url: '/src_frontend/htmls/hydPreparation.html', w: 12, h: 10, icon: 'clipboard' },
             { id: 'grid-generation', title: 'Grid Generation', url: '/src_frontend/htmls/unstructuredGrid.html', w: 12, h: 10, icon: 'grid' },
+            { id: 'preparation-hyd', title: 'Data Preparation for HYD Scenario', short: 'Data Preparation', label: 'Data Preparation (HYD)', url: '/src_frontend/htmls/hydPreparation.html', w: 12, h: 10, icon: 'clipboard' },
             { id: 'new-hyd', title: 'Create HYD Scenario', url: '/src_frontend/htmls/hydCreator.html', w: 12, h: 9, icon: 'plus' },
             { id: 'run-hyd', title: 'Run HYD Scenario', url: '/src_frontend/htmls/hydRunner.html', w: 12, h: 3, icon: 'play' },
         ],
