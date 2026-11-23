@@ -2,7 +2,12 @@
 # 2. Active:
 # (Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& c:\Envs\myfirstproject\Scripts\Activate.ps1)
 # python.exe -m pip install --upgrade pip
-# 3. Install: pip install -r .\backend\requirements.txt 
+# 3. Install: pip install -r .\backend\requirements.txt
+
+# python tools/manage_users.py import-json ..\backend\allowed_users.json --admin vlnguyen
+# python tools/manage_users.py list
+
+
 uvicorn==0.46.0
 fastapi==0.136.1
 msgpack==1.1.2

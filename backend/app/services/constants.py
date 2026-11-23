@@ -2,6 +2,68 @@ import re, math
 import numpy as np
 
 
+# Configuration
+#  brute-force protection
+WINDOW = 15 * 60
+# short in-memory cache: avoids opening SQLite for EVERY request (map tiles, frames…)
+CACHE_SEC = 30
+ROLES = ("admin", "user", "viewer")
+STATUSES = ("active", "pending", "invited", "disabled")
+USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{2,31}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+RESERVED = {"admin", "demo", "root", "system", "public", "static", "api", "login", "logout"}
+MIN_PASSWORD = 10
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    email TEXT UNIQUE,
+    full_name TEXT DEFAULT '',
+    organisation TEXT DEFAULT '',
+    password_hash TEXT,
+    role TEXT NOT NULL DEFAULT 'user',
+    status TEXT NOT NULL DEFAULT 'pending',
+    note TEXT DEFAULT '',
+    created_at REAL NOT NULL,
+    last_login REAL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at REAL NOT NULL,
+    last_seen REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    ip TEXT, user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose TEXT NOT NULL,                 -- 'invite' | 'reset'
+    expires_at REAL NOT NULL,
+    used_at REAL
+);
+CREATE TABLE IF NOT EXISTS login_fails (
+    key TEXT NOT NULL,                     -- 'u:<username>' or 'ip:<ip>'
+    at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_fails_key ON login_fails(key, at);
+CREATE TABLE IF NOT EXISTS project_shares (
+    owner TEXT NOT NULL,                   -- username owning projects/<owner>/<project>
+    project TEXT NOT NULL,
+    grantee TEXT NOT NULL,                 -- username the project is shared with
+    access TEXT NOT NULL DEFAULT 'view',   -- 'view' | 'edit'
+    created_by TEXT, created_at REAL NOT NULL,
+    PRIMARY KEY (owner, project, grantee)
+);
+CREATE INDEX IF NOT EXISTS ix_shares_grantee ON project_shares(grantee);
+CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at REAL NOT NULL, actor TEXT, action TEXT NOT NULL, target TEXT, detail TEXT, ip TEXT
+);
+"""
+
+
 # Dashboard
 DASH_MOVE_DIR, DASH_VIEW_DIR = "movement",  "viewer"
 VELOCITY_PAIRS = [
