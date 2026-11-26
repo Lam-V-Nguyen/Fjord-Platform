@@ -192,7 +192,7 @@ def clip_dem(request: Request, body: dict = Depends(functions.json_body), user=D
             other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
             os.makedirs(other_dir, exist_ok=True)
             catch_path = os.path.join(other_dir, 'catchment.geojson')
-            catchment_buffer.to_file(catch_path, driver='GeoJSON')
+            catchment_WGS84.to_file(catch_path, driver='GeoJSON')
             # Write outlet
             point = gpd.GeoDataFrame([{'geometry': Point(lon, lat)}], crs='EPSG:4326')
             point_path = os.path.normpath(os.path.join(catch_dir, 'outlet.geojson'))
