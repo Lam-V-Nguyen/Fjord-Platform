@@ -71,62 +71,100 @@ class Regnbyge():
         df = df.astype(object).where(pd.notnull(df), None)
         return df
     
+    # Long periods are fetched in windows: one request for months of Raw data often runs past the timeout,
+    # which used to be reported as "no data". Window length per aggregation (days).
+    CHUNK_DAYS = {'Raw': 14, 'Minute': 14, 'FiveMinute': 31, 'Hour': 92, 'Day': 366}
+    TIMEOUT = (10, 120)          # (connect, read) seconds per window
+    RETRIES = 2                  # extra attempts per window on timeout / connection error / 429 / 5xx
+    MAX_FAILED_IN_ROW = 2        # stop after this many windows in a row fail (server down) instead of trying every window
+    COLUMNS = {'flow': {'l': 'level (m)', 'v': 'velocity (m/s)', 'q': 'discharge (m³/s)'},
+               'level': {'l': 'level (m)'}, 'rain': {'r': 'rainfall (m)'}}
+
+    def _post_values(self, url, payload):
+        """POST one time window. Returns the JSON list; raises RegnbygeError with the real reason."""
+        last = None
+        for attempt in range(self.RETRIES + 1):
+            if attempt: time.sleep(2 * attempt)
+            try:
+                headers = {'accept': 'application/json', 'Authorization': f'Bearer {self.token}'}
+                res = requests.post(url, headers=headers, json=payload, timeout=self.TIMEOUT)
+            except requests.Timeout:
+                last = "the server did not respond in time (timeout)"; continue
+            except requests.ConnectionError:
+                last = "could not connect to Regnbyge.no"; continue
+            if res.status_code == 401 and attempt == 0:      # token expired during a long download -> renew once
+                self.token = self.get_Token() or self.token; last = "access token was rejected (HTTP 401)"; continue
+            if res.status_code == 429 or res.status_code >= 500:
+                last = f"server error (HTTP {res.status_code})"; continue
+            if res.status_code != 200:
+                raise RegnbygeError(f"Regnbyge.no rejected the request (HTTP {res.status_code}): {res.text[:200]}")
+            try: return res.json() or []
+            except ValueError: raise RegnbygeError("Regnbyge.no returned an invalid response (not JSON).")
+        raise RegnbygeError(f"Regnbyge.no: {last}")
+
     def get_Values(self, variable:str, ids:list, from_date, end_date, agg:str='Raw'):
         '''
         agg: Raw, Minute, FiveMinute, Hour, Day
         fromDate, toDate: time in UTC
+        Returns (data, failed): failed = [(window_start, window_end, reason)] for windows that could not be
+        downloaded. data is empty with failed == [] only when the station really has no data in the period.
         '''
         if not self.token: raise RuntimeError("No access token available. Call get_Token() first.")
-        if not ids: return pd.DataFrame()
-        if from_date.tzinfo is None:
-            start = from_date.replace(tzinfo=timezone.utc).isoformat()
-        else: start = from_date.isoformat()
-        if end_date.tzinfo is None:
-            end = end_date.replace(tzinfo=timezone.utc).isoformat()
-        else: end = end_date.isoformat()
-        headers = {'accept': 'application/json', 'Authorization': f'Bearer {self.token}'}
-        payload = {"ids": ids, "from": start, "to": end, "aggregation": agg}
-        url = f'{self.url}/{variable}/values'
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
-        except requests.RequestException: return pd.DataFrame()
-        data, data_value = pd.DataFrame(), response.json()
-        for item in data_value:
-            measurements = item.get('measurements', [])
-            if not isinstance(measurements, list):
-                print(f"Unexpected measurements type: {type(measurements)}")
-                continue
-            df_value = pd.DataFrame(measurements)
-            if len(df_value) == 0: continue
-            timestamp = pd.to_datetime(df_value['t'].values, utc=True)
-            if variable=='flow': # Using Flow
-                df = pd.DataFrame(data={'timestamp': timestamp,
-                    'level (m)':df_value['l'].values, 'velocity (m/s)':df_value['v'].values,
-                    'discharge (m³/s)':df_value['q'].values})
-            elif variable=='level': # Using Level
-                df = pd.DataFrame(data={'timestamp': timestamp,
-                    'level (m)':df_value['l'].values})
-            elif variable=='rain': # Using Rainfall
-                df = pd.DataFrame(data={'timestamp': timestamp,
-                    'rainfall (m)':df_value['r'].values})
-            # elif variable=='overflow': # Using Overflow
-            #     pass
-            # elif variable=='temperature': # Using Temperature
-            #     pass
+        if not ids: return pd.DataFrame(), []
+        cols = self.COLUMNS.get(variable)
+        if cols is None: raise RegnbygeError(f"Variable '{variable}' is not supported.")
+        start = pd.Timestamp(from_date); end = pd.Timestamp(end_date)
+        start = start.tz_localize('UTC') if start.tzinfo is None else start.tz_convert('UTC')
+        end = end.tz_localize('UTC') if end.tzinfo is None else end.tz_convert('UTC')
+        step, url = pd.Timedelta(days=self.CHUNK_DAYS.get(agg, 31)), f'{self.url}/{variable}/values'
+        frames, failed, t0, in_row = [], [], start, 0
+        while t0 < end:
+            t1 = min(t0 + step, end)
+            payload = {"ids": ids, "from": t0.isoformat(), "to": t1.isoformat(), "aggregation": agg}
+            try: items = self._post_values(url, payload); in_row = 0
+            except RegnbygeError as e:
+                print(f"Regnbyge {variable} {ids} {t0} -> {t1}: {e}")
+                in_row += 1
+                if in_row >= self.MAX_FAILED_IN_ROW:      # give up: the rest of the period is reported as not downloaded
+                    failed.append((t0, end, str(e))); break
+                failed.append((t0, t1, str(e))); t0 = t1; continue
+            for item in items if isinstance(items, list) else []:
+                m = item.get('measurements') or []
+                if not isinstance(m, list) or not m: continue
+                df_value = pd.DataFrame(m)
+                if 't' not in df_value: continue
+                df = pd.DataFrame({'timestamp': pd.to_datetime(df_value['t'].values, utc=True)})
+                for k, name in cols.items(): df[name] = df_value[k].values if k in df_value else None
+                if df.drop(columns=['timestamp']).isna().all().all(): continue
+                df['id'] = item.get('id'); frames.append(df)
+            t0 = t1
+        if not frames: return pd.DataFrame(), failed
+        data = pd.concat(frames, ignore_index=True)
+        # window edges may be returned twice ('from'/'to' inclusive)
+        data = data.drop_duplicates(subset=['id', 'timestamp']).sort_values(['id', 'timestamp']).reset_index(drop=True)
+        data = data.astype(object).where(pd.notnull(data), None)
+        return data, failed
 
-            # elif variable=='evaporation': # Using Evaporation
-            #     pass
-            # elif variable=='weir': # Using Weir
-            #     pass
-            else: continue
-            df['id'] = item['id']
-            if df.drop(columns=['timestamp']).isna().all().all(): continue
-            data = pd.concat([data, df], ignore_index=True)
-        data = data.reset_index(drop=True)
-        data = data.replace(float("nan"), None) # Fill NaN values
-        return data
-    
+
+class RegnbygeError(Exception):
+    """Regnbyge.no could not deliver the data (timeout, HTTP error, ...) – not the same as 'no data'."""
+
+
+def regnbyge_result(df, failed, label, start, end):
+    """Common message logic for plot/download: tells 'no data' apart from 'download failed'."""
+    period = f"between '{start}' and '{end}'"
+    if failed:
+        reason = failed[0][2]
+        span = ", ".join(f"{a:%Y-%m-%d} → {b:%Y-%m-%d}" for a, b, _ in failed[:3]) + (" ..." if len(failed) > 3 else "")
+        if df.empty:
+            return None, (f"Could not download data for {label} {period}. {reason}. "
+                          "Try a shorter period or a coarser interval (e.g. Hour), or try again later.")
+        return (f"Part of the data could not be downloaded ({span}): {reason}. "
+                "The result is incomplete – try again or use a shorter period."), None
+    if df.empty: return None, f"No data available for {label} {period}."
+    return None, None
+
+
 def era5_downloader(key:str, api_key:str, dir:str, processes:dict, key_process:str, vars:list, rh:bool, lat:float, 
     lon:float, start:str, end:str, time_zone:str, log_file:str, elevation: float | None = None, 
     auto_elevation: bool = True, elevation_correction: bool = True, max_wait_hours: float = 2):

@@ -7,7 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from services import functions, data_functions, flow_functions, yml_update, era5_function, constants, secretbox
 from config import PROJECT_ROOT, SOURCE_BACKEND
 import geopandas as gpd, pandas as pd, numpy as np
-from services.data_functions import Regnbyge as regnbyge
+from services.data_functions import Regnbyge as regnbyge, regnbyge_result
 from shapely.geometry import box
 from rio_tiler.io import Reader as _Reader
 from typing import Any, cast
@@ -124,10 +124,8 @@ def init_station(request: Request, body: dict = Depends(functions.json_body), us
         if not os.path.exists(source_dir): os.makedirs(source_dir)
         path = os.path.normpath(os.path.join(source_dir, f'{key}.pkl'))
         if not os.path.exists(path):
-            obj = regnbyge(client_name, client_secret, client_username, client_password)
+            obj = regnbyge(client_name, client_secret, client_username, client_password)   # raises if no token
             print("Loading data from Regnbyge.no ...")
-            token = obj.get_Token()
-            if token is None: return JSONResponse({'status': 'error', 'message': f"Error: Could not get token."})
             df = obj.get_Station(key)
             if df.empty: return JSONResponse({'status': 'error', 'message': f"No '{key}' data available."})
             geometry = gpd.points_from_xy(df['x'], df['y'])
@@ -152,9 +150,8 @@ def init_station(request: Request, body: dict = Depends(functions.json_body), us
     except Exception as e: functions.error('/init_station', e)
 
 @router.post("/plot_station")
-async def plot_station(request: Request):
+def plot_station(body: dict = Depends(functions.json_body)):   # sync: the HTTP calls run in the threadpool, not on the event loop
     try:
-        body = await request.json()
         id, mode, client_name = body.get('id'), body.get('mode'), body.get('clientName', '')
         name, time_zone, client_password = body.get('name'), body.get('timeZone'), body.get('clientPassword', '')
         client_secret, client_username = body.get('clientSecret', ''), body.get('clientUserName', '')
@@ -164,22 +161,19 @@ async def plot_station(request: Request):
         if start_utc >= end_utc:
             return JSONResponse({'status': 'error', 'message': "Error: 'Start time' must be earlier than 'End time'."})
         obj = regnbyge(client_name, client_secret, client_username, client_password)
-        df = obj.get_Values(mode, id, start_utc, end_utc, interval)
-        if df.empty:
-            return JSONResponse({
-                'status': 'error', 'message': f"No data available for station '{name}' between '{start}' and '{end}'."
-            })
+        df, failed = obj.get_Values(mode, id, start_utc, end_utc, interval)
+        warning, err = regnbyge_result(df, failed, f"station '{name}'", start, end)
+        if err: return JSONResponse({'status': 'error', 'message': err})
         if 'id' in df.columns: df = df.drop(columns=['id'])
         # Convert time back to local time zone
         df['timestamp'] = functions.utc_to_local(df['timestamp'], time_zone)
         content = {'columns': df.columns.tolist(), 'rows': df.values.tolist()}
-        return JSONResponse({'status': 'ok', 'content': content})
+        return JSONResponse({'status': 'ok', 'content': content, 'warning': warning})
     except Exception as e: functions.error('/plot_station', e)
 
 @router.post("/download_station")
-async def download_station(request: Request):
+def download_station(body: dict = Depends(functions.json_body)):   # sync: the HTTP calls run in the threadpool, not on the event loop
     try:
-        body = await request.json()
         mode, download_interval = body.get('mode'), body.get('downloadInterval')
         start, end = body.get('startTime'), body.get('endTime')
         id, time_zone = body.get('id'), body.get('timeZone')
@@ -190,13 +184,13 @@ async def download_station(request: Request):
         if start_utc >= end_utc:
             return JSONResponse({'status': 'error', 'message': "Error: 'Start time' must be earlier than 'End time'"})
         obj = regnbyge(client_name, client_secret, client_username, client_password)
-        df = obj.get_Values(mode, id, start_utc, end_utc, download_interval)
-        if df.empty: 
-            return JSONResponse({'status': 'error', 'message': f"No data available between '{start}' and '{end}'."})
+        df, failed = obj.get_Values(mode, id, start_utc, end_utc, download_interval)
+        warning, err = regnbyge_result(df, failed, f"station id {id}", start, end)
+        if err: return JSONResponse({'status': 'error', 'message': err})
         if 'id' in df.columns: df = df.drop(columns=['id'])
         df['timestamp'] = functions.utc_to_local(df['timestamp'], time_zone)
         csv_string = df.to_csv(index=False)
-        return JSONResponse({'status': 'ok', 'content': csv_string})
+        return JSONResponse({'status': 'ok', 'content': csv_string, 'warning': warning})
     except Exception as e: functions.error('/download_station', e)
 
 @router.post("/data_upload_gis")

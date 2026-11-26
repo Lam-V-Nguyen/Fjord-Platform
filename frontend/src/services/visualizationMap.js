@@ -218,6 +218,7 @@ export async function pointPloter(key, points, map, content) {
                         };
                         const response = await jsonLoader('plot_station', contents); signalSender('hideOverlay');
                         if (response.status === "error") { alert(response.message); return; }
+                        if (response.warning) alert(response.warning);   // part of the period could not be downloaded
                         const chartTitle = `Station: ${name}`, titleX = 'Time';
                         await plotTimeSeries(
                             containerObj, chartTitle, response.content, name, titleX, titleY
