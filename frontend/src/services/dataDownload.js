@@ -635,6 +635,7 @@ function updateManager() {
                     obj.downloadListArea.value += `Downloading [${name}] is skipped.\n`;
                     continue;
                 }
+                if (response.warning) obj.downloadListArea.value += `Warning [${name}]: ${response.warning}\n`;
                 let nameSaved = name.replace('Å', 'Aa').replace('å', 'aa').replace('Æ', 'Ae').replace('æ', 'ae');
                 nameSaved = nameSaved.replace('Ø', 'oo').replace(/[^a-zA-Z0-9_\-]/g, '_');
                 nameSaved = `${nameSaved}.csv`;
