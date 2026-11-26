@@ -88,7 +88,7 @@ _CURRENT_REQUEST: "contextvars.ContextVar[Request | None]" = contextvars.Context
 # Many routes join user-supplied names (fileName, flowName, folder, logFile, waqName, mapPath …) onto project paths.
 # Instead of checking each route, basic_auth (run for every protected route) rejects any such value that could leave
 # the project folder: a '..' segment, an absolute path / drive letter, or a NUL byte. Sub-folders ('flows/x') stay allowed.
-_PATH_KEY = re.compile(r"(name|file|folder|path|dir)$", re.I)
+_PATH_KEY = re.compile(r"(name|file|folder|path|dir|type|key)$", re.I)     # e.g. keyType / key are folder names too
 _SKIP_KEYS = {"projectname", "oldname", "newname", "oldproject", "newproject", "username", "full_name", "fullname"}
 
 def _unsafe_path_value(v: str) -> bool:

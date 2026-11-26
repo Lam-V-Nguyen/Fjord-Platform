@@ -75,7 +75,7 @@ async def delete_project_flow(request: Request, user=Depends(functions.basic_aut
             extend_task = asyncio.create_task(functions.auto_extend(lock))
             if not os.path.exists(flow_dir): 
                 return JSONResponse({"status": 'error', "message": f"Project '{project_name}' does not exist."})
-            shutil.rmtree(flow_dir, onexc=functions.remove_readonly)
+            await run_in_threadpool(shutil.rmtree, flow_dir, onexc=functions.remove_readonly)   # large folders: worker thread
             if hasattr(request.app.state, "project_cache"): request.app.state.project_cache.pop(project_name, None)
             return JSONResponse({"status": "ok", "message": f"Project '{flow_name}' was deleted successfully."})
     except Exception as e: functions.error('/delete_project_flow', e)
@@ -115,9 +115,8 @@ def water_upload(projectName: str = Form(...), file: UploadFile = File(...),
     except Exception as e: functions.error('/water_upload', e)
 
 @router.post("/water_delete")
-async def water_delete(request: Request, user=Depends(functions.basic_auth)):
+def water_delete(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name = body.get('flowName')
         flow_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "flows", flow_name, 'water_area'))
