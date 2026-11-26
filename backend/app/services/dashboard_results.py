@@ -260,7 +260,7 @@ def var_meta(source: str, name: str) -> dict:
     if source == "hyd":
         meta = constants.HYD_MAP_VARS.get(name) or constants.HYD_HIS_VARS.get(name)
         if meta: return dict(meta)
-        label = constants.variablesNames.get(name, name)
+        label = constants.VARIABLES_NAME.get(name, name)
         return {"label": label, "unit": ""}
     key = name.replace("mesh2d_2d_", "").replace("mesh2d_", "")
     full, unit = constants.UNITS.get(key, key), ""

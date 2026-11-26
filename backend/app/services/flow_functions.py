@@ -888,7 +888,8 @@ def run_hydromt(project_name: str, flow_name:str, model_folder:str, log_path:str
             raise FileNotFoundError(message)
         cmd = [wflow_path, toml_path]
         process = subprocess.Popen(
-            cmd, cwd=model_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            cmd, cwd=model_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            encoding="utf-8", errors="replace"     # Wflow.jl prints UTF-8 (progress bar "█"); Windows would decode cp1252
         )
         if process.stdout is None: 
             raise RuntimeError("stdout is not available; did you pass stdout=PIPE?")

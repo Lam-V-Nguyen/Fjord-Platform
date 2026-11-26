@@ -84,6 +84,45 @@ def current_user(request: Request):
 
 _CURRENT_REQUEST: "contextvars.ContextVar[Request | None]" = contextvars.ContextVar("fjord_request", default=None)
 
+# ---- Path-traversal guard -------------------------------------------------------------------------------------
+# Many routes join user-supplied names (fileName, flowName, folder, logFile, waqName, mapPath …) onto project paths.
+# Instead of checking each route, basic_auth (run for every protected route) rejects any such value that could leave
+# the project folder: a '..' segment, an absolute path / drive letter, or a NUL byte. Sub-folders ('flows/x') stay allowed.
+_PATH_KEY = re.compile(r"(name|file|folder|path|dir)$", re.I)
+_SKIP_KEYS = {"projectname", "oldname", "newname", "oldproject", "newproject", "username", "full_name", "fullname"}
+
+def _unsafe_path_value(v: str) -> bool:
+    s = v.replace("\\", "/")
+    return ("\x00" in s or s.startswith("/") or re.match(r"^[A-Za-z]:/", s) is not None
+            or ".." in s.split("/"))
+
+def _find_unsafe(obj, key: str = "") -> str | None:
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            bad = _find_unsafe(v, str(k))
+            if bad: return bad
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            bad = _find_unsafe(v, key)
+            if bad: return bad
+    elif isinstance(obj, str) and key and key.lower() not in _SKIP_KEYS and _PATH_KEY.search(key) and _unsafe_path_value(obj):
+        return key
+    return None
+
+async def check_path_params(request: Request) -> None:
+    """400 when a path-like parameter (query, path, JSON body or form field) tries to escape its folder."""
+    sources = [dict(request.query_params), dict(request.path_params)]
+    ctype = request.headers.get("content-type", "")
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            if ctype.startswith("application/json"): sources.append(await request.json())
+            elif ctype.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+                sources.append({k: v for k, v in (await request.form()).items() if isinstance(v, str)})
+        except Exception: pass                                  # malformed body: the route reports it
+    for src in sources:
+        bad = _find_unsafe(src)
+        if bad: raise HTTPException(status_code=400, detail=f"Invalid value for '{bad}' (path not allowed).")
+
 async def basic_auth(request: Request) -> str:
     """Keeps the OLD NAME so ~180 routes need no change: returns the session's username, 401 when not signed in.
     (Previously: HTTP Basic + allowed_users.json.)  Async on purpose: the request is stored in a context variable
@@ -93,6 +132,7 @@ async def basic_auth(request: Request) -> str:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     if not user.can_write and is_write_request(request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Read-only account (viewer)")
+    await check_path_params(request)
     _CURRENT_REQUEST.set(request)
     return user.username
 
@@ -119,6 +159,15 @@ def require_admin(request: Request) -> str:
 _BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 SHARE_SEP = ":"          # a shared project is referenced as "<owner>:<project>" (":" is never part of a folder name)
 PUBLIC_OWNER = "public"  # sample projects: "public:<name>" -> PROJECT_ROOT/<name>, read only except for administrators
+
+def can_read_path(first: str, second: str, username: str) -> bool:
+    """May `username` read PROJECT_ROOT/<first>/<second>/…? (raw paths used in tile URLs)
+    first = owner and second = project, or first = a sample project folder."""
+    if first in PUBLIC_PROJECTS: return True                        # sample project: everyone may read
+    u = current_user(_CURRENT_REQUEST.get()) if _CURRENT_REQUEST.get() is not None else None
+    if first == username or (u is not None and u.is_admin): return True
+    from services import auth_store
+    return auth_store.share_access(first, second, username) is not None
 
 def public_refs() -> list[str]:
     """References of the sample projects that exist on disk, e.g. ['public:demo']."""

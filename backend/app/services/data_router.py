@@ -407,7 +407,7 @@ async def stations_met(request: Request, user=Depends(functions.basic_auth)):
             if key_process in processes and processes[key_process]["status"] == "running":
                 return JSONResponse({"status": "running", "message": 'Data downloading in progress.'})
             params = {"types": "SensorSystem"}
-            response = requests.get(url, params=params, auth=(client_name, ""))
+            response = await run_in_threadpool(requests.get, url, params=params, auth=(client_name, ""), timeout=30)
             response.raise_for_status()
             data = response.json()
             df = pd.DataFrame(data["data"]).drop(columns=['@type'])
@@ -432,7 +432,7 @@ async def met_parameters(request: Request):
         redis, key_process = request.app.state.redis, f"met_parameters"
         lock = redis.lock(key_process, timeout=1000, blocking_timeout=10)
         async with lock:
-            response = requests.get(url, params=params, auth=(api_key, ""), timeout=30)
+            response = await run_in_threadpool(requests.get, url, params=params, auth=(api_key, ""), timeout=30)
             response.raise_for_status()
             data = response.json()
             df, vars = pd.DataFrame(data["data"]), set()
@@ -490,13 +490,13 @@ async def nve_parameters(request: Request):
         redis, key_process = request.app.state.redis, f"nve_parameters"
         lock = redis.lock(key_process, timeout=1000, blocking_timeout=10)
         async with lock:
-            response = requests.get(url_param, headers=headers, timeout=30)
+            response = await run_in_threadpool(requests.get, url_param, headers=headers, timeout=30)
             response.raise_for_status(); data = response.json()
             df, vars = pd.DataFrame(data["data"]), set()
             url_series = f"{os.getenv('NVE_URL')}/Series"
             for id in ids:
                 params = {'StationId': id}
-                response = requests.get(url_series, headers=headers, params=params, timeout=30)
+                response = await run_in_threadpool(requests.get, url_series, headers=headers, params=params, timeout=30)
                 response.raise_for_status(); data_series = response.json()
                 records = data_series.get('data', []); df_series = pd.DataFrame(records)
                 for i in df_series['parameter'].values:
@@ -520,7 +520,7 @@ async def stations_nve(request: Request, user=Depends(functions.basic_auth)):
             if key_process in processes and processes[key_process]["status"] == "running":
                 return JSONResponse({"status": "running", "message": 'Data downloading in progress.'})
             headers = {"X-API-Key": client_name, "Accept": "application/json"}
-            response = requests.get(url, headers=headers); response.raise_for_status()
+            response = await run_in_threadpool(requests.get, url, headers=headers, timeout=30); response.raise_for_status()
             data = response.json(); df = pd.DataFrame(data["data"])
             gdf = gpd.GeoDataFrame(
                 df, geometry=gpd.points_from_xy(x=df['longitude'], y=df['latitude']), crs='EPSG:4326'
@@ -617,7 +617,11 @@ async def upload_terrain(projectName: str = Form(...), folder: str = Form(...),
     except Exception as e: functions.error('/upload_terrain', e)
 
 @router.get("/{project_name}/{file_path:path}/{z}/{x}/{y}.png")
-def hyd_terrain_tiles(project_name: str, file_path: str, z: int, x: int, y: int):
+def hyd_terrain_tiles(project_name: str, file_path: str, z: int, x: int, y: int, user=Depends(functions.basic_auth)):
+    # URL = /<owner>/<project>/<file>.tif/{z}/{x}/{y}.png (or /<sample>/<file> for a sample project):
+    # only the owner, users the project is shared with, and (for samples) everyone may read the tiles
+    if not functions.can_read_path(project_name, file_path.split("/", 1)[0], user):
+        return JSONResponse({"status": "error", "message": "Not allowed."}, status_code=403)
     cog_path = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, file_path))
     project_root = os.path.abspath(os.path.join(PROJECT_ROOT, project_name))
     cog_path = os.path.abspath(cog_path)

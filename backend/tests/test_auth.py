@@ -179,3 +179,17 @@ def test_missing_project_is_never_created(client):
     assert c.post("/project", json={"projectName": ""}).status_code == 400          # no project selected
     assert c.post("/dashboard/read", json={"projectName": "never_created"}).status_code == 404
     assert c.post("/project", json={"projectName": "lake1"}).json()["project"] == "boss/lake1"   # existing: fine
+
+def test_path_traversal_guard(client):
+    """User-supplied file/folder names must not leave the project folder (log files, uploads, flows …)."""
+    from services import functions
+    bad = [{"fileName": "../../x.txt"}, {"logFile": "..\\..\\.env"}, {"folder": "/etc"}, {"mapPath": "C:/data/x.nc"},
+           {"params": [{"flowName": "../other"}]}, {"log_file": "a/../../b"}]
+    good = [{"folder": "flows/brusdal/dem"}, {"fileName": "obs_1.csv"}, {"projectName": "public:demo"},
+            {"lakeName": "Mjøsa"}, {"name": "Jr.. test"}, {"newName": "lake2"}]
+    assert all(functions._find_unsafe(b) for b in bad)
+    assert not any(functions._find_unsafe(g) for g in good)
+    c, store = client
+    login(c, "boss", "Correct-horse-9")
+    r = c.post("/project", json={"projectName": "lake1", "fileName": "../../secret"})
+    assert r.status_code == 400 and "path not allowed" in r.json()["message"]
