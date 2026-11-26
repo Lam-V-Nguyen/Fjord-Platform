@@ -529,4 +529,7 @@ FRIENDLY = {
 }
 # Base layers (lake, catchment, rivers, bathymetry): missing file -> None / [] -> the dashboard hides the matching option.
 # Cached by (path, mtime) so files added / edited / deleted after the server has started are still picked up.
-CONTEXT_LAYERS = { "lake": "lake.geojson", "catchment": "catchment.geojson", "river": "river.geojson", "bathymetry": "depth.csv" }
+# Context layers in <project>/others: "<base><ext>" (legacy, one per project) and "<base>__<label><ext>"
+# (one per Wflow scenario / uploaded depth file), e.g. catchment__brusdal.geojson, depth__survey_2024.csv
+CONTEXT_LAYERS = { "lake": ("lake", ".geojson"), "catchment": ("catchment", ".geojson"),
+                   "river": ("river", ".geojson"), "bathymetry": ("depth", ".csv") }

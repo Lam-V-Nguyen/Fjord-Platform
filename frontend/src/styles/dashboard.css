@@ -529,3 +529,36 @@ select option { background: var(--panel); color: var(--text); }
 .kpi-label { display: flex; align-items: center; min-width: 0; }
 .kpi-label .kpi-flag { flex: 0 0 auto; }
 .kpi-label .kpi-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ---------- Context layers with several files (one per Wflow scenario / depth upload) ---------- */
+.layer-count { margin-left: 4px; font-size: 10.5px; color: var(--muted); }
+.layer-more {
+    margin-left: auto; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px;
+    background: transparent; color: var(--muted); font-size: 11px; line-height: 20px; cursor: pointer;
+    transition: transform .15s;
+}
+.layer-more:hover { background: var(--accent-soft); color: var(--accent); }
+.layer-more.open { transform: rotate(180deg); color: var(--accent); }
+.layer-more + .swatch, .layer-more + .layer-gear { margin-left: 4px; }
+.layer-sub {
+    margin: 1px 0 4px 22px; padding: 4px 0 4px 8px; border-left: 1px solid var(--border-strong);
+    display: flex; flex-direction: column; gap: 1px; max-height: 220px; overflow-y: auto;
+}
+.layer-sub-actions { display: flex; gap: 6px; padding: 0 6px 3px; }
+.layer-sub-actions button {
+    padding: 1px 7px; border: 1px solid var(--border-strong); border-radius: 5px; background: transparent;
+    color: var(--muted); font-size: 10.5px; cursor: pointer;
+}
+.layer-sub-actions button:hover { color: var(--accent); border-color: var(--accent); }
+.layer-subitem {
+    display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 5px;
+    font-size: 12px; color: var(--text-2); cursor: pointer; user-select: none; min-width: 0;
+}
+.layer-subitem:hover { background: var(--panel); }
+.layer-subitem input { display: none; }
+.layer-subitem .layer-check { width: 13px; height: 13px; }
+.layer-subitem input:checked + .layer-check { background: var(--accent); border-color: var(--accent); }
+.layer-subitem input:checked + .layer-check::after {
+    content: ""; width: 6px; height: 3px; border-left: 2px solid #062016; border-bottom: 2px solid #062016;
+    transform: translateY(-1px) rotate(-45deg);
+}
+.layer-subitem .layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
