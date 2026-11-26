@@ -395,6 +395,8 @@ def grid_saver(request: Request, body: dict = Depends(functions.json_body), user
     try:
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         point_data = body.get('gridPoints')
+        if not point_data or not point_data.get('type'):
+            return JSONResponse({"status": "error", "message": "No interpolated grid points. Generate and interpolate the grid first."})
         points = gpd.GeoDataFrame.from_features(
             point_data['features'] if point_data['type'] == 'FeatureCollection' else [point_data], crs="EPSG:4326"
         )

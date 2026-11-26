@@ -251,7 +251,8 @@ async def run_waq_simulation(project_name, waq_name, log_file):
         os.makedirs(wq_folder, exist_ok=True)
         # Clear data if exists
         output_folder = os.path.normpath(os.path.join(wq_folder, file_name))
-        if os.path.exists(output_folder): shutil.rmtree(output_folder, onerror=functions.remove_readonly)
+        if os.path.exists(output_folder):                 # old results can be large: delete in a worker thread
+            await asyncio.to_thread(shutil.rmtree, output_folder, onerror=functions.remove_readonly)
         os.makedirs(output_folder, exist_ok=True)
         parameters = {'hyd_path': hyd_path, "t_start": t_start, "t_stop": t_stop, 'sal_path': sal_path,
             "maxiter": body['maxiter'], "tolerance": body['tolerance'], "scheme": body['scheme'], 'srf_path': srf_path, 

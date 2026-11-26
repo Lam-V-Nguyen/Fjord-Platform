@@ -186,6 +186,10 @@ def _waq_face_order(project_cache: dict):
     return order
 
 # Load general dynamic data
+def _time_step(a, i):
+    """One time step of a (time, cells) array – numpy or lazy xarray (only that step is read from disk)."""
+    return np.asarray(a[i, :] if a.ndim == 2 else a)
+
 @router.post("/load_general_dynamic")
 async def load_general_dynamic(request: Request, user=Depends(functions.basic_auth)):
     try:
@@ -209,7 +213,9 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
         time_column = 'time' if is_hyd else 'nTimesDlwq'
         name = constants.VARIABLES_NAME.get(key, key) if is_hyd else temp[0]
         if name is None: return JSONResponse({"status": "error", "message": f"Unknown variable: {key!r}"})
-        values = data_ds[name].values
+        # Lazy (dask/zarr) variable: read only what is needed – was data_ds[name].values, which loaded the whole
+        # time x cells x layers array from disk on EVERY frame request
+        var = data_ds[name]
         # Load dynamic cache from Redis
         raw_cache = await redis.get(dynamic_cache_key)
         if not raw_cache:
@@ -228,16 +234,17 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
                 layer_info = dynamic_cache['layers'].get(value_type)
                 if not layer_info:
                     if value_type == 'Average':
-                        if is_hyd: arr = np.nanmean(values, axis=2)
+                        if is_hyd: arr = await asyncio.to_thread(lambda: var.mean(dim=var.dims[2], skipna=True).values)
                         else:
                             name_2d = name.replace("mesh2d_", "mesh2d_2d_", 1)
-                            arr = data_ds[name_2d].values if name_2d in data_ds else np.nanmean(values, axis=1)
-                    else: arr = values[:, :, row_idx] if is_hyd else values[:, row_idx, :]
+                            arr = await asyncio.to_thread(lambda: data_ds[name_2d].values if name_2d in data_ds
+                                                          else var.mean(dim=var.dims[1], skipna=True).values)
+                    else: arr = await asyncio.to_thread(lambda: (var[:, :, row_idx] if is_hyd else var[:, row_idx, :]).values)
                     # Save layer atomic to Redis hash
                     dynamic_cache['layers'][value_type] = {'data': functions.encode_array(arr), 'shape': arr.shape}
                     await redis.set(dynamic_cache_key, msgpack.packb(dynamic_cache, use_bin_type=True), ex=600)
                 else: arr = functions.decode_array(layer_info["data"], layer_info["shape"])
-        else: arr = values
+        else: arr = var                                  # 2D variable: one time step is read per request below
         # WAQ values are stored in the waqgeom cell order, the polygons come from the HYD map grid
         order = None if is_hyd else _waq_face_order(project_cache)
         if temp[2] == 'load': # Initiate skeleton polygon for the first load
@@ -245,25 +252,29 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
             grid = project_cache.get("grid")
             if grid is None: return JSONResponse({"status": "error", "message": "Grid data not found in cache"})
             # Construct GeoJSON features
-            features = [{"type": "Feature", "properties": {"index": idx}, "geometry": mapping(row['geometry'])}
-                        for idx, row in grid.iterrows()]
-            arr_np, fmt = np.array(arr), functions.numberFormatter
-            new_arr = arr_np[-1, :] if arr_np.ndim == 2 else arr_np
+            fmt = functions.numberFormatter
+            def _first_load():                            # mesh features, last frame, global min/max: worker thread
+                features = [{"type": "Feature", "properties": {"index": idx}, "geometry": mapping(row['geometry'])}
+                            for idx, row in grid.iterrows()]
+                new_arr = _time_step(arr, -1)
+                vmin, vmax = float(var.min(skipna=True)), float(var.max(skipna=True))
+                return features, new_arr, vmin, vmax
+            features, new_arr, vmin, vmax = await asyncio.to_thread(_first_load)
             if order is not None: new_arr = new_arr[order]
             data = { 'meshes':  {'type': 'FeatureCollection', 'features': features},
                 'values': functions.encode_array(fmt(new_arr)), 'min_max': [
-                    fmt(np.nanmin(values)).tolist(), fmt(np.nanmax(values)).tolist()
+                    fmt(np.float64(vmin)).tolist(), fmt(np.float64(vmax)).tolist()
                     ], 'timestamps': [
                         pd.to_datetime(t, utc=True) for t in data_ds[time_column].data
                     ]
             }
             data['timestamps'] = [functions.utc_to_local(t, time_zone) for t in data['timestamps']]
         else: # Update value of polygons
-            arr_np, fmt = np.array(arr), functions.numberFormatter
-            new_arr = arr_np[int(temp[2]), :] if arr_np.ndim == 2 else arr_np
+            fmt = functions.numberFormatter
+            new_arr = await asyncio.to_thread(_time_step, arr, int(temp[2]))
             if order is not None: new_arr = new_arr[order]
             data = {'values': functions.encode_array(fmt(new_arr))}
-        return JSONResponse({'status': 'ok', 'content': data})
+        return await asyncio.to_thread(JSONResponse, {'status': 'ok', 'content': data})   # large mesh JSON: worker thread
     except Exception as e: functions.error('/load_general_dynamic', e)
 
 # Load vector dynamic data
@@ -326,7 +337,12 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
             if '_waq_multi_dynamic' in query: query = 'mesh2d_' + query[:-len('_waq_multi_dynamic')]
             data_ds = hyd_map if is_hyd else waq_map
             name = constants.VARIABLES_NAME.get(query, query)
-            values, fnm = data_ds[name].values, functions.numberFormatter
+            # read ONE time step only (was: data_ds[name].values loaded the whole time x cells x layers array
+            # from disk on every frame request)
+            var, fnm = data_ds[name], functions.numberFormatter
+            def _frame(i):
+                a = np.asarray(var[i].values)
+                return a if is_hyd else a.T
             # Initiate data for the first load
             if idx == 'load':
                 # Initialize mesh cache in Redis if not exists
@@ -341,18 +357,19 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
                 time_column = 'time' if is_hyd else 'nTimesDlwq'
                 time_stamps = pd.to_datetime(data_ds[time_column], utc=True)
                 time_stamps = functions.utc_to_local(time_stamps, time_zone)
-                arr = values[0,:,:] if is_hyd else values[0,:,:].T
+                arr = await asyncio.to_thread(_frame, 0)
                 # Create GeoDataFrame for interpolation
                 grid, points_arr = project_cache.get("grid"), np.array(points)
-                x_coords, y_coords = points_arr[:, 2], points_arr[:, 1]
-                gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(x_coords, y_coords), crs=grid.crs)
-                gdf['depth'] = functions.interpolation_Z(gdf, hyd_map['mesh2d_node_x'].values, 
-                    hyd_map['mesh2d_node_y'].values, hyd_map['mesh2d_node_z'].values)
-                # Find polygons that the points are in
-                gdf_filtered = gpd.sjoin(gdf, grid, how="left", predicate="intersects")
-                gdf_filtered.set_index('index_right', inplace=True)
-                df_serialized = gdf_filtered.drop(columns=['geometry'])
-                mesh_cache["df"] = df_serialized.to_dict(orient='split')
+                def _section_points():                    # depth interpolation + spatial join: worker thread
+                    x_coords, y_coords = points_arr[:, 2], points_arr[:, 1]
+                    gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(x_coords, y_coords), crs=grid.crs)
+                    gdf['depth'] = functions.interpolation_Z(gdf, hyd_map['mesh2d_node_x'].values,
+                        hyd_map['mesh2d_node_y'].values, hyd_map['mesh2d_node_z'].values)
+                    # Find polygons that the points are in
+                    gdf_filtered = gpd.sjoin(gdf, grid, how="left", predicate="intersects")
+                    gdf_filtered.set_index('index_right', inplace=True)
+                    return gdf_filtered.drop(columns=['geometry']).to_dict(orient='split')
+                mesh_cache["df"] = await asyncio.to_thread(_section_points)
                 # Compute frame in thread to avoid blocking
                 frame = await asyncio.to_thread(functions.meshProcess, is_hyd, arr, mesh_cache)
                 vmin, vmax = fnm(np.nanmin(frame)).tolist(), fnm(np.nanmax(frame)).tolist()
@@ -364,7 +381,7 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
                 raw_cache = await redis.get(mesh_cache_key)
                 if raw_cache is None: return JSONResponse({"status": 'error', "message": "Mesh cache is not initialized."})
                 mesh_cache = msgpack.unpackb(raw_cache, raw=False)
-                arr = values[int(idx),:,:] if is_hyd else values[int(idx),:,:].T
+                arr = await asyncio.to_thread(_frame, int(idx))
                 frame = await asyncio.to_thread(functions.meshProcess, is_hyd, arr, mesh_cache)
                 vmin, vmax = fnm(np.nanmin(frame)).tolist(), fnm(np.nanmax(frame)).tolist()
                 data = {"values": fnm(frame).tolist(), "local_minmax": [vmin, vmax]}
@@ -410,7 +427,7 @@ async def delete_gis(request: Request, user=Depends(functions.basic_auth)):
             file_name = os.path.normpath(os.path.join(gis_folder, f"{file}.geojson"))
             if not os.path.exists(file_name): 
                 return JSONResponse({"status": 'error', "message": f"Path '{file_name}' does not exist."})
-            functions.safe_remove(file_name)
+            await run_in_threadpool(functions.safe_remove, file_name)
         return JSONResponse({"status": 'ok'})
     except Exception as e: functions.error('/delete_gis', e)
 
@@ -433,7 +450,7 @@ async def select_thermocline(request: Request, user=Depends(functions.basic_auth
             name, data = constants.VARIABLES_NAME.get(query, query), []
             # Initiate data for the first load
             if typ == 'thermocline_grid':
-                temp_grid, arr = project_cache.get("grid"), data_ds[name].values
+                temp_grid, arr = project_cache.get("grid"), await asyncio.to_thread(lambda: data_ds[name].values)
                 # Remove polygons having all NaN in all layers
                 mask_all_nan = np.isnan(arr).all(axis=(0, col_idx))               
                 removed_indices = np.where(mask_all_nan)[0]
@@ -453,7 +470,7 @@ async def select_thermocline(request: Request, user=Depends(functions.basic_auth
                 layers_values = [float(v.split(' ')[1]) for k, v in layer_reverse.items() if int(k) >= 0]
                 max_values = int(abs(np.min(layers_values)))
                 new_depth = [x + max_values for x in layers_values]
-                arr, idx = data_ds[name].values, int(idx)
+                arr, idx = await asyncio.to_thread(lambda: data_ds[name].values), int(idx)
                 # Remove polygons having Nan in all layers
                 mask_all_nan = np.isnan(arr).all(axis=(0, col_idx))
                 arr_filtered = arr[:, ~mask_all_nan, :] if is_hyd else arr[:, :, ~mask_all_nan]

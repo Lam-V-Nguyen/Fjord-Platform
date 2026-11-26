@@ -184,7 +184,7 @@ def test_path_traversal_guard(client):
     """User-supplied file/folder names must not leave the project folder (log files, uploads, flows …)."""
     from services import functions
     bad = [{"fileName": "../../x.txt"}, {"logFile": "..\\..\\.env"}, {"folder": "/etc"}, {"mapPath": "C:/data/x.nc"},
-           {"params": [{"flowName": "../other"}]}, {"log_file": "a/../../b"}]
+           {"params": [{"flowName": "../other"}]}, {"log_file": "a/../../b"}, {"keyType": "../../x"}, {"key": "..\\.."}]
     good = [{"folder": "flows/brusdal/dem"}, {"fileName": "obs_1.csv"}, {"projectName": "public:demo"},
             {"lakeName": "Mjøsa"}, {"name": "Jr.. test"}, {"newName": "lake2"}]
     assert all(functions._find_unsafe(b) for b in bad)

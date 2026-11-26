@@ -102,9 +102,8 @@ async def load_client(request: Request, user=Depends(functions.basic_auth)):
     return JSONResponse({'content': content})
     
 @router.post("/reset_station")
-async def reset_station(request: Request, user=Depends(functions.basic_auth)):
+def reset_station(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         source_dir = os.path.join(PROJECT_ROOT, project_name, body.get('keyType'))
         flow_checked, level_checked, rain_checked = body.get('flow'), body.get('level'), body.get('rain')

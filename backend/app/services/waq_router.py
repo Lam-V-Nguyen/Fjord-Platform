@@ -1,4 +1,5 @@
 import os, json, re, asyncio, shutil
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from services import functions, wq_functions
@@ -95,13 +96,16 @@ async def delete_waq(request: Request, user=Depends(functions.basic_auth)):
             file_name = os.path.normpath(os.path.join(scenario_folder, f"{file}.json"))
             if not os.path.exists(file_name): 
                 return JSONResponse({"status": 'error', "message": f"Path '{file_name}' does not exist."})
-            if os.path.exists(waq_folder):
-                waq_files = [f for f in os.listdir(waq_folder) if file in f]
-                if len(waq_files) > 0:
-                    for f in waq_files:
+            def _delete():                                # removing result folders/files: worker thread
+                if os.path.exists(waq_folder):
+                    # only THIS scenario's outputs (<name>.json, <name>_his.*, <name>_map.*) – "file in f" also
+                    # matched other scenarios whose name contains this one (deleting "lake" removed "lake_2")
+                    own = re.compile(rf"^{re.escape(file)}(\.json$|_(his|map)\b)")
+                    for f in [f for f in os.listdir(waq_folder) if own.match(f)]:
                         temp_path = os.path.normpath(os.path.join(waq_folder, f))
                         functions.safe_remove(temp_path) if f.endswith('.json') else shutil.rmtree(temp_path)
-            functions.safe_remove(file_name)
+                functions.safe_remove(file_name)
+            await run_in_threadpool(_delete)
             return JSONResponse({"message": f"Scenario '{file}' was deleted successfully!"})
     except Exception as e: functions.error('/delete_waq', e)
     finally:
