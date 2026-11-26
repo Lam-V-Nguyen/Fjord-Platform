@@ -130,7 +130,6 @@ async def select_project(request: Request, user=Depends(functions.basic_auth)):
         project_dir, data = os.path.normpath(os.path.join(PROJECT_ROOT, project_name)), []
         if key_checker == 'flows':
             project_dir = os.path.normpath(os.path.join(project_dir, 'flows'))
-            os.makedirs(project_dir, exist_ok=True)
         if key == 'getProjects':
             project = [p.name for p in os.scandir(project_dir) if p.is_dir()] if os.path.isdir(project_dir) else []
             project = [p for p in project if os.path.exists(os.path.normpath(os.path.join(project_dir, p, folder_check)))]
