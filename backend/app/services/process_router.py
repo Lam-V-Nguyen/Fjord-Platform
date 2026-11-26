@@ -1,4 +1,5 @@
 import os, shutil, zipfile, json, msgpack, math, asyncio
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Request
 from fastapi.responses import JSONResponse
 from config import PROJECT_ROOT
@@ -11,7 +12,7 @@ router = APIRouter()
 
 # Upload file from local computer to server
 @router.post("/upload_data")
-async def upload_data(file: UploadFile = File(...), projectName: str = Form(...),
+def upload_data(file: UploadFile = File(...), projectName: str = Form(...),
     fileName: str = Form(...), type: str = Form(...), user=Depends(functions.basic_auth)):
     project_name, _ = functions.project_definer(projectName, user)
     if (type == 'grid'): save_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "input"))
@@ -29,7 +30,7 @@ async def upload_data(file: UploadFile = File(...), projectName: str = Form(...)
         if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
         with open(file_path, "wb") as f:
             while True:
-                chunk = await file.read(1024 * 1024)
+                chunk = file.file.read(1024 * 1024)
                 if not chunk: break
                 f.write(chunk)
         if (file_path.endswith('.zip')):
@@ -62,10 +63,17 @@ async def upload_data(file: UploadFile = File(...), projectName: str = Form(...)
         if file_path.endswith('.zip') and os.path.exists(file_path): functions.safe_remove(file_path)
         temp_dir = os.path.normpath(os.path.join(save_dir, 'temp'))
         if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
-        await file.close()
+        file.file.close()
 
 # Process data
 async def process_internal(query: str, key: str, redis, project_cache, project_name: str, time_zone: str):
+    # Redis reads stay on the event loop; reading/processing the datasets runs in a worker thread
+    raw = None
+    if key in ['wq_obs', 'wq_loads']: raw = await redis.hget(functions.cache_key(project_name), "waq_obs")
+    elif key == 'substance_check': raw = await redis.hget(functions.cache_key(project_name), 'config')
+    return await run_in_threadpool(_process_internal_sync, query, key, raw, project_cache, project_name, time_zone)
+
+def _process_internal_sync(query: str, key: str, raw, project_cache, project_name: str, time_zone: str):
     # Internal function to process data
     message = ''
     if key == 'summary':
@@ -76,8 +84,7 @@ async def process_internal(query: str, key: str, redis, project_cache, project_n
         temp, message = functions.hydCreator(project_cache.get("hyd_his"))
         data = json.loads(temp.to_json())
     elif key in ['wq_obs', 'wq_loads']:
-        waq_obs_raw = await redis.hget(functions.cache_key(project_name), "waq_obs")
-        waq_obs = msgpack.unpackb(waq_obs_raw, raw=False)
+        waq_obs = msgpack.unpackb(raw, raw=False)
         data = json.loads(functions.obsCreator(waq_obs[key]).to_json())
     elif key == 'sources':
         data = json.loads(functions.sourceCreator(project_cache.get("hyd_his")).to_json())
@@ -91,8 +98,7 @@ async def process_internal(query: str, key: str, redis, project_cache, project_n
         )
         data = { 'columns': temp.columns.tolist(), 'rows': temp.values.tolist() }
     elif key == 'substance_check':
-        substance_raw = await redis.hget(functions.cache_key(project_name), 'config')
-        substance = msgpack.unpackb(substance_raw, raw=False)[query]
+        substance = msgpack.unpackb(raw, raw=False)[query]
         if len(substance) > 0: 
             data = sorted(substance)
             message = functions.valueToKeyConverter(data)
@@ -373,9 +379,9 @@ async def get_gis_layer(request: Request, user=Depends(functions.basic_auth)):
         gis_folder = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, 'GIS'))
         redis, file = request.app.state.redis, body.get('layer')
         lock = redis.lock(f"{project_name}:get_gis_layer", timeout=200)
-        async with lock:
+        def _read():                                      # file reading / reprojection in a worker thread
             file_name = os.path.normpath(os.path.join(gis_folder, f"{file}.geojson"))
-            if not os.path.exists(file_name): 
+            if not os.path.exists(file_name):
                 return JSONResponse({"status": 'error', "message": f"Path '{file_name}' does not exist."})
             gdf = gpd.read_file(file_name)
             # Check if the file is empty
@@ -387,7 +393,9 @@ async def get_gis_layer(request: Request, user=Depends(functions.basic_auth)):
             # Convert datetime to string
             for col in gdf.columns:
                 if pd.api.types.is_datetime64_any_dtype(gdf[col]): gdf[col] = gdf[col].astype(str)
-        return JSONResponse({"status": 'ok', "content": json.loads(gdf.to_json())})
+            return functions.json_response({"status": 'ok', "content": functions.RawJSON(gdf.to_json())})
+        async with lock:
+            return await run_in_threadpool(_read)
     except Exception as e: functions.error('/get_gis_layer', e)
 
 @router.post("/delete_gis")
@@ -474,9 +482,11 @@ async def unstructure_grid_plot(request: Request, user=Depends(functions.basic_a
             grid_path = os.path.join(PROJECT_ROOT, project_name, 'input', grid_name)
         else: grid_path = os.path.join(PROJECT_ROOT, project_name, 'DFM_DELWAQ', grid_name)
         lock = redis.lock(f"{project_name}:unstructure-grid", timeout=30, blocking_timeout=25)
-        async with lock:
+        def _plot():                                      # NetCDF reading / grid building in a worker thread
             with xr.open_dataset(grid_path) as ds:
                 grid = functions.unstructuredGridCreator(ds)
                 if len(grid) == 0: return JSONResponse({"status": 'error', "message": "No Grid loaded. Please check the grid."})
-            return JSONResponse({"status": 'ok', "content": json.loads(grid.to_json())})
+            return functions.json_response({"status": 'ok', "content": functions.RawJSON(grid.to_json())})
+        async with lock:
+            return await run_in_threadpool(_plot)
     except Exception as e: functions.error('/unstructure_grid_plot', e)
