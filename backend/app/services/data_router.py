@@ -115,9 +115,8 @@ async def reset_station(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/reset_station', e)
 
 @router.post("/init_station")
-async def init_station(request: Request, user=Depends(functions.basic_auth)):
+def init_station(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         key, client_name = body.get('key'), body.get('clientName', '')
         client_secret, client_username = body.get('clientSecret', ''), body.get('clientUserName', '')
         client_password = body.get('clientPassword', '')
@@ -202,14 +201,14 @@ async def download_station(request: Request):
     except Exception as e: functions.error('/download_station', e)
 
 @router.post("/data_upload_gis")
-async def data_upload_gis(file: UploadFile = File(...)):
+def data_upload_gis(file: UploadFile = File(...)):
     try:
         gdf = gpd.read_file(file.file)
         if gdf.crs is None or gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs("EPSG:4326")
         return JSONResponse({"status": "ok", "content": json.loads(gdf.to_json())})
     except Exception as e: functions.error('/data_upload_gis', e)
-    finally: await file.close()
+    finally: file.file.close()
 
 @router.post("/download_era5")
 async def download_era5(request: Request, user=Depends(functions.basic_auth)):
@@ -364,9 +363,8 @@ async def cds_clear_queue(request: Request, user=Depends(functions.basic_auth)):
         "cancelled": cancelled, "removed": n})
 
 @router.post("/upload_era5_csv")
-async def upload_era5_csv(request: Request, user=Depends(functions.basic_auth)):
+def upload_era5_csv(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         path = os.path.join(PROJECT_ROOT, project_name, body.get('fileName'))
         if not path.endswith(".csv"):
@@ -482,12 +480,12 @@ async def save_weather_csv(request: Request):
     except Exception as e: functions.error('/save_weather_csv', e)
 
 @router.post("/nve_parameters")
-async def nve_parameters(request: Request):
+async def nve_parameters(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
         url_param, ids = f"{os.getenv('NVE_URL')}/Parameters", body.get('ids')
         headers = {"X-API-Key": body.get('apiKey'), "Accept": "application/json"}
-        redis, key_process = request.app.state.redis, f"nve_parameters"
+        redis, key_process = request.app.state.redis, f"{user}:nve_parameters"      # per user: users do not wait for each other
         lock = redis.lock(key_process, timeout=1000, blocking_timeout=10)
         async with lock:
             response = await run_in_threadpool(requests.get, url_param, headers=headers, timeout=30)
@@ -600,7 +598,7 @@ async def download_dem(request: Request, user=Depends(functions.basic_auth)):
         redis, key_process = request.app.state.redis, f"{project_name}:{key}"
         lock = redis.lock(key_process, timeout=1000, blocking_timeout=10)
         async with lock:
-            content = data_functions.dem_downloader(directory, key, resolution, gdf_WCS, target_crs)
+            content = await run_in_threadpool(data_functions.dem_downloader, directory, key, resolution, gdf_WCS, target_crs)
             return JSONResponse(content)
     except Exception as e: functions.error('/download_dem', e)
 

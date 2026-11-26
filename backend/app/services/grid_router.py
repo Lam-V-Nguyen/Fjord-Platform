@@ -12,9 +12,8 @@ from meshkernel import GeometryList
 router, processes = APIRouter(), {}
 
 @router.post("/polygon_generator")
-async def polygon_generator(request: Request):
+def polygon_generator(request: Request, body: dict = Depends(functions.json_body)):
     try:
-        body = await request.json()
         points = body.get('points', None)
         vertices = [{"id": i, "geometry": Point((coord[1], coord[0]))} for i, coord in enumerate(points)]
         point = gpd.GeoDataFrame(vertices, geometry="geometry", crs="EPSG:4326")
@@ -120,9 +119,8 @@ async def vertex_generator(request: Request):
     except Exception as e: functions.error('/vertex_generator', e)
 
 @router.post("/vertex_refiner")
-async def vertex_refiner(request: Request):
+def vertex_refiner(request: Request, body: dict = Depends(functions.json_body)):
     try:
-        body = await request.json()
         start_point, end_point = int(body.get('startPoint')), int(body.get('endPoint'))
         polygon, distance = body.get('polygon', None), body.get('distance')
         if not polygon or len(polygon) < 3:
@@ -223,9 +221,8 @@ async def grid_creator(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/grid_creator', e)
 
 @router.post("/grid_ortho")
-async def grid_ortho(request: Request, user=Depends(functions.basic_auth)):
+def grid_ortho(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         project_cache = request.app.state.project_cache.setdefault(project_name)
         if not project_cache:
@@ -357,7 +354,7 @@ async def grid_checker(request: Request, user=Depends(functions.basic_auth)):
     else: return JSONResponse({'status': 'error'})
 
 @router.post("/grid_interpolation_upload")
-async def grid_interpolation_upload(projectName: str = Form(...), file: UploadFile = File(...), user=Depends(functions.basic_auth)):
+def grid_interpolation_upload(projectName: str = Form(...), file: UploadFile = File(...), user=Depends(functions.basic_auth)):
     try:
         project_name, _ = functions.project_definer(projectName, user)
         others_dir = os.path.join(PROJECT_ROOT, project_name, "others")
@@ -373,12 +370,11 @@ async def grid_interpolation_upload(projectName: str = Form(...), file: UploadFi
         df.to_csv(csv_path, index=False)
         return JSONResponse({'status': 'ok', 'content': json.loads(content.to_json())})
     except Exception as e: functions.error('/grid_interpolation_upload', e)
-    finally: await file.close()
+    finally: file.file.close()
 
 @router.post("/grid_interpolation")
-async def grid_interpolation(request: Request):
+def grid_interpolation(request: Request, body: dict = Depends(functions.json_body)):
     try:
-        body = await request.json()
         data_point, data_grid = np.array(body.get('pointCollection')), body.get('grid')
         grid = gpd.GeoDataFrame.from_features(
             data_grid['features'] if data_grid['type'] == 'FeatureCollection' else [data_grid], crs="EPSG:4326"
@@ -394,10 +390,9 @@ async def grid_interpolation(request: Request):
     except Exception as e: functions.error('/grid_interpolation', e)
 
 @router.post("/grid_saver")
-async def grid_saver(request: Request, user=Depends(functions.basic_auth)):
+def grid_saver(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     temp_path = None
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         point_data = body.get('gridPoints')
         points = gpd.GeoDataFrame.from_features(
@@ -440,12 +435,12 @@ async def grid_saver(request: Request, user=Depends(functions.basic_auth)):
         functions.error('/grid_saver', e)
 
 @router.post("/grid_rechecker")
-async def grid_rechecker(file: UploadFile = File(...)):
+def grid_rechecker(file: UploadFile = File(...)):
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix='.nc', delete=False) as temp_file:
             temp_path = temp_file.name
-            while chunk := await file.read(1024 * 1024):
+            while chunk := file.file.read(1024 * 1024):
                 temp_file.write(chunk)
         with xr.open_dataset(temp_path, engine='netcdf4') as grid_uds:
             grid = functions.unstructuredGridCreator(grid_uds)
@@ -456,4 +451,4 @@ async def grid_rechecker(file: UploadFile = File(...)):
         content = {'grid': json.loads(grid.to_json()), 'nodes': json.loads(nodes.to_json())}
         return JSONResponse({'status': 'ok', 'content': content})
     except Exception as e: functions.error('/grid_rechecker', e)
-    finally: await file.close()
+    finally: file.file.close()

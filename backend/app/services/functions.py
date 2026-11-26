@@ -1,7 +1,7 @@
 import os, json, chardet, asyncio, stat, time, re, shapely
 import shutil, base64, signal, subprocess, gc, traceback, logging, contextvars, secrets as _secrets
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from redis.asyncio.lock import Lock
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt, gaussian_filter
@@ -123,6 +123,25 @@ async def check_path_params(request: Request) -> None:
         bad = _find_unsafe(src)
         if bad: raise HTTPException(status_code=400, detail=f"Invalid value for '{bad}' (path not allowed).")
 
+class RawJSON(str):
+    """Text that is already JSON (e.g. gdf.to_json()) - json_response() inserts it as-is."""
+
+def json_response(payload, status_code: int = 200) -> Response:
+    """Like JSONResponse, but RawJSON parts are inserted without json.loads + json.dumps again. For large GeoJSON
+    (grids, GIS layers) this halves the work and keeps the Python lock (GIL) free for other requests much longer."""
+    def enc(o):
+        if isinstance(o, RawJSON): return str(o)
+        if isinstance(o, dict): return "{" + ",".join(json.dumps(str(k)) + ":" + enc(v) for k, v in o.items()) + "}"
+        if isinstance(o, (list, tuple)): return "[" + ",".join(enc(v) for v in o) + "]"
+        return json.dumps(o, default=str, allow_nan=False)
+    return Response(enc(payload), media_type="application/json", status_code=status_code)
+
+async def json_body(request: Request) -> dict:
+    """JSON body as a dependency, so a route can be a plain `def` (FastAPI runs it in a worker thread and the
+    event loop stays free for other users) instead of `async def` + `await request.json()`."""
+    try: return await request.json()
+    except Exception: raise HTTPException(status_code=400, detail="Invalid JSON body")
+
 async def basic_auth(request: Request) -> str:
     """Keeps the OLD NAME so ~180 routes need no change: returns the session's username, 401 when not signed in.
     (Previously: HTTP Basic + allowed_users.json.)  Async on purpose: the request is stored in a context variable
@@ -196,7 +215,7 @@ def split_project_ref(ref, username: str) -> tuple[str, str]:
 def _require_project_dir(path: str, ref) -> None:
     """404 when PROJECT_ROOT/<path> is not an existing project folder."""
     if not os.path.isdir(os.path.join(PROJECT_ROOT, path)):
-        raise HTTPException(status_code=404, detail=f"Project '{ref}' does not exist or is 'read-only'.\n"
+        raise HTTPException(status_code=404, detail=f"Project '{ref}' does not exist.\n"
             "Create a new project or open an existing one first."
         )
 
@@ -476,7 +495,7 @@ def remove_readonly(func, path, excinfo):
 
 def append_log(log_path, text):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "a", encoding=encoding_detect(log_path), errors="replace") as f:
+    with open(log_path, "a", encoding="utf-8", errors="replace") as f:      # app logs are UTF-8 (no re-detection per line)
         f.write(text.strip() + "\n")
         f.flush()
 

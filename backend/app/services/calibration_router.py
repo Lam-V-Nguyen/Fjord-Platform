@@ -1,4 +1,5 @@
 import os, shutil, json, asyncio
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Request, Depends, Query
 from fastapi import UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -104,7 +105,7 @@ async def get_mdu_keys(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error("/get_mdu_keys", e)
 
 @router.post("/obs_calibration_upload")
-async def obs_calibration_upload(file: UploadFile = File(...), projectName: str = Form(...),
+def obs_calibration_upload(file: UploadFile = File(...), projectName: str = Form(...),
     simStart: str = Form(...), simEnd: str = Form(...), user=Depends(functions.basic_auth)):
     try:
         project_name, _ = functions.project_definer(projectName, user)
@@ -113,7 +114,7 @@ async def obs_calibration_upload(file: UploadFile = File(...), projectName: str 
         path = os.path.join(calibration_dir, os.path.basename(file.filename))
         with open(path, "wb") as f:
             while True:
-                chunk = await file.read(1024 * 1024)
+                chunk = file.file.read(1024 * 1024)
                 if not chunk: break
                 f.write(chunk)
         df = pd.read_csv(path, low_memory=False)
@@ -439,9 +440,8 @@ async def get_stations_calibration(request: Request, user=Depends(functions.basi
     except Exception as e: functions.error("/get_stations_calibration", e)
 
 @router.post("/summarize_calibration")
-async def summarize_calibration(request: Request, user=Depends(functions.basic_auth)):
+def summarize_calibration(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         calibration_dir = os.path.join(PROJECT_ROOT, project_name, "calibration")
         param_samples_path = os.path.join(calibration_dir, 'parameter_samples.csv')
@@ -519,9 +519,8 @@ async def summarize_calibration(request: Request, user=Depends(functions.basic_a
     except Exception as e: functions.error("/summarize_calibration", e)
 
 @router.post("/correlation_calibration")
-async def correlation_calibration(request: Request, user=Depends(functions.basic_auth)):
+def correlation_calibration(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         calibration_dir = os.path.join(PROJECT_ROOT, project_name, "calibration")
         correlation_path = os.path.join(calibration_dir, 'calibration_summary.csv')
@@ -632,9 +631,8 @@ async def start_optimization_optuna(request: Request, background_tasks: Backgrou
     except Exception as e: functions.error("/start_optimization_optuna", e)
 
 @router.post("/plot_optuna")
-async def plot_optuna(request: Request, user=Depends(functions.basic_auth)):
+def plot_optuna(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         calibration_dir = os.path.join(PROJECT_ROOT, project_name, "calibration")
         optuna_path = os.path.join(calibration_dir, 'optuna.csv')
@@ -685,7 +683,7 @@ async def save_scenario_calibration(request: Request, user=Depends(functions.bas
     except Exception as e: functions.error("/save_scenario_calibration", e)
 
 @router.post("/obs_comparison_upload")
-async def obs_comparison_upload(file: UploadFile = File(...), simStart: str = Form(...), simEnd: str = Form(...)):
+def obs_comparison_upload(file: UploadFile = File(...), simStart: str = Form(...), simEnd: str = Form(...)):
     try:
         df = pd.read_csv(file.file, low_memory=False)
         content = calibration_functions.clip_data(df, 'Time', simStart, simEnd)
@@ -782,17 +780,19 @@ async def finish_calibration(request: Request, user=Depends(functions.basic_auth
         async with lock:
             # Optional: auto-extend lock if deletion may take long
             extend_task = asyncio.create_task(functions.auto_extend(lock))
-            calibration_dir = os.path.join(new_dir, 'calibration')
-            if os.path.exists(calibration_dir): functions.safe_remove(calibration_dir)
-            folders = ['DFM_DELWAQ', 'input', 'output/HYD']
-            for item in folders:
-                temp_dir = os.path.join(new_dir, item)
-                if os.path.exists(temp_dir): functions.safe_remove(temp_dir)
-                shutil.copytree(os.path.join(old_dir, item), temp_dir)
-            log_file = os.path.join(old_dir, 'logs', 'log_hyd.txt')
-            if os.path.exists(log_file): 
-                shutil.copy2(log_file, os.path.join(new_dir, 'logs', 'log_hyd.txt'))
-        if checked == True: functions.safe_remove(old_dir)
+            def _copy():                                  # file copies run in a worker thread (event loop stays free)
+                calibration_dir = os.path.join(new_dir, 'calibration')
+                if os.path.exists(calibration_dir): functions.safe_remove(calibration_dir)
+                folders = ['DFM_DELWAQ', 'input', 'output/HYD']
+                for item in folders:
+                    temp_dir = os.path.join(new_dir, item)
+                    if os.path.exists(temp_dir): functions.safe_remove(temp_dir)
+                    shutil.copytree(os.path.join(old_dir, item), temp_dir)
+                log_file = os.path.join(old_dir, 'logs', 'log_hyd.txt')
+                if os.path.exists(log_file):
+                    shutil.copy2(log_file, os.path.join(new_dir, 'logs', 'log_hyd.txt'))
+            await run_in_threadpool(_copy)
+        if checked == True: await run_in_threadpool(functions.safe_remove, old_dir)
         calibration_path = os.path.join(PROJECT_ROOT, project_new, "input", 'calibration.json')
         with open(calibration_path, 'w', encoding='utf-8') as f:
             json.dump({'calibration': True}, f)

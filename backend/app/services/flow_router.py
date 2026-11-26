@@ -86,7 +86,7 @@ async def delete_project_flow(request: Request, user=Depends(functions.basic_aut
             except asyncio.CancelledError: pass
 
 @router.post("/water_upload")
-async def water_upload(projectName: str = Form(...), file: UploadFile = File(...), 
+def water_upload(projectName: str = Form(...), file: UploadFile = File(...), 
     flowName: str = Form(...), user=Depends(functions.basic_auth)):
     try:
         project_name, _ = functions.project_definer(projectName, user)
@@ -156,9 +156,8 @@ async def catchment_definer(request: Request, user=Depends(functions.basic_auth)
     except Exception as e: functions.error('/catchment_definer', e)
 
 @router.post("/clip_dem")
-async def clip_dem(request: Request, user=Depends(functions.basic_auth)):
+def clip_dem(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name, catchment = body.get('flowName'), body.get('catchment')
         lat, lon = float(body.get('lat')), float(body.get('lon'))
@@ -211,7 +210,7 @@ async def clip_dem(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/clip_dem', e)
 
 @router.post("/geojson_upload")
-async def geojson_upload(file: UploadFile = File(...)):
+def geojson_upload(file: UploadFile = File(...)):
     try:
         catchment = gpd.read_file(file.file)
         if catchment.empty: 
@@ -219,12 +218,11 @@ async def geojson_upload(file: UploadFile = File(...)):
         if catchment.crs != "EPSG:4326": catchment = catchment.to_crs("EPSG:4326")
         return JSONResponse({'status': 'ok', 'content': json.loads(catchment.to_json())})
     except Exception as e: functions.error('/geojson_upload', e)
-    finally: await file.close()
+    finally: file.file.close()
 
 @router.post("/data_upload")
-async def data_upload(request: Request, user=Depends(functions.basic_auth)):
+def data_upload(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         status, key, content = 'ok', body.get('key'), None
         if key == "soil":
             soil_type, soil_depth, content = constants.SOILS[0], constants.SOILS[1], []
@@ -354,9 +352,8 @@ async def check_soil(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/check_soil', e)
 
 @router.post("/soil_upload")
-async def soil_upload(request: Request, user=Depends(functions.basic_auth)):
+def soil_upload(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name, layer = body.get('flowName'), body.get('layerName')
         if not flow_name or not layer:
@@ -383,7 +380,7 @@ async def soil_upload(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/soil_upload', e)
 
 @router.post("/river_upload")
-async def river_upload(file: UploadFile = File(...), key: str = Form(...), threshold: float = Form(...)):
+def river_upload(file: UploadFile = File(...), key: str = Form(...), threshold: float = Form(...)):
     river_path = None
     try:
         filename = file.filename or ""
@@ -445,7 +442,7 @@ async def river_upload(file: UploadFile = File(...), key: str = Form(...), thres
         if river_path and os.path.isfile(river_path):
             try: functions.safe_remove(river_path)
             except OSError: traceback.print_exc()
-        await file.close()
+        file.file.close()
 
 @router.post("/polygon_clip")
 async def polygon_clip(request: Request):
@@ -468,9 +465,8 @@ async def polygon_clip(request: Request):
     except Exception as e: functions.error('/polygon_clip', e)
 
 @router.post("/river_saver")
-async def river_saver(request: Request, user=Depends(functions.basic_auth)):
+def river_saver(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name, data = body.get('flowName'), body.get('data')
         flow_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "flows", flow_name))
