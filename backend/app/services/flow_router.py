@@ -424,6 +424,7 @@ async def river_upload(file: UploadFile = File(...), key: str = Form(...), thres
             gdf = gdf[gdf.is_valid].reset_index(drop=True)
             # Process river
             gdf["geometry"] = gdf.geometry.apply(lambda g: force_2d(g))
+            if river_path is not None: functions.safe_remove(river_path)
         elif ext == ".geojson":
             gdf = gpd.read_file(file.file)
             columns = {col.lower(): col for col in gdf.columns}
@@ -432,7 +433,6 @@ async def river_upload(file: UploadFile = File(...), key: str = Form(...), thres
             width_col, depth_col = columns['width'], columns['depth']
             gdf = gdf.rename(columns={width_col: 'Width', depth_col: 'Depth'})
             gdf = gdf[['Width', 'Depth', 'geometry']]
-        functions.safe_remove(river_path)
         if gdf is None: return JSONResponse({'status': 'error', 'message': 'Unsupported file format.'}, status_code=400)
         if gdf.empty: 
             message = "No river is detected.\nPlease check the input vector."

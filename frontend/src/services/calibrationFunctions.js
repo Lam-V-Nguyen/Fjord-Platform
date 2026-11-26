@@ -601,7 +601,8 @@ export function updateLogOptimization(project, key, logObject, progressBarObject
             if (progressTextObject !== null) { progressTextObject.innerText = statusRes.message; }
             if (progressBarObject !== null) { progressBarObject.value = statusRes.progress; }
             if (statusRes.status !== "running") {
-                logObject.value += statusRes.message; running = false;
+                logObject.value += statusRes.message; running = false; 
+                logObject.scrollTop = logObject.scrollHeight;
                 if (statusRes.best_params !== '' && statusRes.best_params) {
                     if (resultsObject) resultsObject.style.display = 'block';
                     // Update optimal parameter container
@@ -628,7 +629,7 @@ export function updateLogOptimization(project, key, logObject, progressBarObject
             const res = await fetch(`/calibration_log_tail/${project}?offset=${lastOffsetHYD}&log_file=${logFile}`);
             if (!res.ok) return;
             const data = await res.json();
-            for (const line of data.lines) { logObject.value += line + "\n"; }
+            for (const line of data.lines) { logObject.value += line + "\n"; logObject.scrollTop = logObject.scrollHeight; }
             lastOffsetHYD = data.offset;
         } catch (error) { 
             if (resultsObject) resultsObject.style.display = 'none';

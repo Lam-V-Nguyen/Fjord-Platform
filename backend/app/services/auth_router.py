@@ -212,7 +212,7 @@ async def admin_update(request: Request, admin: str = Depends(require_admin)):
 
 @router.post("/auth/admin/reset_link")
 async def admin_reset_link(request: Request, admin: str = Depends(require_admin)):
-    """Create a new password link (or resend the invitation) – e-mailed when SMTP is set up, always returned to the admin."""
+    """Create a new password link (or resend the invitation) - e-mailed when SMTP is set up, always returned to the admin."""
     body = await _json(request)
     user = store.get_user(body.get("username", ""))
     if user is None: return _fail("User not found", 404)

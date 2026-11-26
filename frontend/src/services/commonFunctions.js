@@ -511,15 +511,12 @@ export async function fileUploader(targetFile, targetText, projectName, gridName
     formData.append('fileName', gridName); formData.append('type', type);
     if (targetText !== null) {targetText.value = file?.name || "";}
     const response = await fetch('/upload_data', { method: 'POST', body: formData });
-    const data = await response.json();
-    signalSender('hideOverlay'); alert(data.message);
+    const data = await response.json(); signalSender('hideOverlay'); alert(data.message);
     if (targetFile) { targetFile.value = ''; }
     if (data.status === "error") { return; }
 }
 
-export async function getProjectList(
-    userName='', folderCheck='', key='getProjects', keyChecker=''
-) {
+export async function getProjectList(userName='', folderCheck='', key='getProjects', keyChecker='') {
     const contents = { 
         filename: userName, key: key, folder_check: folderCheck, keyChecked: keyChecker
     };
@@ -584,8 +581,7 @@ export async function updateTable(table, comboBox, projectName, key='') {
     data.content.forEach((item, idx) => {
         const option = document.createElement('option');
         option.value = item; option.text = item;
-        comboBox.add(option);
-        data_arr.push([item, data.type[idx]]);
+        comboBox.add(option); data_arr.push([item, data.type[idx]]);
     });
     if (data_arr.length > 0) { fillTable(data_arr, table); }
     return data

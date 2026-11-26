@@ -159,11 +159,10 @@ def project_definer(old_name, username='admin', for_copy: bool = False, must_exi
     - sample project: 'public:<name>' -> PROJECT_ROOT/<name>; everyone may read it, only administrators may change it
       (for_copy=True: reading it as the SOURCE of a copy into the user's own folder is allowed).
     - must_exist=True (default): the project folder must already exist (404 otherwise), so no route silently creates a
-      project – e.g. a download log for a project that was never created. Only the routes that CREATE a project
+      project - e.g. a download log for a project that was never created. Only the routes that CREATE a project
       (setup_new_project, copy_project, save_scenario_calibration, finish_calibration) pass must_exist=False.
     Raises 400 / 403 / 404 HTTPException."""
-    if username == 'admin':
-        new_name = 'demo'
+    if username == 'admin': new_name = 'demo'
     else:
         if old_name == '': owner, project = username, ''
         else: owner, project = split_project_ref(old_name, username)
@@ -174,7 +173,8 @@ def project_definer(old_name, username='admin', for_copy: bool = False, must_exi
             user = current_user(req) if req is not None else None
             if is_write_request(req) and not for_copy and not (user is not None and user.is_admin):
                 raise HTTPException(status_code=403, detail="The sample project is read-only. "
-                                    "Copy it to your own projects to make changes.")
+                    "Copy it to your own projects to make changes."
+                )
             if must_exist: _require_project_dir(project, old_name)
             return project, f'{project}/{uuid4()}'
         if owner != username:

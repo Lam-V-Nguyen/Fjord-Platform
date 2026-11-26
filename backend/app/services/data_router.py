@@ -21,6 +21,22 @@ def _is_active(info):
     return bool(info) and info.get("status") == "running" and \
         time.time() - info.get("heartbeat", 0) < 900
 
+def _start_job(key_process, target, args, daemon=True):
+    """Run `target(*args)` in a background thread and refresh processes[key_process]["heartbeat"] every 30 s
+    while it is alive, so long jobs (a Wflow run, big downloads) are not reported as "stopped responding"
+    after 15 min. A job whose thread really dies stops the heartbeat and is detected as before."""
+    stop = threading.Event()
+    def beat():
+        while not stop.wait(30):
+            info = processes.get(key_process)
+            if not info or info.get("status") != "running": return
+            info["heartbeat"] = time.time()
+    def runner():
+        threading.Thread(target=beat, daemon=True).start()
+        try: target(*args)
+        finally: stop.set()
+    t = threading.Thread(target=runner, daemon=daemon); t.start(); return t
+
 @router.get("/log_tail_download/{project_name}")
 async def log_tail_download(project_name: str, offset: int = Query(0),
     log_file: str = Query(""), user=Depends(functions.basic_auth)):
@@ -33,8 +49,7 @@ async def log_tail_download(project_name: str, offset: int = Query(0),
     reset = offset > file_size
     if reset: offset = 0
     with open(log_path, "rb") as f:
-        f.seek(offset)
-        raw = f.read()
+        f.seek(offset); raw = f.read()
     cut = raw.rfind(b"\n") + 1
     data, new_offset = raw[:cut], offset + cut
     return {"lines": data.decode("utf-8", errors="replace").splitlines(), "offset": new_offset, "reset": reset}
@@ -48,7 +63,7 @@ async def check_download_status(request: Request, user=Depends(functions.basic_a
     if info is None: return JSONResponse({"status": "idle", "message": "No download running."})
     status, message = info.get("status", "idle"), info.get("message", "")
     if status == "running" and not _is_active(info):
-        status, message = "failed", "Previous download stopped responding. You can start again."
+        status, message = "failed", "The previous task stopped responding (the server may have been restarted). You can start again."
     return JSONResponse({
         "status": status, "message": message, "results": info.get("results", []),
         "cancelled": bool(info.get("cancelled")), "cancelling": status == "running" and bool(info.get("cancel")),
@@ -533,12 +548,11 @@ async def download_nve(request: Request, user=Depends(functions.basic_auth)):
         now = time.time()
         processes[key_process] = {"status": "running", "message": "Preparing NVE data download...",
             "started_at": now, "heartbeat": now}
-        threading.Thread(
-            target=data_functions.nve_downloader, 
-            args=(key, api_key, url, dir, processes, key_process, ids, 
+        _start_job(key_process, data_functions.nve_downloader,
+            (key, api_key, url, dir, processes, key_process, ids,
                 columns, variables, interval, start, end, time_zone, body.get('logFile')
-            ), daemon=True
-        ).start()
+            )
+        )
     return JSONResponse({"status": "ok", "message": "Weather downloading started"})
 
 @router.post("/download_met")
@@ -557,12 +571,10 @@ async def download_met(request: Request, user=Depends(functions.basic_auth)):
         now = time.time()
         processes[key_process] = {"status": "running", "message": "Preparing download...",
             "started_at": now, "heartbeat": now}
-        threading.Thread(
-            target=data_functions.met_downloader, 
-            args=(key, api_key, url, dir, processes, key_process, ids, columns, 
+        _start_job(key_process, data_functions.met_downloader,
+            (key, api_key, url, dir, processes, key_process, ids, columns,
                 variables, start, end, time_zone, body.get('logFile')
-            ), daemon=True
-        ).start()
+        ))
     return JSONResponse({"status": "ok", "message": "Weather downloading started"})
 
 @router.post("/download_dem")
@@ -656,12 +668,10 @@ async def start_download_soil(request: Request, user=Depends(functions.basic_aut
         now = time.time()
         processes[key_process] = {"status": "running", "message": "Preparing soil data download ...",
             "started_at": now, "heartbeat": now}
-        threading.Thread(
-            target=flow_functions.soil_downloader, 
-            args=(project_name, processes, key_process, flow_name, 
+        _start_job(key_process, flow_functions.soil_downloader,
+            (project_name, processes, key_process, flow_name,
                 soil_source, water_area, terrain_path, catchment_path, body.get('logFile')
-            ), daemon=True
-        ).start()
+        ))
     return JSONResponse({'status': 'ok', 'message': "Soil downloading started."})
 
 @router.post("/start_download_weather")
@@ -685,10 +695,9 @@ async def start_download_weather(request: Request, user=Depends(functions.basic_
             "started_at": now, "heartbeat": now, "cancel": False, "source": source}
         start, end, flow_name = body.get('start'), body.get('end'), body.get('flowName')
         time_zone, log_file = body.get('timeZone'), body.get('logFile')
-        threading.Thread(
-            target=flow_functions.weather_downloader, 
-            args=(project_name, flow_name, processes, key_process, source, api_key, start, end, time_zone, log_file), daemon=True
-        ).start()
+        _start_job(key_process, flow_functions.weather_downloader,
+            (project_name, flow_name, processes, key_process, source, api_key, start, end, time_zone, log_file)
+        )
     return JSONResponse({"status": "ok", "message": "Weather downloading started."})
 
 @router.post("/cancel_download_weather")
@@ -754,11 +763,11 @@ async def wflow_model(request: Request, user=Depends(functions.basic_auth)):
                 with rasterio.open(strord_path) as strord_src:
                     resolution, src_crs = int(abs(strord_src.transform.a)), strord_src.crs
                 soil_layers = [50, 100, 150, 300, 400, 600]
-                threading.Thread(target=flow_functions.wflow_run,
-                    args=(project_name, processes, key_process, flow_name, wflow_model, df, src_crs, 
-                        start, end, step, time_zone, data_lib, resolution, soil_layers, 
+                _start_job(key_process, flow_functions.wflow_run,
+                    (project_name, processes, key_process, flow_name, wflow_model, df, src_crs,
+                        start, end, step, time_zone, data_lib, resolution, soil_layers,
                         params_input, params_output, lulc_fn, lulc_mapping, lai_fn, body.get('logFile')
                     ), daemon=False
-                ).start()
+                )
                 return JSONResponse({"status": "ok", "message": "Model run started."})
     except Exception as e: functions.error('/wflow_model', e)

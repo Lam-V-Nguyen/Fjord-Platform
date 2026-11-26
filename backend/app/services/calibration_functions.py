@@ -229,8 +229,8 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
             suggestions.append({"key": "InitialTemperature", "value": f"{mean_t:.2f}",
                 "note": "Depth-averaged first observed profile"})
         if obs["max"] - obs["min"] > 1.0:
-            warns.append("The first observed profile is stratified (>1°C top–bottom): a uniform initial temperature "
-                "cannot represent it – use a 3D initial field (IniFieldFile) or a restart from a spin-up run.")
+            warns.append("The first observed profile is stratified (>1°C top-bottom): a uniform initial temperature "
+                "cannot represent it - use a 3D initial field (IniFieldFile) or a restart from a spin-up run.")
     else:
         warns.append("No observation after the model start time – upload observations first.")
     if model["temperature_model"].split()[:1] != ['5']:
@@ -250,11 +250,11 @@ def initial_check(project_dir: str, project_name: str, measured_utc: pd.DataFram
             "note": "Longitude of the lake (deg E)" + ("" if lonlat else " – please fill in")})
     if kmx and kmx < 20:
         depth_hint = f" (observations go down to {obs['max_depth']:.0f} m)" if obs else ""
-        warns.append(f"Kmx = {kmx} vertical layers{depth_hint}: too coarse for a stratified lake – "
+        warns.append(f"Kmx = {kmx} vertical layers{depth_hint}: too coarse for a stratified lake - "
             "numerical mixing carries surface heat downwards.")
         suggestions.append({"key": "Kmx", "value": "25", "note": "More vertical layers (longer run time)"})
     if model["restartfile"]:
-        warns.append(f"RestartFile = {model['restartfile']} is removed in calibration runs – "
+        warns.append(f"RestartFile = {model['restartfile']} is removed in calibration runs - "
             "initial conditions then come from InitialTemperature only.")
     if obs and obs["mean"] < 4.0 and info["start"].month in (11, 12, 1, 2, 3, 4):
         warns.append(f"Cold winter/spring water: the model has no ice cover (Tempmin = {g('Tempmin')}). "
@@ -840,7 +840,9 @@ def _validate_params(base_lines: list, names) -> list:
         if mode == "factor" and not toks: errors.append(f"'{key}' has no value to scale")
     return errors
 
-def _clean_previous_results(calibration_dir: str) -> list:
+def _clean_previous_results(calibration_dir: str, input_dir: str) -> list:
+    calibration_path = os.path.join(input_dir, 'calibration.json')
+    if os.path.exists(calibration_path): os.remove(calibration_path)
     removed = []
     for name in constants.STALE_RESULTS:
         path = os.path.join(calibration_dir, name)
@@ -879,6 +881,7 @@ def run_iteration(directory: str, processes: dict, key_process:str, n_samples:in
     try:
         _set_state(processes, key_process, "Preparing data for calibration ...", 0.0, "running")
         calibration_dir = os.path.join(directory, "calibration")
+        input_dir = os.path.join(directory, "input")
         scenario_dir = os.path.join(calibration_dir, "scenarios")
         os.makedirs(calibration_dir, exist_ok=True)
         params = _normalize_params(params)
@@ -903,7 +906,7 @@ def run_iteration(directory: str, processes: dict, key_process:str, n_samples:in
                 " - the sampled value replaces the override (Key_factor scales the overridden value).")
         if overrides: _set_state(processes, key_process, f"Applying base overrides: {overrides}")
         # Remove results of a previous resampling (they do not match the new samples)
-        removed = _clean_previous_results(calibration_dir)
+        removed = _clean_previous_results(calibration_dir, input_dir)
         if removed: _set_state(processes, key_process, "Removed previous results: " + ", ".join(removed))
         os.makedirs(scenario_dir, exist_ok=True)
         # Store parameters
