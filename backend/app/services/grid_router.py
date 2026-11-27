@@ -211,12 +211,12 @@ async def grid_creator(request: Request, user=Depends(functions.basic_auth)):
         if points.ndim != 2 or points.shape[1] != 2 or points.shape[0] < 3:
             return JSONResponse({"status": "error", "message": "Polygon must have at least 3 vertexes."})
         try:
-            mk, grid_uds, content = await run_in_threadpool(
+            mk, grid_uds, content, mk_crs = await run_in_threadpool(
                 grid_functions.grid_creator_sync, points, body.get('levelValue')
             )
         except grid_functions.GridError as e:
             return JSONResponse({"status": "error", "message": str(e)})
-        project_cache['grid_uds'], project_cache['mk'], project_cache['mk_crs'] = grid_uds, mk, "EPSG:4326"
+        project_cache['grid_uds'], project_cache['mk'], project_cache['mk_crs'] = grid_uds, mk, mk_crs
         return JSONResponse({'status': 'ok', 'content': content})
     except Exception as e: functions.error('/grid_creator', e)
 
@@ -242,6 +242,30 @@ def grid_ortho(request: Request, body: dict = Depends(functions.json_body), user
         min, max = np.min(values), np.max(values)
         return JSONResponse({'status': 'ok', 'content': {"min": min, "max": max, "data": json.loads(gdf.to_json())}})
     except Exception as e: functions.error('/grid_ortho', e)
+
+@router.post("/grid_quality_check")
+def grid_quality_check(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
+    try:
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        project_cache = request.app.state.project_cache.get(project_name) or {}
+        mk = project_cache.get('mk')
+        if mk is None:
+            return JSONResponse({"status": "error", "message": "No grid in memory. Generate or optimize a grid first."})
+        report = grid_functions.grid_quality_report(mk, project_cache.get('mk_crs', "EPSG:4326"))
+        return JSONResponse({'status': 'ok', 'content': report})
+    except Exception as e: functions.error('/grid_quality_check', e)
+
+@router.post("/grid_fix_small_links")
+def grid_fix_small_links(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
+    try:
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        project_cache = request.app.state.project_cache.get(project_name) or {}
+        try: result = grid_functions.fix_cached_grid_small_links(project_cache)
+        except grid_functions.GridError as e: return JSONResponse({"status": "error", "message": str(e)})
+        message = (f"Removed {result['small_links']} small flow link(s) "
+            f"({result['removed_cells']} cells merged). Small flow links left: {result['left']}.")
+        return JSONResponse({'status': 'ok', 'message': message, 'content': result['content']})
+    except Exception as e: functions.error('/grid_fix_small_links', e)
 
 @router.post("/check_grid_optimization")
 async def check_grid_optimization(request: Request, user=Depends(functions.basic_auth)):
@@ -418,10 +442,11 @@ def grid_saver(request: Request, body: dict = Depends(functions.json_body), user
         y_array = points['lat'].to_numpy(dtype=float)
         z_array = points[depth_col].to_numpy(dtype=float)
         depth = functions.interpolation_Z(nodes, x_array, y_array, z_array, geo_type='point')
-        grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(depth.astype(np.float32)))
-        with tempfile.NamedTemporaryFile(suffix='.nc', delete=False) as temp_file:
+        depth = np.asarray(depth, dtype=np.float64)
+        grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(depth))
+        with tempfile.NamedTemporaryFile(suffix='_net.nc', delete=False) as temp_file:
             temp_path = temp_file.name
-        grid_uds.to_netcdf(temp_path, engine='netcdf4')
+        grid_functions.save_dflowfm_net(grid_uds, temp_path, node_z=depth)
         def file_iterator():
             try:
                 with open(temp_path, 'rb') as f:
@@ -434,22 +459,3 @@ def grid_saver(request: Request, body: dict = Depends(functions.json_body), user
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
         functions.error('/grid_saver', e)
-
-@router.post("/grid_rechecker")
-def grid_rechecker(file: UploadFile = File(...)):
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix='.nc', delete=False) as temp_file:
-            temp_path = temp_file.name
-            while chunk := file.file.read(1024 * 1024):
-                temp_file.write(chunk)
-        with xr.open_dataset(temp_path, engine='netcdf4') as grid_uds:
-            grid = functions.unstructuredGridCreator(grid_uds)
-            nodes = functions.nodes_from_grid(grid)
-            nodes['Depth'] = 0
-            if 'mesh2d_node_z' in grid_uds: nodes['Depth'] = grid_uds['mesh2d_node_z'].values
-            if 'NetNode_z' in grid_uds: nodes['Depth'] = grid_uds['NetNode_z'].values
-        content = {'grid': json.loads(grid.to_json()), 'nodes': json.loads(nodes.to_json())}
-        return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e: functions.error('/grid_rechecker', e)
-    finally: file.file.close()

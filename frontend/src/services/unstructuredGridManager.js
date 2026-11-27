@@ -22,24 +22,23 @@ const obj = {
     moveCheckbox: $("move-checkbox"), deleteCheckbox: $("delete-checkbox"),
     scaleSelector: $("scale-factor"), scaleFactor: $("custom-scale-factor"),
     orthoCheckbox: $("orthogonality-checkbox"), createGrid: $("generate-grid"),
-    chartDiv: $("myChart-grid"), saveGrid: $("save-grid"), reCheckGrid: $("recheck-grid"), 
+    chartDiv: $("myChart-grid"), saveGrid: $("save-grid"), 
     interpolateDelete: $("interpolate-grid-delete"), interpolateHide: $("interpolate-grid-hide"),
     interpolateGrid: $("interpolate-grid"), interpolateMapBtn: $("interpolate-grid-pick-btn"),
     interpolateCSVBtn: $("interpolate-grid-csv-btn"), interpolateFile: $("interpolate-grid-csv"),
     iterationValue: $("iterations"), valueFrom: $("detail-level-from"),
     autoOptCheckbox: $("grid-op-auto-checkbox"), customeOptCheckbox: $("grid-op-level-checkbox"),
     iterationContainer: $("iteration-container"), levelContainer: $("level-container"),
-    valueTo: $("detail-level-to"), optimizeBtn: $("optimize-grid"), reCheckGridFile: $("recheck-grid-file"),
+    valueTo: $("detail-level-to"), optimizeBtn: $("optimize-grid"), 
     progressbarGrid: $("progressbar-grid"), progressTextGrid: $("progress-text-grid"),
     baseMap: $("basemap-btn"), leafletMap: $("leaflet-map-lakes"), saveDepth: $("export-depth-btn"),
     leafletContainer: $("map-container"), plotContainer: $("plot-container"), 
     colorBarContainer: $("custom-colorbar-grid"), colorBarColor: $("colorbar-gradient"),
     colorBarTitle: $("colorbar-title"), colorBarLabel: $("colorbar-label"),
-    optimizeCloseBtn: $("optimization-close"), 
+    optimizeCloseBtn: $("optimization-close"), checkGridBtn: $("check-grid"),
 };
 
-const row = ['Name', 'Municipality', 'Area', 'Perimeter', 
-    'Max Depth', 'Min Depth', 'Average Depth'];
+const row = ['Name', 'Municipality', 'Area', 'Perimeter', 'Max Depth', 'Min Depth', 'Average Depth'];
 let currentProject = null, mapContainer = null, timeOut = null, lakesData = {}, 
     dataLake = null, dataDepth = null,gridPoints = null, drawSelection = false, 
     drawChecked = false, entireNorway = false, interpolateCheked = null, 
@@ -48,7 +47,8 @@ let currentProject = null, mapContainer = null, timeOut = null, lakesData = {},
     depthLayer = null, lakeLayer = null, gridLayer = null, orthoLayer = null,
     refineChecked = false, pointContainer = [], html = null, tempLine = null,
     moveChecked = false, deleteChecked = false, levelValue = null, lakeList = [],
-    activeProject = null, isRunning = false, logInterval = null, pointLayer = null;
+    activeProject = null, isRunning = false, logInterval = null, pointLayer = null,
+    qualityLayer = null;
 
 const hoverTooltip = L.tooltip({
     permanent: false, direction: 'bottom',
@@ -619,6 +619,7 @@ function unGridManager() {
         alert(response?.message || "Grid generation failed (no response from server)."); return;
     }
     gridLayer = clearMap(gridLayer, mapObj); orthoLayer = clearMap(orthoLayer, mapObj);
+    qualityLayer = clearMap(qualityLayer, mapObj);
     gridLayer = await plotUnstructuredGrid(response.content.polygon, mapObj);
     interpolatedPointLayer = clearMap(interpolatedPointLayer, mapObj);
     gridPoints = clearMap(gridPoints, mapObj);
@@ -775,6 +776,47 @@ function unGridManager() {
         if (e.target.checked) { mapObj.addLayer(interpolatedLayer); }
         else { mapObj.removeLayer(interpolatedLayer); }
     });
+        // Check the grid before saving: small flow links (D-Flow FM stops on them), obtuse cells, orthogonality
+    obj.checkGridBtn.addEventListener('click', async (e) => {
+        if (gridLayer === null) { alert("Please generate or optimize a grid first."); return; }
+        if (e.target.disabled) return;
+        e.target.disabled = true; signalSender('showOverlay', 'Checking the grid.\nPlease wait...');
+        let res = null;
+        try { res = await jsonLoader('grid_quality_check', { projectName: currentProject }); }
+        catch (error) { res = { status: 'error', message: error.message || String(error) }; }
+        finally { signalSender('hideOverlay'); e.target.disabled = false; }
+        if (!res || res.status === 'error') { alert(`Grid check failed: ${res?.message || 'no response from server'}`); return; }
+        const r = res.content;
+        qualityLayer = clearMap(qualityLayer, mapObj);
+        if (r.small_link_points.length > 0) {
+            qualityLayer = L.layerGroup(r.small_link_points.map(([lat, lon]) =>
+                L.circleMarker([lat, lon], { radius: 9, color: 'red', weight: 3, fillOpacity: 0 })
+                    .bindTooltip('Small flow link: D-Flow FM will stop on it', { sticky: true, direction: 'top' })
+            )).addTo(mapObj);
+        }
+        const report = [
+            `Nodes: ${r.n_nodes}   Edges: ${r.n_edges}   Cells: ${r.n_faces}`,
+            `Small flow links: ${r.small_links}`,
+            `Obtuse triangles (> 90°): ${r.obtuse_cells}   (largest angle ${r.max_angle}°, smallest ${r.min_angle}°)`,
+            `Orthogonality: max ${r.max_orthogonality}, mean ${r.mean_orthogonality}`
+        ].join('\n');
+        if (r.small_links === 0) { alert(`${report}\n\nNo small flow links: the grid can be used by D-Flow FM.`); return; }
+        const repair = confirm(`${report}\n\nD-Flow FM will stop with "small flow links discarded" (red circles on the map).\n\n` +
+            `OK: remove them now (neighbouring cells are merged).\nCancel: keep the grid and create a new one ` +
+            `(e.g. other vertices, level or optimization).`);
+        if (!repair) return;
+        signalSender('showOverlay', 'Removing small flow links.\nPlease wait...');
+        let fix = null;
+        try { fix = await jsonLoader('grid_fix_small_links', { projectName: currentProject }); }
+        catch (error) { fix = { status: 'error', message: error.message || String(error) }; }
+        finally { signalSender('hideOverlay'); }
+        if (!fix || fix.status === 'error') { alert(`Removing small flow links failed: ${fix?.message || 'no response from server'}`); return; }
+        qualityLayer = clearMap(qualityLayer, mapObj);
+        gridLayer = clearMap(gridLayer, mapObj); gridLayer = await plotUnstructuredGrid(fix.content.polygon, mapObj);
+        gridPoints = clearMap(gridPoints, mapObj); gridPoints = await plotUnstructuredGrid(fix.content.point, mapObj, 'black');
+        obj.orthoCheckbox.checked = false; obj.orthoCheckbox.dispatchEvent(new Event('change'));
+        alert(`${fix.message}\n\nDepths are interpolated again onto the new nodes when you save the grid.`);
+    });
     obj.saveGrid.addEventListener('click', async () => {
         if (interpolatedPointLayer === null) { alert("No interpolated grid found. Please interpolate grid first."); return; }
         if (!window.showSaveFilePicker) {
@@ -804,21 +846,6 @@ function unGridManager() {
             alert('Grid saved successfully.');
         } catch (error) { alert(error.message); }
         finally { signalSender('hideOverlay'); }
-    });
-    obj.reCheckGrid.addEventListener('click', () => obj.reCheckGridFile.click());
-    obj.reCheckGridFile.addEventListener('change', async (e) => {
-        const file = e.target.files[0]; if (!file) return;
-        const formData = new FormData(); formData.append('file', file);
-        signalSender('showOverlay', 'Reading NetCDF file. Please wait...');
-        const response = await fetch('/grid_rechecker', { method: 'POST', body: formData });
-        const data = await response.json(); signalSender('hideOverlay'); e.target.value = '';
-        if (data.status === 'error') { 
-            alert(`Reading NetCDF failed: ${data.message}`); return; 
-        }
-        gridLayer = clearMap(gridLayer, mapObj); pointLayer = clearMap(pointLayer, mapObj);
-        interpolatedPointLayer = clearMap(interpolatedPointLayer, mapObj);
-        gridLayer = await plotUnstructuredGrid(data.content.grid, mapObj);
-        interpolatedPointLayer = await plotUnstructuredGrid(data.content.nodes, mapObj);
     });
 }
 
@@ -1087,6 +1114,7 @@ async function resetMap(map){
     obj.colorBarContainer.style.display = 'none';
     if (pointLayer) { pointLayer.clearLayers(); }
     if (hoverTooltip) map.closeTooltip(hoverTooltip);
+    qualityLayer = clearMap(qualityLayer, map);
 }
 
 function clearMap(layer, map) {
@@ -1105,7 +1133,7 @@ function updateLog(project, chartDiv, progress_bar, progress_text, seconds, map)
             if (statusRes.status === "finished" || statusRes.status === "stopped") {
                 clearInterval(logInterval); logInterval = null; isRunning = false;
                 if (statusRes.grid) { 
-                    gridLayer = clearMap(gridLayer, map);
+                    gridLayer = clearMap(gridLayer, map); qualityLayer = clearMap(qualityLayer, map);
                     gridLayer = await plotUnstructuredGrid(statusRes.grid, map);
                     obj.orthoCheckbox.checked = true; obj.orthoCheckbox.dispatchEvent(new Event('change'));
                 } else { alert('No grid has been found. Consider running the optimization again.'); }
