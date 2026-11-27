@@ -51,3 +51,9 @@ html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--te
 .link-box.show { display: block; }
 .link-box code { color: var(--accent-2); }
 .admin-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* storage column on /admin */
+.storage-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; white-space: nowrap; }
+.storage-cell.warn > span { color: #f59e0b; }
+.storage-cell.full > span { color: #ef4444; font-weight: 600; }
+.storage-cell .muted { width: 100%; font-size: 11px; }

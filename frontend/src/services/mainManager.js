@@ -18,6 +18,7 @@ import { TOOL_GROUPS, QUICK_TOOLS, getTool, groupOf, standaloneLabel } from "./t
 import { icon } from "./icons.js";
 import { initThresholdEditor } from "./thresholdEditor.js";
 import { initAccountMenu } from "./accountMenu.js";
+import { initStorageBanner } from "./storageBanner.js";
 import { initShareDialog, projectLabel } from "./shareDialog.js";
 import { Dashboard, toast, initSidebarResize } from "./dashboardManager.js";
 
@@ -210,6 +211,7 @@ function bindShell() {
     });
     settings.addEventListener('click', (e) => e.stopPropagation());
     bindTimezoneSearch();
+    initStorageBanner();
     initAccountMenu({ toast, beforeOpen: () => settings.classList.remove('show') })
         .then(me => initShareDialog({ toast, me, beforeOpen: () => settings.classList.remove('show') }));
     initThresholdEditor({
