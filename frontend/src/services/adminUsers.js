@@ -2,7 +2,8 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = (t) => t ? new Date(t * 1000).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : '–';
-let USERS = [], ROLES = [], STATUSES = [];
+let USERS = [], ROLES = [], STATUSES = [], DEFAULT_QUOTA = 0;
+const gb = (b) => b == null ? '–' : (b / 1024 ** 3).toFixed(b >= 10 * 1024 ** 3 ? 0 : 1);
 
 async function api(url, body) {
     const res = await fetch(url, body === undefined ? {} : {
@@ -33,18 +34,24 @@ function render() {
           <td>${sel('role', ROLES, u.role, u.username)}</td>
           <td><span class="pill ${u.status}">${u.status}</span> ${sel('status', STATUSES, u.status, u.username)}</td>
           <td class="muted">${fmt(u.last_login)}</td>
+          <td><div class="storage-cell ${u.storage?.level || ''}" title="${esc(u.storage?.message || '')}">
+            <span>${gb(u.storage?.used)} /</span>
+            <input type="number" min="0" step="1" data-quota="${esc(u.username)}" style="width:62px"
+              value="${u.storage?.override ? (u.storage.quota == null ? 0 : gb(u.storage.quota)) : ''}"
+              placeholder="${u.storage?.override ? '' : (u.storage?.quota == null ? '∞' : gb(u.storage.quota))}"> GB
+            ${u.storage?.percent != null ? `<div class="muted">${u.storage.percent}%</div>` : ''}</div></td>
           <td><div class="admin-actions">
             ${u.status === 'pending' ? `<button class="btn small primary" data-act="approve" data-user="${esc(u.username)}">Approve</button>` : ''}
             <button class="btn small" data-act="link" data-user="${esc(u.username)}" title="Create a password link (e-mailed when SMTP is configured)">
               ${u.status === 'invited' ? 'Resend invite' : 'Reset password'}</button>
             <button class="btn small danger" data-act="delete" data-user="${esc(u.username)}">Delete</button>
           </div></td>
-        </tr>`).join('') || '<tr><td colspan="6" class="muted">No users</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="7" class="muted">No users</td></tr>';
 }
 
 async function load() {
     const d = await api('/auth/admin/users');
-    USERS = d.users; ROLES = d.roles; STATUSES = d.statuses;
+    USERS = d.users; ROLES = d.roles; STATUSES = d.statuses; DEFAULT_QUOTA = d.default_quota_gb || 0;
     $('#mail-note').textContent = d.mail_enabled ? 'Invitations are sent by e-mail.'
         : 'E-mail (SMTP) is not configured: copy the invitation link shown after sending and give it to the user.';
     render();
@@ -77,6 +84,14 @@ $('#f-invite').addEventListener('submit', async (e) => {
 });
 
 $('#users').addEventListener('change', async (e) => {
+    const q = e.target.closest('input[data-quota]');
+    if (q) {      // per-user storage quota: number of GB, 0 = unlimited, empty = default of the server (.env)
+        try {
+            await api('/auth/admin/quota', { username: q.dataset.quota, quota_gb: q.value.trim() });
+            await load();
+        } catch (err) { alert(err.message); }
+        return;
+    }
     const s = e.target.closest('select[data-field]');
     if (!s) return;
     try { await api('/auth/admin/update', { username: s.dataset.user, [s.dataset.field]: s.value }); }

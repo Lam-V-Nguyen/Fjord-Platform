@@ -283,8 +283,24 @@ def project_definer(old_name, username='admin', for_copy: bool = False, must_exi
             if is_write_request(_CURRENT_REQUEST.get()):
                 raise HTTPException(status_code=400, detail="No project selected. Create a new project or open an existing one first.")
         elif must_exist: _require_project_dir(new_name, old_name)
+        _storage_guard(owner, username)
     name_id = f'{new_name}/{uuid4()}'
     return new_name, name_id
+
+def _storage_guard(owner: str, username: str) -> None:
+    """Storage quota of the project OWNER: 507 for routes that add data when it is full; deleting refreshes the size."""
+    req = _CURRENT_REQUEST.get()
+    if req is None or not is_write_request(req): return
+    from services import storage
+    path = req.url.path
+    if "delete" in path or path.startswith("/reset_"): storage.invalidate(owner); return
+    if not storage.is_growth_route(path): return
+    if owner == username:
+        user = current_user(req); is_admin = bool(user and user.is_admin)
+    else:
+        from services import auth_store
+        o = auth_store.get_user(owner); is_admin = bool(o and o.is_admin)
+    storage.check(owner, is_admin, viewer=username)
 
 # ---------------------------------------------------------------- per-user view state of other people's projects
 def _viewer_of_other(project_path: str):

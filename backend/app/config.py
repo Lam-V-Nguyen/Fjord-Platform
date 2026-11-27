@@ -81,6 +81,11 @@ PUBLIC_PROJECTS = [p.strip() for p in (_env("PUBLIC_PROJECTS", "demo") or "").sp
 # Max simulation processes (D-Flow FM, DELWAQ, Wflow) running at once on the server – above it, new runs are refused
 MAX_SOLVER_PROCESSES = int(_env("MAX_SOLVER_PROCESSES", str(max(1, (os.cpu_count() or 4) // 2))))
 
+# Storage quota per user = size of PROJECT_ROOT/<user> (own projects; a shared project counts for its owner).
+# 0 = unlimited. Administrators are unlimited unless a quota is set for them on the /admin page (per-user override).
+USER_QUOTA_GB = float(_env("USER_QUOTA_GB", "0"))
+QUOTA_WARN_PERCENT = float(_env("QUOTA_WARN_PERCENT", "90"))    # warning banner from this share of the quota
+
 # ============== E-mail (SMTP) – not configured: invite / reset links are shown to the admin to send manually ================
 SMTP_HOST = _env("SMTP_HOST")
 SMTP_PORT = int(_env("SMTP_PORT", "587"))
