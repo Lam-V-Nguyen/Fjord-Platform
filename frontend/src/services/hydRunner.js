@@ -42,9 +42,9 @@ async function hydComponents() {
             }
             obj.showCheckbox.checked = true; HYDRunning = true;
             // Run hydrodynamics simulation and Update logs every 10 seconds
-            updateLogHYD(projectName, obj.progressbar, obj.progressText, obj.infoArea, 10, logFile);
+            updateLogHYD(projectName, obj.progressbar, obj.infoArea, 10, logFile);
         } else { obj.showCheckbox.checked = false; HYDRunning = false; }
-        obj.progressText.innerText = statusRes.message; obj.progressbar.value = statusRes.progress;
+        showStatus(statusRes?.status, statusRes?.message ?? '', statusRes?.progress ?? 0);
         obj.checkboxContainer.style.display = 'block'; obj.showCheckbox.dispatchEvent(new Event('change'));
     });
     // Run new simulation
@@ -66,30 +66,94 @@ async function hydComponents() {
         const res = await jsonLoader('check_folder', {projectName: currentProject, folder: 'output', key: 'hyd'});
         if (res.status === "ok") { if (!confirm("Output exists. Re-run will overwrite it. Continue?")) return; }
         const start = await jsonLoader('start_sim_hyd', { projectName: currentProject, log_file: logFile });
-        if (start.status === "error") { alert(start.message); return; }
-        obj.progressText.innerText = 'Preparing data for the HYD simulation...';
-        updateLogHYD(currentProject, obj.progressbar, obj.progressText, obj.infoArea, 10, logFile);
+        if (!start || start.status === "error") { showStatus('error', start?.message || 'Could not start the HYD simulation.'); alert(start?.message || 'Could not start the HYD simulation.'); return; }
+        showStatus('running', 'Preparing data for the HYD simulation...', 0);
+        obj.infoArea.value = ''; lastOffsetHYD = 0; HYDRunning = true;
+        obj.showCheckbox.checked = true; obj.showCheckbox.dispatchEvent(new Event('change'));   // show the log
+        updateLogHYD(currentProject, obj.progressbar, obj.infoArea, 3, logFile);
     });
 }
 
-function updateLogHYD(hydProject, progress_bar, progress_text, info, seconds, log_file){
-    activeHYDProject = hydProject;
+// Progress text: red for errors, normal otherwise. pre-line keeps the line breaks of multi-line error messages.
+function showStatus(status, message, progress) {
+    const failed = status === 'failed' || status === 'error';
+    obj.progressText.innerText = message || (failed ? 'Simulation failed.' : '');
+    obj.progressText.style.color = failed ? 'red' : '';
+    obj.progressText.style.whiteSpace = 'pre-line';
+    if (progress !== undefined && progress !== null) obj.progressbar.value = progress;
+}
+
+async function fetchLogTail(hydProject, info, log_file) {
+    const res = await fetch(`/sim_log_tail/${hydProject}?offset=${lastOffsetHYD}&log_file=${log_file}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    for (const line of data.lines) info.value += line + "\n";
+    info.scrollTop = info.scrollHeight; lastOffsetHYD = data.offset;
+}
+
+// "small flow links discarded": OK -> repair the grid of the scenario, Cancel -> user has to create a new grid
+async function handleSmallFlowLinks(project, message) {
+    const repair = confirm(`${message}\n\n` +
+        `========================o0o========================` +
+        `OK: Remove the small flow links from the grid of this scenario automatically ` +
+        `(neighbouring cells are merged and the grid file is replaced).\n` +
+        `Cancel: Keep the grid. You then have to create a new grid instead.`);
+    if (!repair) {
+        showStatus('failed', 'HYD simulation failed: the grid has small flow links.\n' +
+            'Create a new grid in the Grid tab (use "Check Grid" before saving) and use it in this scenario.');
+        return;
+    }
+    showStatus('running', 'Removing small flow links from the grid...', 0);
+    let res = null;
+    try { res = await jsonLoader('fix_hyd_grid', { projectName: project }); } catch (error) { res = null; }
+    if (!res || res.status !== 'ok') {
+        const msg = `Could not repair the grid: ${res?.message || 'no response from the server'}\n` +
+            'Please create a new grid in the Grid tab.';
+        showStatus('failed', msg); alert(msg); return;
+    }
+    showStatus('finished', `Grid repaired. ${res.message}`, 0);
+    obj.infoArea.value += `\n[GRID] ${res.message}\n`; obj.infoArea.scrollTop = obj.infoArea.scrollHeight;
+    if (confirm(`Grid repaired.\n${res.message}\n\nRun the HYD simulation again now?`)) obj.runBtn.click();
+}
+
+function stopPolling() { if (logIntervalHYD) { clearInterval(logIntervalHYD); logIntervalHYD = null; } }
+
+function updateLogHYD(hydProject, progress_bar, info, seconds, log_file){
+    stopPolling(); activeHYDProject = hydProject;
+    let busy = false, failures = 0;
     logIntervalHYD = setInterval(async () => {
-        if (activeHYDProject !== hydProject) { clearInterval(logIntervalHYD); logIntervalHYD = null; }
+        if (activeHYDProject !== hydProject) { stopPolling(); return; }
+        if (busy) return;                                   // previous request still running
+        busy = true;
         try {
             const statusRes = await jsonLoader('check_sim_status_hyd', { projectName: hydProject });
-            progress_text.innerText = statusRes.message; progress_bar.value = statusRes.progress;
-            if (statusRes.status !== "running" && statusRes.status !== "reorganizing") {
-                info.value += statusRes.message; info.scrollTop = info.scrollHeight;
-                if (logIntervalHYD) { clearInterval(logIntervalHYD); logIntervalHYD = null; }
+            if (!statusRes || !statusRes.status) throw new Error('Empty response from check_sim_status_hyd');
+            failures = 0;
+            const running = statusRes.status === "running" || statusRes.status === "reorganizing";
+            if (running) { showStatus(statusRes.status, statusRes.message, statusRes.progress); }
+            await fetchLogTail(hydProject, info, log_file).catch(() => {});   // log first, so it is complete
+            if (!running) {
+                stopPolling(); HYDRunning = false;
+                const failed = statusRes.status === 'failed' || statusRes.status === 'error';
+                showStatus(statusRes.status, statusRes.message, failed ? progress_bar.value : statusRes.progress);
+                // the backend already wrote the final message into the log -> only add it when it is missing
+                if (statusRes.message && !info.value.includes(statusRes.message)) {
+                    info.value += "\n" + statusRes.message + "\n"; info.scrollTop = info.scrollHeight;
+                }
+                if (failed) {
+                    obj.showCheckbox.checked = true; obj.showCheckbox.dispatchEvent(new Event('change'));
+                    if (statusRes.error_code === 'small_flow_links') await handleSmallFlowLinks(hydProject, statusRes.message);
+                    else alert(statusRes.message || 'HYD simulation failed.');
+                }
             }
-            const res = await fetch(`/sim_log_tail/${hydProject}?offset=${lastOffsetHYD}&log_file=${log_file}`);
-            if (!res.ok) return;
-            const data = await res.json();
-            for (const line of data.lines) { 
-                info.value += line + "\n"; info.scrollTop = info.scrollHeight;
+        } catch (error) {
+            // Before: the interval was cleared silently and the text stayed "Preparing data ..."
+            failures += 1;
+            console.error('check_sim_status_hyd:', error);
+            if (failures >= 3) {
+                stopPolling(); HYDRunning = false;
+                showStatus('error', `Lost contact with the server while checking the HYD simulation: ${error.message || error}`);
             }
-            lastOffsetHYD = data.offset;
-        } catch (error) { clearInterval(logIntervalHYD); logIntervalHYD = null; }
+        } finally { busy = false; }
     }, seconds * 1000);
 }

@@ -3,7 +3,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Request
 from fastapi.responses import JSONResponse
 from config import PROJECT_ROOT
-from services import functions, constants
+from services import functions, constants, grid_functions
 from services.dashboard_results import face_order
 import geopandas as gpd, numpy as np, pandas as pd, xarray as xr
 from shapely.geometry import mapping
@@ -15,7 +15,7 @@ router = APIRouter()
 def upload_data(file: UploadFile = File(...), projectName: str = Form(...),
     fileName: str = Form(...), type: str = Form(...), user=Depends(functions.basic_auth)):
     project_name, _ = functions.project_definer(projectName, user)
-    if (type == 'grid'): save_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "input"))
+    if (type == 'grid'): return upload_grid(file, project_name, fileName)
     elif (type == 'gis'): save_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "GIS"))
     else: return JSONResponse({"status": "error", "message": f"Invalid upload type: {type!r}"}, status_code=400)
     if not os.path.exists(save_dir): os.makedirs(save_dir)
@@ -63,6 +63,40 @@ def upload_data(file: UploadFile = File(...), projectName: str = Form(...),
         if file_path.endswith('.zip') and os.path.exists(file_path): functions.safe_remove(file_path)
         temp_dir = os.path.normpath(os.path.join(save_dir, 'temp'))
         if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
+        file.file.close()
+
+def upload_grid(file: UploadFile, project_name: str, fileName: str):
+    """New grid for a scenario: check it, set NetFile in the MDU, delete the old grid file and its backups."""
+    input_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "input"))
+    os.makedirs(input_dir, exist_ok=True)
+    file_name = os.path.basename(fileName or file.filename or "")
+    if not file_name.lower().endswith('.nc'):
+        return JSONResponse({"status": "error", "message": "The grid must be a NetCDF file (*.nc)."})
+    tmp_path = os.path.join(input_dir, f".upload_{file_name}.tmp")
+    try:
+        with open(tmp_path, "wb") as f:
+            while chunk := file.file.read(1024 * 1024): f.write(chunk)
+        try: info = grid_functions.inspect_net_file(tmp_path)          # reject files D-Flow FM cannot read
+        except grid_functions.GridError as e:
+            return JSONResponse({"status": "error", "message": f"Invalid grid file '{file_name}': {e}"})
+        mdu_path = os.path.join(input_dir, "FlowFM.mdu")
+        if os.path.exists(mdu_path):
+            result = grid_functions.update_scenario_grid(input_dir, mdu_path, tmp_path, new_name=file_name)
+        else:                                                            # no MDU yet: only replace the file
+            os.replace(tmp_path, os.path.join(input_dir, file_name))
+            result = {"grid": file_name, "old_grid": None,
+                "deleted": grid_functions.remove_old_grid_files(input_dir, keep_file=file_name)
+            }
+        message = f"Grid '{file_name}' uploaded successfully."
+        if result["deleted"]: message += f"\nRemoved old grid file(s): {', '.join(result['deleted'])}."
+        if info["small_links"]:
+            message += (f"\n\nWarning: the grid has {info['small_links']} small flow link(s). D-Flow FM will stop on them; "
+                "You will be asked to repair the grid when the HYD simulation fails, or use 'Check Grid' while processing the grid."
+            )
+        return JSONResponse({"status": "ok", "message": message, "content": {**result, **info}})
+    except Exception as e: functions.error('/upload_data', e)
+    finally:
+        if os.path.exists(tmp_path): os.remove(tmp_path)
         file.file.close()
 
 # Process data

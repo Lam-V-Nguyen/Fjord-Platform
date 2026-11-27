@@ -504,16 +504,21 @@ export async function csvUploader(event, targetText, table, nCols, start=null, e
 }
 
 export async function fileUploader(targetFile, targetText, projectName, gridName, message, type){
-    if (projectName === '') return;
+    if (projectName === '') return null;
+    const file = targetFile.files[0]; if (!file) return null;
     signalSender('showOverlay', message);
-    const file = targetFile.files[0], formData = new FormData();
+    const formData = new FormData();
     formData.append('file', file); formData.append('projectName', projectName);
     formData.append('fileName', gridName); formData.append('type', type);
-    if (targetText !== null) {targetText.value = file?.name || "";}
-    const response = await fetch('/upload_data', { method: 'POST', body: formData });
-    const data = await response.json(); signalSender('hideOverlay'); alert(data.message);
-    if (targetFile) { targetFile.value = ''; }
-    if (data.status === "error") { return; }
+    let data = null;
+    try {
+        const response = await fetch('/upload_data', { method: 'POST', body: formData });
+        data = await response.json();
+    } catch (error) { data = { status: 'error', message: `Upload failed: ${error.message || error}` }; }
+    finally { signalSender('hideOverlay'); if (targetFile) { targetFile.value = ''; } }
+    alert(data?.message || 'Upload failed.');
+    if (data?.status === "ok" && targetText !== null) { targetText.value = file.name; }   // only after success
+    return data;
 }
 
 export async function getProjectList(userName='', folderCheck='', key='getProjects', keyChecker='') {

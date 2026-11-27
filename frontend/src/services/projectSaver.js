@@ -59,8 +59,8 @@ export async function saveProject(elements, timeZone) {
     // Check grid
     const fileInput = gridPathText.value;
     if (!fileInput || fileInput.length === 0) { alert('Please select a grid file!'); return; }
-    data.set('grid_file', fileInput);
-    data.set('netNC_file', 'FlowFM_net.nc');
+    // data.set('grid_file', fileInput);
+    data.set('netNC_file', fileInput);
     // Get start date
     const start_ = startDate.value, stop_ = stopDate.value;
     if (!startDate || start_ === '' || !stopDate || stop_ === '') {

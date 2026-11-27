@@ -1,12 +1,73 @@
-import os, re, subprocess, threading, asyncio, traceback, json, shutil
+import os, re, subprocess, threading, asyncio, traceback, json, shutil, glob, time
 from fastapi import APIRouter, Request, Depends, Query
 from fastapi.responses import JSONResponse
+from fastapi.concurrency import run_in_threadpool
 from config import PROJECT_ROOT, DELFT_PATH
-from services import functions, wq_functions, calibration_functions
+from services import functions, wq_functions, calibration_functions, constants, grid_functions
 import xarray as xr
 from datetime import datetime, timezone
 
 router, processes = APIRouter(), {}
+
+# ---------------------------------------------------------------------------
+# D-Flow FM diagnostics (.dia). D-Flow FM writes every message to <mdu>.dia, but stdout through a pipe is
+# block-buffered, so an error may never reach stdout while the run is alive -> the frontend saw nothing.
+# ---------------------------------------------------------------------------
+def find_dia(input_dir: str, since: float):
+    """Newest .dia file written by this run (input folder or its DFM_OUTPUT* folder)."""
+    files = glob.glob(os.path.join(input_dir, "*.dia")) + glob.glob(os.path.join(input_dir, "DFM_OUTPUT*", "*.dia"))
+    files = [f for f in files if os.path.isfile(f) and os.path.getmtime(f) >= since - 2]
+    return max(files, key=os.path.getmtime) if files else None
+
+def read_dia(path):
+    """{'errors': [...], 'warnings': [...]} of the current run (lines after 'Until here copy of previous ...')."""
+    out = {"errors": [], "warnings": []}
+    if not path: return out
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f: lines = f.read().splitlines()
+    except OSError: return out
+    for i, line in enumerate(lines):
+        if "Until here copy of previous diagnostic file" in line: lines = lines[i + 1:]; break
+    for line in lines:
+        m = constants.DIA_LINE_RE.match(line.strip())
+        if m: out["errors" if m.group(1).upper() == "ERROR" else "warnings"].append(" ".join(m.group(2).split()))
+    return out
+
+def read_waq_reports(output_folder: str, stem: str, since: float, limit: int = 15):
+    """ERROR lines from the DELWAQ report files (.lsp = delwaq1 input check, .lst/.mon = delwaq2 run)."""
+    errors = []
+    for ext in (".lsp", ".lst", ".mon"):
+        p = os.path.join(output_folder, stem + ext)
+        if not os.path.isfile(p) or os.path.getmtime(p) < since - 2: continue
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    t = " ".join(line.split())
+                    # skip the summary counters such as "Number of ERRORS during input : 0"
+                    if t and re.search(r'\bERROR', t, re.IGNORECASE) and not re.search(r'number of errors', t, re.IGNORECASE):
+                        errors.append(f"{os.path.basename(p)}: {t}")
+        except OSError: continue
+    return list(dict.fromkeys(errors))[:limit]
+
+def waq_failure_message(errors, returncode, tail, reason=""):
+    msg = "WAQ simulation failed." + (f" {reason}" if reason else "")
+    if errors: msg += "\nDELWAQ error(s):\n" + "\n".join(f"- {e}" for e in errors)
+    hints = list(dict.fromkeys(h for e in errors for k, h in constants.WAQ_ERROR_HINTS.items() if k in e.lower()))
+    if hints: msg += "\n\nHow to fix:\n" + "\n".join(f"- {h}" for h in hints)
+    if not errors:
+        msg += f"\nDELWAQ stopped (exit code {returncode}) without an error message."
+        if tail: msg += "\nLast output:\n" + "\n".join(tail)
+    return msg
+
+def failure_message(errors, returncode, tail):
+    if errors:
+        msg = "HYD simulation failed. D-Flow FM error(s):\n" + "\n".join(f"- {e}" for e in errors)
+        hints = list(dict.fromkeys(h for e in errors for k, h in constants.ERROR_HINTS.items() if k in e.lower()))
+        if hints: msg += "\n\nHow to fix:\n" + "\n".join(f"- {h}" for h in hints)
+        return msg
+    msg = f"HYD simulation failed: D-Flow FM stopped (exit code {returncode}) without an error message."
+    if tail: msg += "\nLast output:\n" + "\n".join(tail)
+    return msg
 
 @router.post("/check_folder")
 async def check_folder(request: Request, user=Depends(functions.basic_auth)):
@@ -34,17 +95,23 @@ async def check_sim_status_hyd(request: Request, user=Depends(functions.basic_au
     info = processes.get(process_key)
     if not info: 
         return JSONResponse({"status": "not_started", "progress": 0, "message": 'No simulation running'})
-    if info["status"] in ("finished", "failed", "error"): processes.pop(process_key, None)
-    if info["status"] == "finished":
+    status = info.get("status")
+    if status in ("finished", "failed", "error"): processes.pop(process_key, None)
+    if status == "finished":
         return JSONResponse({"status": "finished", "progress": 100,
-            "message": info.get("message", 'Simulation completed')})
-    if info["status"] == "failed":
-        return JSONResponse({"status": "failed", "progress": info["progress"],
-            "message": info.get("message", 'Simulation failed')})
-    if info["status"] == "reorganizing":
+            "message": info.get("message") or 'Simulation completed'})
+    if status in ("failed", "error"):           # "error" used to fall through and show "completed: 0%"
+        return JSONResponse({"status": "failed", "progress": info.get("progress", 0),
+            "message": info.get("message") or 'Simulation failed', "errors": info.get("errors", []), "error_code": info.get("error_code")
+        })
+    if status == "reorganizing":
         return JSONResponse({"status": "reorganizing", "progress": 100, "message": 'Reorganizing outputs. Please wait...'})
+    if info.get("errors"):                       # error found, D-Flow FM is being stopped
+        return JSONResponse({"status": "running", "progress": info.get("progress", 0), "message": info["message"]})
+    if not info.get("started_progress"):         # no progress line yet: still initialising
+        return JSONResponse({"status": "running", "progress": 0, "message": info.get("message") or 'Preparing data for simulation...'})
     complete = f'HYD simulation completed: {info["progress"]}% [Time used: {info["time_used"]} → Time left: {info["time_left"]}]'
-    return JSONResponse({"status": info["status"], "progress": info["progress"], "message": complete})
+    return JSONResponse({"status": status, "progress": info["progress"], "message": complete})
 
 # Start a hydrodynamic simulation
 @router.post("/start_sim_hyd", dependencies=[Depends(functions.require_sim_slot)])
@@ -55,7 +122,7 @@ async def start_sim_hyd(request: Request, user=Depends(functions.basic_auth)):
     lock = redis.lock(process_key, timeout=1000, blocking_timeout=10)
     async with lock:
         # Check if simulation already running
-        if project_name in processes and processes[process_key]["status"] == "running":
+        if process_key in processes and processes[process_key]["status"] == "running":
             info = processes[process_key]
             complete = f'HYD simulation completed: {info["progress"]}% [Time used: {info["time_used"]} → Time left: {info["time_left"]}]'
             return JSONResponse({"status": "running", "progress": info["progress"], "message": complete})
@@ -88,10 +155,35 @@ async def start_sim_hyd(request: Request, user=Depends(functions.basic_auth)):
             f.writelines(mdu_base)
         # Run the process
         command = ["cmd.exe", "/c", bat_path, "--autostartstop", mdu_path]
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            encoding="utf-8", errors="replace", bufsize=1, cwd=path)
-        processes[process_key] = {"process": process, "progress": 0.0, "status": "running", 
-            "message": 'Preparing data for simulation...', "time_used": "N/A", "time_left": "N/A"}
+        started = time.time()
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", bufsize=1, cwd=path)
+        except OSError as e:
+            return JSONResponse({"status": "error", "progress": 0.0, "message": f"Cannot start D-Flow FM: {e}"})
+        processes[process_key] = {"process": process, "progress": 0.0, "status": "running",
+            "message": 'Preparing data for simulation...', "time_used": "N/A", "time_left": "N/A",
+            "errors": [], "started_progress": False}
+        tail = []                                                   # last stdout lines, for the error message
+        def add_error(text):
+            info = processes.get(process_key)
+            if not info or not text or text in info["errors"]: return
+            info["errors"].append(text)
+            info["message"] = f"D-Flow FM error: {text} - stopping the simulation ..."
+            functions.append_log(log_path, f"[ERROR] {text}")
+        # Watch the .dia file: errors appear there even when stdout is still buffered
+        def watch_dia():
+            error_seen_at = None
+            while process.poll() is None:
+                time.sleep(2)
+                info = processes.get(process_key)
+                if not info: return
+                for e in read_dia(find_dia(path, started))["errors"]: add_error(e)
+                if info["errors"] and error_seen_at is None: error_seen_at = time.time()
+                if error_seen_at and time.time() - error_seen_at > constants.ERROR_GRACE_SECONDS and process.poll() is None:
+                    res = functions.kill_process(process)            # D-Flow FM did not stop by itself
+                    functions.append_log(log_path, res["message"])
+                    return
         # Stream logs
         def stream_logs():
             try:
@@ -103,17 +195,18 @@ async def start_sim_hyd(request: Request, user=Depends(functions.basic_auth)):
                     line = line.strip()
                     if not line: continue
                     functions.append_log(log_path, line)
-                    # Catch error messages
-                    if "forrtl:" in line.lower() or "error" in line.lower():
-                        processes[process_key]["status"] = "error"
-                        processes[process_key]["message"] = line
-                        functions.append_log(log_path, line)
-                        res = functions.kill_process(process)
-                        functions.append_log(log_path, res["message"])
-                        return
+                    tail.append(line); del tail[:-15]
+                    # Catch error messages ("** ERROR : ..." or Fortran runtime errors). Do not kill here:
+                    # D-Flow FM normally stops by itself and may print more errors; watch_dia() kills it if not.
+                    m = constants.STDOUT_ERROR_RE.search(line)
+                    if m:
+                        add_error(" ".join((m.group(1) or m.group(2)).split()))
+                        continue
                     # Check for progress
                     match_pct = percent_re.search(line)
-                    if match_pct: processes[process_key]["progress"] = float(match_pct.group("percent"))
+                    if match_pct:
+                        processes[process_key]["progress"] = float(match_pct.group("percent"))
+                        processes[process_key]["started_progress"] = True
                     # Extract run time
                     times = time_re.findall(line)
                     if len(times) >= 4:
@@ -129,9 +222,23 @@ async def start_sim_hyd(request: Request, user=Depends(functions.basic_auth)):
                     processes[process_key]["message"] = f"Internal error: {e}"
                 functions.append_log(log_path, f"[INTERNAL ERROR] {e}")
             finally:
-                process.wait()
+                returncode = process.wait()
                 proc_info = processes.get(process_key)
-                if not proc_info or proc_info["status"] == "error": return
+                if not proc_info: return
+                # Final check of the .dia file (also catches errors that never reached stdout)
+                dia = read_dia(find_dia(path, started))
+                for e in dia["errors"]: add_error(e)
+                for w in dia["warnings"]: functions.append_log(log_path, f"[WARNING] {w}")
+                errors = proc_info["errors"]
+                no_progress = not proc_info.get("started_progress")
+                if errors or proc_info["status"] in ("failed", "error") or (returncode != 0 and no_progress):
+                    if errors or proc_info["status"] not in ("failed", "error"):
+                        proc_info["message"] = failure_message(errors, returncode, tail)
+                    if any("small flow links" in e.lower() for e in errors):
+                        proc_info["error_code"] = "small_flow_links"   # frontend offers to repair the grid
+                    functions.append_log(log_path, proc_info["message"])
+                    proc_info["status"] = "failed"          # set LAST: the log is complete when the frontend sees it
+                    return
                 processes[process_key]["status"] = "reorganizing"
                 processes[process_key]["message"] = "Reorganizing outputs. Please wait..."
                 processes[process_key]["progress"] = 100.0
@@ -149,7 +256,38 @@ async def start_sim_hyd(request: Request, user=Depends(functions.basic_auth)):
                     processes[process_key]["message"] = f"Simulation failed: {e}."
                     functions.append_log(log_path, processes[process_key]["message"])
         threading.Thread(target=stream_logs, daemon=True).start()
+        threading.Thread(target=watch_dia, daemon=True).start()
     return JSONResponse({"status": "ok", "message": f"Simulation {project_name} started."})
+
+# Repair the grid of a scenario after "small flow links discarded"
+@router.post("/fix_hyd_grid")
+async def fix_hyd_grid(request: Request, user=Depends(functions.basic_auth)):
+    try:
+        body = await request.json()
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        info = processes.get(f"{project_name}:sim_hyd")
+        if info and info.get("status") in ("running", "reorganizing"):
+            return JSONResponse({"status": "error", "message": "The HYD simulation is still running."})
+        input_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "input"))
+        mdu_path = os.path.join(input_dir, "FlowFM.mdu")
+        if not os.path.exists(mdu_path): return JSONResponse({"status": "error", "message": "MDU file not found."})
+        with open(mdu_path, 'r', encoding='utf-8', errors='ignore') as f:
+            net_file = calibration_functions.get_values_from_mdu(f.readlines(), 'NetFile')
+        net_file = (net_file or '').split('#', 1)[0].strip()
+        net_path = os.path.normpath(os.path.join(input_dir, net_file)) if net_file else ''
+        if not net_file or not os.path.isfile(net_path):
+            return JSONResponse({"status": "error", "message": f"Grid file '{net_file}' (NetFile in the MDU) not found."})
+        result = await run_in_threadpool(grid_functions.fix_net_file_small_flow_links, net_path)
+        log_path = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "logs", "log_hyd.txt"))
+        functions.append_log(log_path, f"[GRID] {result['message']}")
+        if not result["changed"]:
+            return JSONResponse({"status": "error", "message": "No small flow links were found in the grid file, "
+                "so it was not changed. Please create a new grid in the Grid tab."})
+        return JSONResponse({"status": "ok", "message": result["message"], "content": result})
+    except grid_functions.GridError as e: return JSONResponse({"status": "error", "message": str(e)})
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"status": "error", "message": f"Repairing the grid failed: {e}"})
 
 @router.get("/sim_log_tail/{project_name}")
 async def sim_log_tail(project_name: str, offset: int = Query(0), 
@@ -174,18 +312,24 @@ async def check_sim_status_waq(request: Request, user=Depends(functions.basic_au
     info = processes.get(process_key)
     if not info:
         return JSONResponse({"status": "not_started", "progress": 0, "message": 'Simulation not started yet.'})
-    if info["status"] in ("finished", "failed", "error"): processes.pop(process_key, None)
-    if info["status"] == "finished":
+    status = info.get("status")
+    if status in ("finished", "failed", "error"): processes.pop(process_key, None)
+    if status == "finished":
         return JSONResponse({"status": "finished", "progress": 100,
-            "message": info.get("message", 'Simulation completed.')})
-    if info["status"] == "failed":
-        return JSONResponse({"status": "failed", "progress": info["progress"],
-            "message": info.get("message", 'Simulation failed.')})
-    if info["status"] == "reorganizing":
+            "message": info.get("message") or 'Simulation completed.'})
+    if status in ("failed", "error"):           # "error" used to fall through and show "completed: 0%"
+        return JSONResponse({"status": "failed", "progress": info.get("progress", 0),
+            "message": info.get("message") or 'Simulation failed.', "errors": info.get("errors", [])})
+    if status == "reorganizing":
         return JSONResponse({"status": "reorganizing", "progress": 100, "message": 'Reorganizing outputs. Please wait...'})
-    if info["status"] == "preparing":
-        return JSONResponse({"status": "preparing", "progress": 0, "message": info["message"]})
-    return JSONResponse({"status": info["status"], "progress": info["progress"],
+    if status in ("preparing", "not_started"):
+        return JSONResponse({"status": "preparing", "progress": 0,
+            "message": info.get("message") or 'Preparing data for the WAQ simulation...'})
+    if info.get("errors"):                       # error found, DELWAQ is being stopped
+        return JSONResponse({"status": "running", "progress": info.get("progress", 0), "message": info["message"]})
+    if not info.get("progress"):
+        return JSONResponse({"status": status, "progress": 0, "message": info.get("message") or 'Checking inputs for WAQ simulation...'})
+    return JSONResponse({"status": status, "progress": info["progress"],
         "message": f"WAQ simulation completed: {info['progress']}%"})
 
 # Start a waq simulation
@@ -206,7 +350,9 @@ async def start_sim_waq(request: Request, user=Depends(functions.basic_auth)):
 
 async def run_waq_simulation(project_name, waq_name, log_file):
     process_key = f"{project_name}:{waq_name}"
-    processes[process_key] = {"status": "not_started", "progress": 0, "message": "", "process": None}
+    info = processes.setdefault(process_key, {})
+    info.update({"status": "preparing", "progress": 0, "process": None, "errors": [],
+        "message": "Preparing data for the WAQ simulation..."})
     log_dir = os.path.join(PROJECT_ROOT, project_name, "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.normpath(os.path.join(log_dir, log_file))
@@ -221,7 +367,7 @@ async def run_waq_simulation(project_name, waq_name, log_file):
     if not os.path.exists(config_file):
         log_file.write("Configuration file not found.\n")
         processes[process_key]["status"] = "error"
-        processes[process_key]["message"] = "Configuration file not found."
+        processes[process_key]["message"] = f"WAQ simulation failed: configuration file '{waq_name}.json' not found."
         log_file.flush(); log_file.close()
         return
     log_file.write("Configuration file found. Reading configuration ...\n")
@@ -280,7 +426,7 @@ async def run_waq_simulation(project_name, waq_name, log_file):
         inp_file, message = waq_model[0], waq_model[1]
         if inp_file is None:
             log_file.write(f"Error: {message}.\n")
-            processes[process_key]['status'], processes[process_key]['message'] = "error", message
+            processes[process_key]['status'], processes[process_key]['message'] = "error", f"WAQ simulation failed while preparing inputs: {message}"
             log_file.flush(); log_file.close()
             return
         if message: log_file.write(f"{message}\n\n")
@@ -293,17 +439,20 @@ async def run_waq_simulation(project_name, waq_name, log_file):
             if not os.access(path, os.R_OK):
                 log_file.write(f"No read permission: {path}\n")
                 processes[process_key]["status"] = "error"
-                processes[process_key]["message"] = "No read permission"
+                processes[process_key]["message"] = f"WAQ simulation failed: no read permission or file missing: {path}"
                 log_file.flush(); log_file.close()
                 return
         # Run Simulation and get output
         inp_name = os.path.basename(inp_file)
+        inp_stem = os.path.splitext(inp_name)[0]
         progress_regex = re.compile(r"(\d+(?:\.\d+)?)% Completed")
         command = [bat_path, inp_name, "-p", proc_path.replace(".def", ""), "-eco", bloom_path]
+        started = time.time()
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1, cwd=output_folder)
-        processes[process_key] = {"process": process, "progress": 0.0, 
+        processes[process_key] = {"process": process, "progress": 0.0, "errors": [],
             "status": "running", "message": 'Checking inputs for WAQ simulation...'}
+        tail = []
         log_file.write("Checking inputs for WAQ simulation...\n\n")
         log_file.write("=== Starting simulation ===\n\n")
         # Stream logs
@@ -315,16 +464,24 @@ async def run_waq_simulation(project_name, waq_name, log_file):
                     if not line: continue
                     log_file.write(line); log_file.flush(); clean_line = line.strip()
                     if not clean_line: continue
+                    tail.append(clean_line); del tail[:-15]
                     if "ERROR in GMRES" in line:
                         log_file.write("\nGMRES solver failed.\nConsider increasing the maximum number of iterations.\n")
                         log_file.flush()
-                        processes[process_key]["status"] = "error" 
-                        processes[process_key]["message"] = "GMRES solver failed. Consider increasing the maximum number of iterations."
+                        processes[process_key]["errors"].append(clean_line)
+                        processes[process_key]["status"] = "error"
+                        processes[process_key]["message"] = waq_failure_message([clean_line], None, [])
                         res = functions.kill_process(process)
                         log_file.write(f'{res["message"]}\n')
                         log_file.write("\n\nGMRES solver failed.\nConsider increasing the maximum number of iterations.\n")
                         log_file.flush()
                         break
+                    # Other errors: record them (DELWAQ stops by itself; the final check below reports them)
+                    if constants.WAQ_ERROR_RE.search(clean_line) and not re.search(r'number of errors', clean_line, re.IGNORECASE):
+                        info = processes[process_key]
+                        if clean_line not in info["errors"]: info["errors"].append(clean_line)
+                        info["message"] = f"DELWAQ error: {clean_line}"
+                        continue
                     # Check for progress
                     match_pct = progress_regex.search(line)
                     if match_pct: processes[process_key]["progress"] = float(match_pct.group(1))
@@ -335,9 +492,24 @@ async def run_waq_simulation(project_name, waq_name, log_file):
                     processes[process_key]["message"] = f"Internal error: {e}"
                 log_file.write(f"Internal error: {e}\n")
             finally:
-                process.wait()
+                returncode = process.wait()
                 proc_info = processes.get(process_key)
-                if not proc_info or proc_info["status"] == "error": return
+                if not proc_info:
+                    log_file.close(); return
+                # Final check: errors on stdout, errors in the report files, missing output files
+                errors = list(dict.fromkeys(proc_info.get("errors", []) + read_waq_reports(output_folder, inp_stem, started)))
+                outputs = [os.path.join(output_folder, f"{file_name}{s}") for s in ("_his.nc", "_map.nc")]
+                no_output = not any(os.path.exists(p) for p in outputs)
+                if proc_info["status"] in ("error", "failed") or errors or no_output:
+                    if proc_info["status"] == "failed" and not errors:
+                        msg = proc_info.get("message") or "WAQ simulation failed."      # internal error, keep it
+                    else:
+                        reason = "No output file (_his.nc/_map.nc) was produced." if no_output else ""
+                        msg = waq_failure_message(errors, returncode, tail, reason)
+                    log_file.write(f"\n{msg}\n"); log_file.flush(); log_file.close()
+                    proc_info["errors"], proc_info["message"] = errors, msg
+                    proc_info["status"] = "failed"          # set LAST: the log is complete when the frontend sees it
+                    return
                 try:
                     processes[process_key]["progress"] = 100.0
                     processes[process_key]["status"] = "reorganizing"
@@ -374,7 +546,7 @@ async def run_waq_simulation(project_name, waq_name, log_file):
                     log_file.flush(); log_file.close()
         threading.Thread(target=stream_logs, daemon=True).start()
     except Exception as e:
-        processes[process_key]["status"], processes[process_key]["message"] = "error", str(e)
+        processes[process_key]["status"], processes[process_key]["message"] = "error", f"WAQ simulation failed: {e}"
         print('/run_waq_simulation:\n==============')
         traceback.print_exc()
         log_file.write(f"Error running simulation: {str(e)}.\n")
