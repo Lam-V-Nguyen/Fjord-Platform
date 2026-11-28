@@ -41,9 +41,9 @@ async def reset_config(request: Request, user=Depends(functions.basic_auth)):
             if not os.path.exists(folder): return JSONResponse({"message": "Project folder doesn't exist."})
             config_dir = os.path.normpath(os.path.join(folder, "output", "config"))
             if not os.path.exists(config_dir): return JSONResponse({"message": "Configuration folder doesn't exist."})
-            shutil.rmtree(config_dir, onexc=functions.remove_readonly)
+            await run_in_threadpool(shutil.rmtree, config_dir, onexc=functions.remove_readonly)
             movement_dir = os.path.normpath(os.path.join(folder, "output", "movement"))
-            if os.path.exists(movement_dir): shutil.rmtree(movement_dir, onexc=functions.remove_readonly)
+            if os.path.exists(movement_dir): await run_in_threadpool(shutil.rmtree, movement_dir, onexc=functions.remove_readonly)
             # Delete config in Redis
             await redis.hdel(project_name, "config", "layer_reverse_hyd", "layer_reverse_waq")
             await redis.hdel(functions.cache_key(project_name), "config", "layer_reverse_hyd", "layer_reverse_waq")
@@ -106,7 +106,7 @@ async def delete_project(request: Request, user=Depends(functions.basic_auth)):
             extend_task = asyncio.create_task(functions.auto_extend(lock))
             if not os.path.exists(project_folder): 
                 return JSONResponse({"status": 'error', "message": f"Project '{project_name}' does not exist."})
-            shutil.rmtree(project_folder, onerror=functions.remove_readonly)
+            await run_in_threadpool(shutil.rmtree, project_folder, onerror=functions.remove_readonly)
             if '/' in project_name:                      # forget the shares of the deleted project
                 from services import auth_store
                 auth_store.drop_project_shares(*project_name.split('/', 1))
