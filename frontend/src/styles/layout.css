@@ -181,7 +181,7 @@
 .waq-field select option { background: var(--panel); color: var(--text); }
 .waq-field select:disabled { opacity: 0.6; cursor: wait; }
 
-.project-chip { max-width: 190px; }
+.project-chip { max-width: 400px; flex-shrink: 0; }
 .project-chip .label { overflow: hidden; text-overflow: ellipsis; }
 
 /*  Views */

@@ -570,19 +570,6 @@ def unstructuredGridCreator(data_map: xr.Dataset) -> gpd.GeoDataFrame:
     else: grid = gpd.GeoDataFrame(geometry=polygons, crs="EPSG:4326")
     return grid
 
-def nodes_from_grid(grid: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    points = []
-    for geometry in grid.geometry:
-        if isinstance(geometry, Polygon): points.extend(geometry.exterior.coords)
-        elif isinstance(geometry, MultiPolygon):
-            for polygon in geometry.geoms:
-                points.extend(polygon.exterior.coords)
-    unique_points = list(set(points))
-    points = gpd.GeoDataFrame(
-        geometry=[shapely.geometry.Point(x, y) for x, y in unique_points], crs=grid.crs
-    )
-    return points
-
 def fileWriter(template_path: str, params: dict) -> str:
     # Open the file and read its contents
     with open(template_path, 'r', encoding=encoding_detect(template_path)) as file:

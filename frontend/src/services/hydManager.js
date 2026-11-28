@@ -174,10 +174,12 @@ async function hydManager(){
     // Upload file to server
     obj.gridPathText.addEventListener('click', () => { obj.gridPathFile.click(); });
     obj.gridPathFile.addEventListener('change', async (event) => {
-        await fileUploader(
+        const file = obj.gridPathFile.files[0]; if (!file) return;
+        const result = await fileUploader(
             obj.gridPathFile, obj.gridPathText, obj.projectName.value,
             obj.gridPathFile.files[0].name, 'Uploading the Unstructured Grid...', 'grid'
         ); event.target.value = '';
+        if (!result || result.status !== 'ok') return;  // invalid grid: keep the old one on the map
         // Plot grid on map
         const content = { 
             projectName: obj.projectName.value, key: 'hyd', gridName: obj.gridPathText.value, opacity: 1
