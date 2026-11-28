@@ -55,8 +55,32 @@ export async function jsonLoader(functionName, content){
     const response = await fetch(`/${functionName}`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(content)});
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
+    // Server errors raised as HTTP errors ({detail: ...}: quota full, no access, server busy ...) -> the
+    // {status: 'error', message} shape every caller already checks, so the reason is shown to the user.
+    if (!response.ok && data && !data.status) {
+        const d = data.detail;
+        return { ...data, status: 'error', message: typeof d === 'string' ? d : (d ? JSON.stringify(d) : `HTTP ${response.status}`) };
+    }
     return data;
+}
+
+// Storage quota: any request answered with 507 (quota full) shows the storage banner of the main page,
+// also for uploads that call fetch() directly. Installed once per window (main page and every tool iframe).
+if (!window.__storageHook) {
+    window.__storageHook = true;
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+        const res = await nativeFetch(...args);
+        if (res.status === 507) {
+            res.clone().json().then(d => {
+                const msg = { type: 'STORAGE_QUOTA', content: d?.detail || d?.message || 'Storage quota reached.' };
+                if (window.parent && window.parent !== window) window.parent.postMessage(msg, location.origin);
+                else window.dispatchEvent(new CustomEvent('storage-quota', { detail: msg.content }));
+            }).catch(() => {});
+        }
+        return res;
+    };
 }
 
 export function getUser(){
