@@ -515,19 +515,33 @@ def _file_mtime(path: str) -> float | None:
     try: return os.path.getmtime(path) if os.path.isfile(path) else None
     except OSError: return None
 
+def context_files(out_dir: str, key: str) -> list[tuple[str, str]]:
+    """[(file name, label)] of a context layer: the legacy '<base><ext>' (label 'default') and every
+    '<base>__<label><ext>' in <project>/others, sorted by label."""
+    base, ext = constants.CONTEXT_LAYERS[key]
+    if not os.path.isdir(out_dir): return []
+    found = []
+    for f in os.listdir(out_dir):
+        if not f.lower().endswith(ext): continue
+        stem = f[:-len(ext)]
+        if stem == base: found.append((f, "default"))
+        elif stem.startswith(base + "__") and len(stem) > len(base) + 2: found.append((f, stem[len(base) + 2:]))
+    return sorted(found, key=lambda x: (x[1] != "default", x[1].lower()))
+
 def context_signature(project_name: str) -> str:
     """Changes when a PROJECT base-layer file is added / edited / deleted (cache key for /dashboard/layers)."""
     out_dir = os.path.join(project_dir(project_name), "others")
-    return ",".join(f"{k}:{_file_mtime(os.path.join(out_dir, f)) or 0}" for k, f in constants.CONTEXT_LAYERS.items())
+    return ",".join(f"{f}:{_file_mtime(os.path.join(out_dir, f)) or 0}"
+                    for k in constants.CONTEXT_LAYERS for f, _ in context_files(out_dir, k))
 
 @lru_cache(maxsize=16)
 def _sample_geojson_cached(path: str, step: int, mtime: float) -> dict | None:   # mtime: file edited -> re-read
     gj = read_geojson(path, step)
     return gj if gj and gj.get("features") else None
 
-def sample_geojson(directory: str, name: str) -> dict | None:
+def sample_geojson(directory: str, name: str, file: str | None = None) -> dict | None:
     steps = {"catchment": 3, "river": 2, "lake": 1}
-    path = os.path.join(directory, f"{name}.geojson")
+    path = os.path.join(directory, file or f"{name}.geojson")
     mtime = _file_mtime(path)
     if mtime is None: return None
     return _sample_geojson_cached(path, steps.get(name, 1), mtime)
@@ -557,12 +571,15 @@ def load_depth_points(directory: str, name: str = "depth.csv", max_points: int =
 def build_layers(project_name: str, inventory: dict) -> dict:
     directory = project_dir(project_name)
     out_dir = os.path.join(directory, 'others')
-    layers = {
-        "lake": sample_geojson(out_dir, "lake"), 
-        "catchment": sample_geojson(out_dir, "catchment"),
-        "rivers": sample_geojson(out_dir, "river"),
-        "bathymetry": load_depth_points(out_dir, "depth.csv"), "gis": {},
-    }
+    # Each context layer = list of files: [{"id": file name, "label": scenario / file label, "data": ...}]
+    def items(key: str, out_key: str):
+        res = []
+        for f, label in context_files(out_dir, key):
+            data = load_depth_points(out_dir, f) if key == "bathymetry" else sample_geojson(out_dir, key, f)
+            if data: res.append({"id": f, "label": label, "data": data})
+        return out_key, res
+    layers = dict(items(k, o) for k, o in (("lake", "lake"), ("catchment", "catchment"), ("river", "rivers"), ("bathymetry", "bathymetry")))
+    layers["gis"] = {}
     gis_dir = os.path.join(directory, "GIS")
     for name in inventory.get("gis_layers", []):
         path = os.path.join(gis_dir, f"{name}.geojson")

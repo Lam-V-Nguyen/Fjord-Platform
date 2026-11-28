@@ -357,9 +357,8 @@ async def grid_checker(request: Request, user=Depends(functions.basic_auth)):
 def grid_interpolation_upload(projectName: str = Form(...), file: UploadFile = File(...), user=Depends(functions.basic_auth)):
     try:
         project_name, _ = functions.project_definer(projectName, user)
-        others_dir = os.path.join(PROJECT_ROOT, project_name, "others")
-        os.makedirs(others_dir, exist_ok=True)
-        csv_path = os.path.join(others_dir, 'depth.csv')
+        # Depth points for the dashboard: <project>/others/depth__<uploaded file name>.csv (one file per upload)
+        csv_path = functions.context_file(project_name, 'depth', file.filename, '.csv')
         df = pd.read_csv(file.file, low_memory=False)
         required_columns = ['Lat', 'Lon', 'Depth']
         missing_columns = [col for col in required_columns if col not in df.columns]

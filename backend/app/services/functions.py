@@ -179,6 +179,28 @@ _BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 SHARE_SEP = ":"          # a shared project is referenced as "<owner>:<project>" (":" is never part of a folder name)
 PUBLIC_OWNER = "public"  # sample projects: "public:<name>" -> PROJECT_ROOT/<name>, read only except for administrators
 
+_LABEL_BAD = re.compile(r"[^A-Za-z0-9_.\-]+")
+
+def context_label(label) -> str:
+    """File-name safe label for a context file (Wflow scenario name, uploaded file name ...)."""
+    label = _LABEL_BAD.sub("_", os.path.splitext(os.path.basename(str(label or "")))[0]).strip("._")
+    return label[:80] or "default"
+
+def context_file(project_name: str, base: str, label, ext: str) -> str:
+    """Path of <project>/others/<base>__<label><ext> (folder created). One file per scenario, so a new
+    Wflow scenario / depth upload no longer overwrites the previous one."""
+    other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
+    os.makedirs(other_dir, exist_ok=True)
+    return os.path.join(other_dir, f"{base}__{context_label(label)}{ext}")
+
+def remove_context_files(project_name: str, label) -> None:
+    """Delete the context files of one scenario (e.g. when the Wflow scenario is deleted)."""
+    other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
+    if not os.path.isdir(other_dir): return
+    suffix = f"__{context_label(label)}"
+    for f in os.listdir(other_dir):
+        if os.path.splitext(f)[0].endswith(suffix): safe_remove(os.path.join(other_dir, f))
+
 def can_read_path(first: str, second: str, username: str) -> bool:
     """May `username` read PROJECT_ROOT/<first>/<second>/…? (raw paths used in tile URLs)
     first = owner and second = project, or first = a sample project folder."""

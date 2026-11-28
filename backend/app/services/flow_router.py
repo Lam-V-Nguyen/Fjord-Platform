@@ -76,6 +76,7 @@ async def delete_project_flow(request: Request, user=Depends(functions.basic_aut
             if not os.path.exists(flow_dir): 
                 return JSONResponse({"status": 'error', "message": f"Project '{project_name}' does not exist."})
             await run_in_threadpool(shutil.rmtree, flow_dir, onexc=functions.remove_readonly)   # large folders: worker thread
+            functions.remove_context_files(project_name, flow_name)       # its catchment / water area / rivers in 'others'
             if hasattr(request.app.state, "project_cache"): request.app.state.project_cache.pop(project_name, None)
             return JSONResponse({"status": "ok", "message": f"Project '{flow_name}' was deleted successfully."})
     except Exception as e: functions.error('/delete_project_flow', e)
@@ -102,11 +103,9 @@ def water_upload(projectName: str = Form(...), file: UploadFile = File(...),
             shutil.copyfileobj(file.file, buffer)
         file.file.close()
         water_gdf = gpd.read_file(water_path)
-        # Write catchment to 'others' directory
-        other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
-        os.makedirs(other_dir, exist_ok=True)
-        path = os.path.join(other_dir, 'lake.geojson')
-        water_gdf.to_file(path, driver='GeoJSON')
+        # Water area for the dashboard: <project>/others/lake__<scenario>.geojson (one file per Wflow scenario)
+        path = functions.context_file(project_name, 'lake', flowName, '.geojson')
+        (water_gdf.to_crs("EPSG:4326") if water_gdf.crs else water_gdf).to_file(path, driver='GeoJSON')
         content = {
             'message': 'Water area uploaded successfully.',
             "water_area": json.loads(water_gdf.to_json())
@@ -187,10 +186,8 @@ def clip_dem(request: Request, body: dict = Depends(functions.json_body), user=D
             os.makedirs(catch_dir, exist_ok=True)
             catchment_path = os.path.normpath(os.path.join(catch_dir, 'catchment.geojson'))
             catchment_buffer.to_file(catchment_path, driver='GeoJSON')
-            # Write catchment to 'others' directory
-            other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
-            os.makedirs(other_dir, exist_ok=True)
-            catch_path = os.path.join(other_dir, 'catchment.geojson')
+            # Catchment for the dashboard: <project>/others/catchment__<scenario>.geojson (one file per Wflow scenario)
+            catch_path = functions.context_file(project_name, 'catchment', flow_name, '.geojson')
             catchment_WGS84.to_file(catch_path, driver='GeoJSON')
             # Write outlet
             point = gpd.GeoDataFrame([{'geometry': Point(lon, lat)}], crs='EPSG:4326')
@@ -483,6 +480,8 @@ def river_saver(request: Request, body: dict = Depends(functions.json_body), use
         with xr.open_dataset(terrain_path, engine="rasterio") as ds:
             var_name = list(ds.data_vars)[0]
             terrain = ds[var_name].squeeze(drop=True).load()
+        # River network for the dashboard (lon/lat): <project>/others/river__<scenario>.geojson
+        gdf.to_file(functions.context_file(project_name, 'river', flow_name, '.geojson'), driver='GeoJSON')   # keeps Width / Depth
         result_new = result_new.to_crs(terrain.rio.crs)
         result_new.to_file(river_gpkg, driver='GPKG')
         df = pd.read_csv(os.path.normpath(os.path.join(SOURCE_BACKEND, 'flow_samples', 'river_manning_mapping.csv')))
