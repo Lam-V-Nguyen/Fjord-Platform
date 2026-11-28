@@ -4,10 +4,12 @@ Uses temporary folders for projects / database, so real data is never touched.
 """
 import os, sys, importlib
 import pytest
-from backend.app.services import constants
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", "app"), os.path.join(HERE, "..")]
+# Import the app the way the app itself does ("config", "services.*"), so the tests run both from backend/
+# (CI: cd backend && python -m pytest -q tests) and from the repository root (python -m pytest -q backend/tests)
+from services import constants  # noqa: E402
 
 @pytest.fixture(scope="module")
 def client(tmp_path_factory):
@@ -17,8 +19,8 @@ def client(tmp_path_factory):
     os.environ.update(PROJECT_DES=str(tmp), ENV="development", REQUIRE_REDIS="false")
     from fastapi import APIRouter, Depends, FastAPI, Request
     from fastapi.testclient import TestClient
-    import backend.app.config; importlib.reload(backend.app.config)
-    from backend.app.services import auth_store, auth_router, security, functions
+    import config; importlib.reload(config)
+    from services import auth_store, auth_router, security, functions
     for m in (auth_store, functions, auth_router, security): importlib.reload(m)
     auth_store.init_db()
     app = FastAPI(); security.install(app); app.include_router(auth_router.router)
@@ -42,8 +44,9 @@ def client(tmp_path_factory):
         "boss", email="boss@x.no", password="Correct-horse-9", 
         role="admin", status="active", allow_reserved=True
     )
-    import backend.app.config as cfg
+    import config as cfg
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "boss", "lake1"), exist_ok=True)
+    os.makedirs(os.path.join(cfg.PROJECT_ROOT, "boss", "x"), exist_ok=True)
     os.makedirs(os.path.join(cfg.PROJECT_ROOT, "demo"), exist_ok=True)          # sample project
     return TestClient(app, base_url=constants.LOCAL_HOST), auth_store
 
@@ -142,8 +145,8 @@ def test_per_user_waq_choice_on_sample_and_shared_projects(client):
     """Choosing a WAQ scenario on someone else's project (sample / shared) is stored per user."""
     import json, types
     _, store = client
-    from backend.app.services import functions
-    import backend.app.config as cfg
+    from services import functions
+    import config as cfg
     def as_user(name):
         req = types.SimpleNamespace(
             state=types.SimpleNamespace(user=store.get_user(name)), method="POST", url=types.SimpleNamespace(path="/setup_database")
@@ -164,3 +167,29 @@ def test_per_user_waq_choice_on_sample_and_shared_projects(client):
     as_user("carl")
     assert "user_state" in functions.user_config_path("boss/lake1")        # shared project: private copy
     functions._CURRENT_REQUEST.set(None)
+
+def test_missing_project_is_never_created(client):
+    """A route must not silently create a project folder (e.g. a download log for a project that was never created)."""
+    c, store = client
+    import config as cfg
+    login(c, "boss", "Correct-horse-9")
+    r = c.post("/project", json={"projectName": "never_created"})
+    assert r.status_code == 404 and "does not exist" in r.json()["message"]
+    assert not os.path.exists(os.path.join(cfg.PROJECT_ROOT, "boss", "never_created"))
+    assert c.post("/project", json={"projectName": ""}).status_code == 400          # no project selected
+    assert c.post("/dashboard/read", json={"projectName": "never_created"}).status_code == 404
+    assert c.post("/project", json={"projectName": "lake1"}).json()["project"] == "boss/lake1"   # existing: fine
+
+def test_path_traversal_guard(client):
+    """User-supplied file/folder names must not leave the project folder (log files, uploads, flows …)."""
+    from services import functions
+    bad = [{"fileName": "../../x.txt"}, {"logFile": "..\\..\\.env"}, {"folder": "/etc"}, {"mapPath": "C:/data/x.nc"},
+           {"params": [{"flowName": "../other"}]}, {"log_file": "a/../../b"}, {"keyType": "../../x"}, {"key": "..\\.."}]
+    good = [{"folder": "flows/brusdal/dem"}, {"fileName": "obs_1.csv"}, {"projectName": "public:demo"},
+            {"lakeName": "Mjøsa"}, {"name": "Jr.. test"}, {"newName": "lake2"}]
+    assert all(functions._find_unsafe(b) for b in bad)
+    assert not any(functions._find_unsafe(g) for g in good)
+    c, store = client
+    login(c, "boss", "Correct-horse-9")
+    r = c.post("/project", json={"projectName": "lake1", "fileName": "../../secret"})
+    assert r.status_code == 400 and "path not allowed" in r.json()["message"]

@@ -55,8 +55,32 @@ export async function jsonLoader(functionName, content){
     const response = await fetch(`/${functionName}`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(content)});
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
+    // Server errors raised as HTTP errors ({detail: ...}: quota full, no access, server busy ...) -> the
+    // {status: 'error', message} shape every caller already checks, so the reason is shown to the user.
+    if (!response.ok && data && !data.status) {
+        const d = data.detail;
+        return { ...data, status: 'error', message: typeof d === 'string' ? d : (d ? JSON.stringify(d) : `HTTP ${response.status}`) };
+    }
     return data;
+}
+
+// Storage quota: any request answered with 507 (quota full) shows the storage banner of the main page,
+// also for uploads that call fetch() directly. Installed once per window (main page and every tool iframe).
+if (!window.__storageHook) {
+    window.__storageHook = true;
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+        const res = await nativeFetch(...args);
+        if (res.status === 507) {
+            res.clone().json().then(d => {
+                const msg = { type: 'STORAGE_QUOTA', content: d?.detail || d?.message || 'Storage quota reached.' };
+                if (window.parent && window.parent !== window) window.parent.postMessage(msg, location.origin);
+                else window.dispatchEvent(new CustomEvent('storage-quota', { detail: msg.content }));
+            }).catch(() => {});
+        }
+        return res;
+    };
 }
 
 export function getUser(){
@@ -504,22 +528,24 @@ export async function csvUploader(event, targetText, table, nCols, start=null, e
 }
 
 export async function fileUploader(targetFile, targetText, projectName, gridName, message, type){
-    if (projectName === '') return;
+    if (projectName === '') return null;
+    const file = targetFile.files[0]; if (!file) return null;
     signalSender('showOverlay', message);
-    const file = targetFile.files[0], formData = new FormData();
+    const formData = new FormData();
     formData.append('file', file); formData.append('projectName', projectName);
     formData.append('fileName', gridName); formData.append('type', type);
-    if (targetText !== null) {targetText.value = file?.name || "";}
-    const response = await fetch('/upload_data', { method: 'POST', body: formData });
-    const data = await response.json();
-    signalSender('hideOverlay'); alert(data.message);
-    if (targetFile) { targetFile.value = ''; }
-    if (data.status === "error") { return; }
+    let data = null;
+    try {
+        const response = await fetch('/upload_data', { method: 'POST', body: formData });
+        data = await response.json();
+    } catch (error) { data = { status: 'error', message: `Upload failed: ${error.message || error}` }; }
+    finally { signalSender('hideOverlay'); if (targetFile) { targetFile.value = ''; } }
+    alert(data?.message || 'Upload failed.');
+    if (data?.status === "ok" && targetText !== null) { targetText.value = file.name; }   // only after success
+    return data;
 }
 
-export async function getProjectList(
-    userName='', folderCheck='', key='getProjects', keyChecker=''
-) {
+export async function getProjectList(userName='', folderCheck='', key='getProjects', keyChecker='') {
     const contents = { 
         filename: userName, key: key, folder_check: folderCheck, keyChecked: keyChecker
     };
@@ -584,8 +610,7 @@ export async function updateTable(table, comboBox, projectName, key='') {
     data.content.forEach((item, idx) => {
         const option = document.createElement('option');
         option.value = item; option.text = item;
-        comboBox.add(option);
-        data_arr.push([item, data.type[idx]]);
+        comboBox.add(option); data_arr.push([item, data.type[idx]]);
     });
     if (data_arr.length > 0) { fillTable(data_arr, table); }
     return data

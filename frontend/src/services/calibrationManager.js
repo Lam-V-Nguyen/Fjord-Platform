@@ -718,7 +718,8 @@ function calibrationManager() {
                 title: 'Observations removed by the quality control (comparison period)'
             });
         }
-        if (data.content?.note) alert(data.content.note); obj.overridesContainer.style.display = 'block';
+        if (data.content?.note) alert(data.content.note); 
+        obj.overridesContainer.style.display = 'block'; obj.deleteCalibrationChecker.checked = false;
         plotComparison(obj.comparisonContainer, data.content); obj.plotContainer.style.display = 'block';
     });
     // Override calibration

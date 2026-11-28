@@ -1,5 +1,5 @@
 """
-manage_users.py – Command-line account management (run on the server, in the platform's Python environment).
+manage_users.py - Command-line account management (run on the server, in the platform's Python environment).
 
 Run from the backend folder (same .env as the backend):
     python tools/manage_users.py create-admin <username> [--email a@b.no]     # first administrator (asks for a password)
@@ -13,8 +13,8 @@ import argparse, getpass, json, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", "app"), os.path.join(HERE, "..")]
-from backend.app.config import ALLOWED_USERS
-from backend.app.services import auth_store as store, constants
+from config import ALLOWED_USERS
+from services import auth_store as store, constants
 
 def ask_password(username: str) -> str:
     while True:

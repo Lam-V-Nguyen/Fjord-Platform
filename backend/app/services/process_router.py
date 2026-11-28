@@ -1,8 +1,9 @@
 import os, shutil, zipfile, json, msgpack, math, asyncio
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Request
 from fastapi.responses import JSONResponse
 from config import PROJECT_ROOT
-from services import functions, constants
+from services import functions, constants, grid_functions
 from services.dashboard_results import face_order
 import geopandas as gpd, numpy as np, pandas as pd, xarray as xr
 from shapely.geometry import mapping
@@ -11,10 +12,10 @@ router = APIRouter()
 
 # Upload file from local computer to server
 @router.post("/upload_data")
-async def upload_data(file: UploadFile = File(...), projectName: str = Form(...),
+def upload_data(file: UploadFile = File(...), projectName: str = Form(...),
     fileName: str = Form(...), type: str = Form(...), user=Depends(functions.basic_auth)):
     project_name, _ = functions.project_definer(projectName, user)
-    if (type == 'grid'): save_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "input"))
+    if (type == 'grid'): return upload_grid(file, project_name, fileName)
     elif (type == 'gis'): save_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "GIS"))
     else: return JSONResponse({"status": "error", "message": f"Invalid upload type: {type!r}"}, status_code=400)
     if not os.path.exists(save_dir): os.makedirs(save_dir)
@@ -29,7 +30,7 @@ async def upload_data(file: UploadFile = File(...), projectName: str = Form(...)
         if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
         with open(file_path, "wb") as f:
             while True:
-                chunk = await file.read(1024 * 1024)
+                chunk = file.file.read(1024 * 1024)
                 if not chunk: break
                 f.write(chunk)
         if (file_path.endswith('.zip')):
@@ -62,10 +63,51 @@ async def upload_data(file: UploadFile = File(...), projectName: str = Form(...)
         if file_path.endswith('.zip') and os.path.exists(file_path): functions.safe_remove(file_path)
         temp_dir = os.path.normpath(os.path.join(save_dir, 'temp'))
         if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
-        await file.close()
+        file.file.close()
+
+def upload_grid(file: UploadFile, project_name: str, fileName: str):
+    """New grid for a scenario: check it, set NetFile in the MDU, delete the old grid file and its backups."""
+    input_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "input"))
+    os.makedirs(input_dir, exist_ok=True)
+    file_name = os.path.basename(fileName or file.filename or "")
+    if not file_name.lower().endswith('.nc'):
+        return JSONResponse({"status": "error", "message": "The grid must be a NetCDF file (*.nc)."})
+    tmp_path = os.path.join(input_dir, f".upload_{file_name}.tmp")
+    try:
+        with open(tmp_path, "wb") as f:
+            while chunk := file.file.read(1024 * 1024): f.write(chunk)
+        try: info = grid_functions.inspect_net_file(tmp_path)          # reject files D-Flow FM cannot read
+        except grid_functions.GridError as e:
+            return JSONResponse({"status": "error", "message": f"Invalid grid file '{file_name}': {e}"})
+        mdu_path = os.path.join(input_dir, "FlowFM.mdu")
+        if os.path.exists(mdu_path):
+            result = grid_functions.update_scenario_grid(input_dir, mdu_path, tmp_path, new_name=file_name)
+        else:                                                            # no MDU yet: only replace the file
+            os.replace(tmp_path, os.path.join(input_dir, file_name))
+            result = {"grid": file_name, "old_grid": None,
+                "deleted": grid_functions.remove_old_grid_files(input_dir, keep_file=file_name)
+            }
+        message = f"Grid '{file_name}' uploaded successfully."
+        if result["deleted"]: message += f"\nRemoved old grid file(s): {', '.join(result['deleted'])}."
+        if info["small_links"]:
+            message += (f"\n\nWarning: the grid has {info['small_links']} small flow link(s). D-Flow FM will stop on them; "
+                "You will be asked to repair the grid when the HYD simulation fails, or use 'Check Grid' while processing the grid."
+            )
+        return JSONResponse({"status": "ok", "message": message, "content": {**result, **info}})
+    except Exception as e: functions.error('/upload_data', e)
+    finally:
+        if os.path.exists(tmp_path): os.remove(tmp_path)
+        file.file.close()
 
 # Process data
 async def process_internal(query: str, key: str, redis, project_cache, project_name: str, time_zone: str):
+    # Redis reads stay on the event loop; reading/processing the datasets runs in a worker thread
+    raw = None
+    if key in ['wq_obs', 'wq_loads']: raw = await redis.hget(functions.cache_key(project_name), "waq_obs")
+    elif key == 'substance_check': raw = await redis.hget(functions.cache_key(project_name), 'config')
+    return await run_in_threadpool(_process_internal_sync, query, key, raw, project_cache, project_name, time_zone)
+
+def _process_internal_sync(query: str, key: str, raw, project_cache, project_name: str, time_zone: str):
     # Internal function to process data
     message = ''
     if key == 'summary':
@@ -76,8 +118,7 @@ async def process_internal(query: str, key: str, redis, project_cache, project_n
         temp, message = functions.hydCreator(project_cache.get("hyd_his"))
         data = json.loads(temp.to_json())
     elif key in ['wq_obs', 'wq_loads']:
-        waq_obs_raw = await redis.hget(functions.cache_key(project_name), "waq_obs")
-        waq_obs = msgpack.unpackb(waq_obs_raw, raw=False)
+        waq_obs = msgpack.unpackb(raw, raw=False)
         data = json.loads(functions.obsCreator(waq_obs[key]).to_json())
     elif key == 'sources':
         data = json.loads(functions.sourceCreator(project_cache.get("hyd_his")).to_json())
@@ -91,8 +132,7 @@ async def process_internal(query: str, key: str, redis, project_cache, project_n
         )
         data = { 'columns': temp.columns.tolist(), 'rows': temp.values.tolist() }
     elif key == 'substance_check':
-        substance_raw = await redis.hget(functions.cache_key(project_name), 'config')
-        substance = msgpack.unpackb(substance_raw, raw=False)[query]
+        substance = msgpack.unpackb(raw, raw=False)[query]
         if len(substance) > 0: 
             data = sorted(substance)
             message = functions.valueToKeyConverter(data)
@@ -180,6 +220,10 @@ def _waq_face_order(project_cache: dict):
     return order
 
 # Load general dynamic data
+def _time_step(a, i):
+    """One time step of a (time, cells) array – numpy or lazy xarray (only that step is read from disk)."""
+    return np.asarray(a[i, :] if a.ndim == 2 else a)
+
 @router.post("/load_general_dynamic")
 async def load_general_dynamic(request: Request, user=Depends(functions.basic_auth)):
     try:
@@ -203,7 +247,9 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
         time_column = 'time' if is_hyd else 'nTimesDlwq'
         name = constants.VARIABLES_NAME.get(key, key) if is_hyd else temp[0]
         if name is None: return JSONResponse({"status": "error", "message": f"Unknown variable: {key!r}"})
-        values = data_ds[name].values
+        # Lazy (dask/zarr) variable: read only what is needed – was data_ds[name].values, which loaded the whole
+        # time x cells x layers array from disk on EVERY frame request
+        var = data_ds[name]
         # Load dynamic cache from Redis
         raw_cache = await redis.get(dynamic_cache_key)
         if not raw_cache:
@@ -222,16 +268,17 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
                 layer_info = dynamic_cache['layers'].get(value_type)
                 if not layer_info:
                     if value_type == 'Average':
-                        if is_hyd: arr = np.nanmean(values, axis=2)
+                        if is_hyd: arr = await asyncio.to_thread(lambda: var.mean(dim=var.dims[2], skipna=True).values)
                         else:
                             name_2d = name.replace("mesh2d_", "mesh2d_2d_", 1)
-                            arr = data_ds[name_2d].values if name_2d in data_ds else np.nanmean(values, axis=1)
-                    else: arr = values[:, :, row_idx] if is_hyd else values[:, row_idx, :]
+                            arr = await asyncio.to_thread(lambda: data_ds[name_2d].values if name_2d in data_ds
+                                                          else var.mean(dim=var.dims[1], skipna=True).values)
+                    else: arr = await asyncio.to_thread(lambda: (var[:, :, row_idx] if is_hyd else var[:, row_idx, :]).values)
                     # Save layer atomic to Redis hash
                     dynamic_cache['layers'][value_type] = {'data': functions.encode_array(arr), 'shape': arr.shape}
                     await redis.set(dynamic_cache_key, msgpack.packb(dynamic_cache, use_bin_type=True), ex=600)
                 else: arr = functions.decode_array(layer_info["data"], layer_info["shape"])
-        else: arr = values
+        else: arr = var                                  # 2D variable: one time step is read per request below
         # WAQ values are stored in the waqgeom cell order, the polygons come from the HYD map grid
         order = None if is_hyd else _waq_face_order(project_cache)
         if temp[2] == 'load': # Initiate skeleton polygon for the first load
@@ -239,25 +286,29 @@ async def load_general_dynamic(request: Request, user=Depends(functions.basic_au
             grid = project_cache.get("grid")
             if grid is None: return JSONResponse({"status": "error", "message": "Grid data not found in cache"})
             # Construct GeoJSON features
-            features = [{"type": "Feature", "properties": {"index": idx}, "geometry": mapping(row['geometry'])}
-                        for idx, row in grid.iterrows()]
-            arr_np, fmt = np.array(arr), functions.numberFormatter
-            new_arr = arr_np[-1, :] if arr_np.ndim == 2 else arr_np
+            fmt = functions.numberFormatter
+            def _first_load():                            # mesh features, last frame, global min/max: worker thread
+                features = [{"type": "Feature", "properties": {"index": idx}, "geometry": mapping(row['geometry'])}
+                            for idx, row in grid.iterrows()]
+                new_arr = _time_step(arr, -1)
+                vmin, vmax = float(var.min(skipna=True)), float(var.max(skipna=True))
+                return features, new_arr, vmin, vmax
+            features, new_arr, vmin, vmax = await asyncio.to_thread(_first_load)
             if order is not None: new_arr = new_arr[order]
             data = { 'meshes':  {'type': 'FeatureCollection', 'features': features},
                 'values': functions.encode_array(fmt(new_arr)), 'min_max': [
-                    fmt(np.nanmin(values)).tolist(), fmt(np.nanmax(values)).tolist()
+                    fmt(np.float64(vmin)).tolist(), fmt(np.float64(vmax)).tolist()
                     ], 'timestamps': [
                         pd.to_datetime(t, utc=True) for t in data_ds[time_column].data
                     ]
             }
             data['timestamps'] = [functions.utc_to_local(t, time_zone) for t in data['timestamps']]
         else: # Update value of polygons
-            arr_np, fmt = np.array(arr), functions.numberFormatter
-            new_arr = arr_np[int(temp[2]), :] if arr_np.ndim == 2 else arr_np
+            fmt = functions.numberFormatter
+            new_arr = await asyncio.to_thread(_time_step, arr, int(temp[2]))
             if order is not None: new_arr = new_arr[order]
             data = {'values': functions.encode_array(fmt(new_arr))}
-        return JSONResponse({'status': 'ok', 'content': data})
+        return await asyncio.to_thread(JSONResponse, {'status': 'ok', 'content': data})   # large mesh JSON: worker thread
     except Exception as e: functions.error('/load_general_dynamic', e)
 
 # Load vector dynamic data
@@ -320,7 +371,12 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
             if '_waq_multi_dynamic' in query: query = 'mesh2d_' + query[:-len('_waq_multi_dynamic')]
             data_ds = hyd_map if is_hyd else waq_map
             name = constants.VARIABLES_NAME.get(query, query)
-            values, fnm = data_ds[name].values, functions.numberFormatter
+            # read ONE time step only (was: data_ds[name].values loaded the whole time x cells x layers array
+            # from disk on every frame request)
+            var, fnm = data_ds[name], functions.numberFormatter
+            def _frame(i):
+                a = np.asarray(var[i].values)
+                return a if is_hyd else a.T
             # Initiate data for the first load
             if idx == 'load':
                 # Initialize mesh cache in Redis if not exists
@@ -335,18 +391,19 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
                 time_column = 'time' if is_hyd else 'nTimesDlwq'
                 time_stamps = pd.to_datetime(data_ds[time_column], utc=True)
                 time_stamps = functions.utc_to_local(time_stamps, time_zone)
-                arr = values[0,:,:] if is_hyd else values[0,:,:].T
+                arr = await asyncio.to_thread(_frame, 0)
                 # Create GeoDataFrame for interpolation
                 grid, points_arr = project_cache.get("grid"), np.array(points)
-                x_coords, y_coords = points_arr[:, 2], points_arr[:, 1]
-                gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(x_coords, y_coords), crs=grid.crs)
-                gdf['depth'] = functions.interpolation_Z(gdf, hyd_map['mesh2d_node_x'].values, 
-                    hyd_map['mesh2d_node_y'].values, hyd_map['mesh2d_node_z'].values)
-                # Find polygons that the points are in
-                gdf_filtered = gpd.sjoin(gdf, grid, how="left", predicate="intersects")
-                gdf_filtered.set_index('index_right', inplace=True)
-                df_serialized = gdf_filtered.drop(columns=['geometry'])
-                mesh_cache["df"] = df_serialized.to_dict(orient='split')
+                def _section_points():                    # depth interpolation + spatial join: worker thread
+                    x_coords, y_coords = points_arr[:, 2], points_arr[:, 1]
+                    gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(x_coords, y_coords), crs=grid.crs)
+                    gdf['depth'] = functions.interpolation_Z(gdf, hyd_map['mesh2d_node_x'].values,
+                        hyd_map['mesh2d_node_y'].values, hyd_map['mesh2d_node_z'].values)
+                    # Find polygons that the points are in
+                    gdf_filtered = gpd.sjoin(gdf, grid, how="left", predicate="intersects")
+                    gdf_filtered.set_index('index_right', inplace=True)
+                    return gdf_filtered.drop(columns=['geometry']).to_dict(orient='split')
+                mesh_cache["df"] = await asyncio.to_thread(_section_points)
                 # Compute frame in thread to avoid blocking
                 frame = await asyncio.to_thread(functions.meshProcess, is_hyd, arr, mesh_cache)
                 vmin, vmax = fnm(np.nanmin(frame)).tolist(), fnm(np.nanmax(frame)).tolist()
@@ -358,7 +415,7 @@ async def select_meshes(request: Request, user=Depends(functions.basic_auth)):
                 raw_cache = await redis.get(mesh_cache_key)
                 if raw_cache is None: return JSONResponse({"status": 'error', "message": "Mesh cache is not initialized."})
                 mesh_cache = msgpack.unpackb(raw_cache, raw=False)
-                arr = values[int(idx),:,:] if is_hyd else values[int(idx),:,:].T
+                arr = await asyncio.to_thread(_frame, int(idx))
                 frame = await asyncio.to_thread(functions.meshProcess, is_hyd, arr, mesh_cache)
                 vmin, vmax = fnm(np.nanmin(frame)).tolist(), fnm(np.nanmax(frame)).tolist()
                 data = {"values": fnm(frame).tolist(), "local_minmax": [vmin, vmax]}
@@ -373,9 +430,9 @@ async def get_gis_layer(request: Request, user=Depends(functions.basic_auth)):
         gis_folder = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, 'GIS'))
         redis, file = request.app.state.redis, body.get('layer')
         lock = redis.lock(f"{project_name}:get_gis_layer", timeout=200)
-        async with lock:
+        def _read():                                      # file reading / reprojection in a worker thread
             file_name = os.path.normpath(os.path.join(gis_folder, f"{file}.geojson"))
-            if not os.path.exists(file_name): 
+            if not os.path.exists(file_name):
                 return JSONResponse({"status": 'error', "message": f"Path '{file_name}' does not exist."})
             gdf = gpd.read_file(file_name)
             # Check if the file is empty
@@ -387,7 +444,9 @@ async def get_gis_layer(request: Request, user=Depends(functions.basic_auth)):
             # Convert datetime to string
             for col in gdf.columns:
                 if pd.api.types.is_datetime64_any_dtype(gdf[col]): gdf[col] = gdf[col].astype(str)
-        return JSONResponse({"status": 'ok', "content": json.loads(gdf.to_json())})
+            return functions.json_response({"status": 'ok', "content": functions.RawJSON(gdf.to_json())})
+        async with lock:
+            return await run_in_threadpool(_read)
     except Exception as e: functions.error('/get_gis_layer', e)
 
 @router.post("/delete_gis")
@@ -402,7 +461,7 @@ async def delete_gis(request: Request, user=Depends(functions.basic_auth)):
             file_name = os.path.normpath(os.path.join(gis_folder, f"{file}.geojson"))
             if not os.path.exists(file_name): 
                 return JSONResponse({"status": 'error', "message": f"Path '{file_name}' does not exist."})
-            functions.safe_remove(file_name)
+            await run_in_threadpool(functions.safe_remove, file_name)
         return JSONResponse({"status": 'ok'})
     except Exception as e: functions.error('/delete_gis', e)
 
@@ -425,7 +484,7 @@ async def select_thermocline(request: Request, user=Depends(functions.basic_auth
             name, data = constants.VARIABLES_NAME.get(query, query), []
             # Initiate data for the first load
             if typ == 'thermocline_grid':
-                temp_grid, arr = project_cache.get("grid"), data_ds[name].values
+                temp_grid, arr = project_cache.get("grid"), await asyncio.to_thread(lambda: data_ds[name].values)
                 # Remove polygons having all NaN in all layers
                 mask_all_nan = np.isnan(arr).all(axis=(0, col_idx))               
                 removed_indices = np.where(mask_all_nan)[0]
@@ -445,7 +504,7 @@ async def select_thermocline(request: Request, user=Depends(functions.basic_auth
                 layers_values = [float(v.split(' ')[1]) for k, v in layer_reverse.items() if int(k) >= 0]
                 max_values = int(abs(np.min(layers_values)))
                 new_depth = [x + max_values for x in layers_values]
-                arr, idx = data_ds[name].values, int(idx)
+                arr, idx = await asyncio.to_thread(lambda: data_ds[name].values), int(idx)
                 # Remove polygons having Nan in all layers
                 mask_all_nan = np.isnan(arr).all(axis=(0, col_idx))
                 arr_filtered = arr[:, ~mask_all_nan, :] if is_hyd else arr[:, :, ~mask_all_nan]
@@ -474,9 +533,11 @@ async def unstructure_grid_plot(request: Request, user=Depends(functions.basic_a
             grid_path = os.path.join(PROJECT_ROOT, project_name, 'input', grid_name)
         else: grid_path = os.path.join(PROJECT_ROOT, project_name, 'DFM_DELWAQ', grid_name)
         lock = redis.lock(f"{project_name}:unstructure-grid", timeout=30, blocking_timeout=25)
-        async with lock:
+        def _plot():                                      # NetCDF reading / grid building in a worker thread
             with xr.open_dataset(grid_path) as ds:
                 grid = functions.unstructuredGridCreator(ds)
                 if len(grid) == 0: return JSONResponse({"status": 'error', "message": "No Grid loaded. Please check the grid."})
-            return JSONResponse({"status": 'ok', "content": json.loads(grid.to_json())})
+            return functions.json_response({"status": 'ok', "content": functions.RawJSON(grid.to_json())})
+        async with lock:
+            return await run_in_threadpool(_plot)
     except Exception as e: functions.error('/unstructure_grid_plot', e)

@@ -7,7 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from services import functions, data_functions, flow_functions, yml_update, era5_function, constants, secretbox
 from config import PROJECT_ROOT, SOURCE_BACKEND
 import geopandas as gpd, pandas as pd, numpy as np
-from services.data_functions import Regnbyge as regnbyge
+from services.data_functions import Regnbyge as regnbyge, regnbyge_result
 from shapely.geometry import box
 from rio_tiler.io import Reader as _Reader
 from typing import Any, cast
@@ -21,6 +21,22 @@ def _is_active(info):
     return bool(info) and info.get("status") == "running" and \
         time.time() - info.get("heartbeat", 0) < 900
 
+def _start_job(key_process, target, args, daemon=True):
+    """Run `target(*args)` in a background thread and refresh processes[key_process]["heartbeat"] every 30 s
+    while it is alive, so long jobs (a Wflow run, big downloads) are not reported as "stopped responding"
+    after 15 min. A job whose thread really dies stops the heartbeat and is detected as before."""
+    stop = threading.Event()
+    def beat():
+        while not stop.wait(30):
+            info = processes.get(key_process)
+            if not info or info.get("status") != "running": return
+            info["heartbeat"] = time.time()
+    def runner():
+        threading.Thread(target=beat, daemon=True).start()
+        try: target(*args)
+        finally: stop.set()
+    t = threading.Thread(target=runner, daemon=daemon); t.start(); return t
+
 @router.get("/log_tail_download/{project_name}")
 async def log_tail_download(project_name: str, offset: int = Query(0),
     log_file: str = Query(""), user=Depends(functions.basic_auth)):
@@ -33,8 +49,7 @@ async def log_tail_download(project_name: str, offset: int = Query(0),
     reset = offset > file_size
     if reset: offset = 0
     with open(log_path, "rb") as f:
-        f.seek(offset)
-        raw = f.read()
+        f.seek(offset); raw = f.read()
     cut = raw.rfind(b"\n") + 1
     data, new_offset = raw[:cut], offset + cut
     return {"lines": data.decode("utf-8", errors="replace").splitlines(), "offset": new_offset, "reset": reset}
@@ -48,7 +63,7 @@ async def check_download_status(request: Request, user=Depends(functions.basic_a
     if info is None: return JSONResponse({"status": "idle", "message": "No download running."})
     status, message = info.get("status", "idle"), info.get("message", "")
     if status == "running" and not _is_active(info):
-        status, message = "failed", "Previous download stopped responding. You can start again."
+        status, message = "failed", "The previous task stopped responding (the server may have been restarted). You can start again."
     return JSONResponse({
         "status": status, "message": message, "results": info.get("results", []),
         "cancelled": bool(info.get("cancelled")), "cancelling": status == "running" and bool(info.get("cancel")),
@@ -58,7 +73,6 @@ async def check_download_status(request: Request, user=Depends(functions.basic_a
 async def save_client(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
-        project_name, _ = functions.project_definer(body.get('projectName'), user)
         path = os.path.join(PROJECT_ROOT, user if user != 'admin' else 'demo', 'credentials.json')   # always the signed-in user's own
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(path):
@@ -78,7 +92,6 @@ async def save_client(request: Request, user=Depends(functions.basic_auth)):
 @router.post("/load_client")
 async def load_client(request: Request, user=Depends(functions.basic_auth)):
     body = await request.json()
-    project_name, _ = functions.project_definer(body.get('projectName'), user)
     path = os.path.join(PROJECT_ROOT, user if user != 'admin' else 'demo', 'credentials.json')   # always the signed-in user's own
     temp = {'client_id': '', 'client_secret': '', 'client_username': '', 'client_password': ''}
     if os.path.exists(path):
@@ -89,9 +102,8 @@ async def load_client(request: Request, user=Depends(functions.basic_auth)):
     return JSONResponse({'content': content})
     
 @router.post("/reset_station")
-async def reset_station(request: Request, user=Depends(functions.basic_auth)):
+def reset_station(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         source_dir = os.path.join(PROJECT_ROOT, project_name, body.get('keyType'))
         flow_checked, level_checked, rain_checked = body.get('flow'), body.get('level'), body.get('rain')
@@ -102,9 +114,8 @@ async def reset_station(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/reset_station', e)
 
 @router.post("/init_station")
-async def init_station(request: Request, user=Depends(functions.basic_auth)):
+def init_station(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         key, client_name = body.get('key'), body.get('clientName', '')
         client_secret, client_username = body.get('clientSecret', ''), body.get('clientUserName', '')
         client_password = body.get('clientPassword', '')
@@ -113,10 +124,8 @@ async def init_station(request: Request, user=Depends(functions.basic_auth)):
         if not os.path.exists(source_dir): os.makedirs(source_dir)
         path = os.path.normpath(os.path.join(source_dir, f'{key}.pkl'))
         if not os.path.exists(path):
-            obj = regnbyge(client_name, client_secret, client_username, client_password)
+            obj = regnbyge(client_name, client_secret, client_username, client_password)   # raises if no token
             print("Loading data from Regnbyge.no ...")
-            token = obj.get_Token()
-            if token is None: return JSONResponse({'status': 'error', 'message': f"Error: Could not get token."})
             df = obj.get_Station(key)
             if df.empty: return JSONResponse({'status': 'error', 'message': f"No '{key}' data available."})
             geometry = gpd.points_from_xy(df['x'], df['y'])
@@ -141,9 +150,8 @@ async def init_station(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/init_station', e)
 
 @router.post("/plot_station")
-async def plot_station(request: Request):
+def plot_station(body: dict = Depends(functions.json_body)):   # sync: the HTTP calls run in the threadpool, not on the event loop
     try:
-        body = await request.json()
         id, mode, client_name = body.get('id'), body.get('mode'), body.get('clientName', '')
         name, time_zone, client_password = body.get('name'), body.get('timeZone'), body.get('clientPassword', '')
         client_secret, client_username = body.get('clientSecret', ''), body.get('clientUserName', '')
@@ -153,22 +161,19 @@ async def plot_station(request: Request):
         if start_utc >= end_utc:
             return JSONResponse({'status': 'error', 'message': "Error: 'Start time' must be earlier than 'End time'."})
         obj = regnbyge(client_name, client_secret, client_username, client_password)
-        df = obj.get_Values(mode, id, start_utc, end_utc, interval)
-        if df.empty:
-            return JSONResponse({
-                'status': 'error', 'message': f"No data available for station '{name}' between '{start}' and '{end}'."
-            })
+        df, failed = obj.get_Values(mode, id, start_utc, end_utc, interval)
+        warning, err = regnbyge_result(df, failed, f"station '{name}'", start, end)
+        if err: return JSONResponse({'status': 'error', 'message': err})
         if 'id' in df.columns: df = df.drop(columns=['id'])
         # Convert time back to local time zone
         df['timestamp'] = functions.utc_to_local(df['timestamp'], time_zone)
         content = {'columns': df.columns.tolist(), 'rows': df.values.tolist()}
-        return JSONResponse({'status': 'ok', 'content': content})
+        return JSONResponse({'status': 'ok', 'content': content, 'warning': warning})
     except Exception as e: functions.error('/plot_station', e)
 
 @router.post("/download_station")
-async def download_station(request: Request):
+def download_station(body: dict = Depends(functions.json_body)):   # sync: the HTTP calls run in the threadpool, not on the event loop
     try:
-        body = await request.json()
         mode, download_interval = body.get('mode'), body.get('downloadInterval')
         start, end = body.get('startTime'), body.get('endTime')
         id, time_zone = body.get('id'), body.get('timeZone')
@@ -179,24 +184,24 @@ async def download_station(request: Request):
         if start_utc >= end_utc:
             return JSONResponse({'status': 'error', 'message': "Error: 'Start time' must be earlier than 'End time'"})
         obj = regnbyge(client_name, client_secret, client_username, client_password)
-        df = obj.get_Values(mode, id, start_utc, end_utc, download_interval)
-        if df.empty: 
-            return JSONResponse({'status': 'error', 'message': f"No data available between '{start}' and '{end}'."})
+        df, failed = obj.get_Values(mode, id, start_utc, end_utc, download_interval)
+        warning, err = regnbyge_result(df, failed, f"station id {id}", start, end)
+        if err: return JSONResponse({'status': 'error', 'message': err})
         if 'id' in df.columns: df = df.drop(columns=['id'])
         df['timestamp'] = functions.utc_to_local(df['timestamp'], time_zone)
         csv_string = df.to_csv(index=False)
-        return JSONResponse({'status': 'ok', 'content': csv_string})
+        return JSONResponse({'status': 'ok', 'content': csv_string, 'warning': warning})
     except Exception as e: functions.error('/download_station', e)
 
 @router.post("/data_upload_gis")
-async def data_upload_gis(file: UploadFile = File(...)):
+def data_upload_gis(file: UploadFile = File(...)):
     try:
         gdf = gpd.read_file(file.file)
         if gdf.crs is None or gdf.crs != "EPSG:4326":
             gdf = gdf.to_crs("EPSG:4326")
         return JSONResponse({"status": "ok", "content": json.loads(gdf.to_json())})
     except Exception as e: functions.error('/data_upload_gis', e)
-    finally: await file.close()
+    finally: file.file.close()
 
 @router.post("/download_era5")
 async def download_era5(request: Request, user=Depends(functions.basic_auth)):
@@ -351,9 +356,8 @@ async def cds_clear_queue(request: Request, user=Depends(functions.basic_auth)):
         "cancelled": cancelled, "removed": n})
 
 @router.post("/upload_era5_csv")
-async def upload_era5_csv(request: Request, user=Depends(functions.basic_auth)):
+def upload_era5_csv(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         path = os.path.join(PROJECT_ROOT, project_name, body.get('fileName'))
         if not path.endswith(".csv"):
@@ -394,7 +398,7 @@ async def stations_met(request: Request, user=Depends(functions.basic_auth)):
             if key_process in processes and processes[key_process]["status"] == "running":
                 return JSONResponse({"status": "running", "message": 'Data downloading in progress.'})
             params = {"types": "SensorSystem"}
-            response = requests.get(url, params=params, auth=(client_name, ""))
+            response = await run_in_threadpool(requests.get, url, params=params, auth=(client_name, ""), timeout=30)
             response.raise_for_status()
             data = response.json()
             df = pd.DataFrame(data["data"]).drop(columns=['@type'])
@@ -419,7 +423,7 @@ async def met_parameters(request: Request):
         redis, key_process = request.app.state.redis, f"met_parameters"
         lock = redis.lock(key_process, timeout=1000, blocking_timeout=10)
         async with lock:
-            response = requests.get(url, params=params, auth=(api_key, ""), timeout=30)
+            response = await run_in_threadpool(requests.get, url, params=params, auth=(api_key, ""), timeout=30)
             response.raise_for_status()
             data = response.json()
             df, vars = pd.DataFrame(data["data"]), set()
@@ -469,21 +473,21 @@ async def save_weather_csv(request: Request):
     except Exception as e: functions.error('/save_weather_csv', e)
 
 @router.post("/nve_parameters")
-async def nve_parameters(request: Request):
+async def nve_parameters(request: Request, user=Depends(functions.basic_auth)):
     try:
         body = await request.json()
         url_param, ids = f"{os.getenv('NVE_URL')}/Parameters", body.get('ids')
         headers = {"X-API-Key": body.get('apiKey'), "Accept": "application/json"}
-        redis, key_process = request.app.state.redis, f"nve_parameters"
+        redis, key_process = request.app.state.redis, f"{user}:nve_parameters"      # per user: users do not wait for each other
         lock = redis.lock(key_process, timeout=1000, blocking_timeout=10)
         async with lock:
-            response = requests.get(url_param, headers=headers, timeout=30)
+            response = await run_in_threadpool(requests.get, url_param, headers=headers, timeout=30)
             response.raise_for_status(); data = response.json()
             df, vars = pd.DataFrame(data["data"]), set()
             url_series = f"{os.getenv('NVE_URL')}/Series"
             for id in ids:
                 params = {'StationId': id}
-                response = requests.get(url_series, headers=headers, params=params, timeout=30)
+                response = await run_in_threadpool(requests.get, url_series, headers=headers, params=params, timeout=30)
                 response.raise_for_status(); data_series = response.json()
                 records = data_series.get('data', []); df_series = pd.DataFrame(records)
                 for i in df_series['parameter'].values:
@@ -507,7 +511,7 @@ async def stations_nve(request: Request, user=Depends(functions.basic_auth)):
             if key_process in processes and processes[key_process]["status"] == "running":
                 return JSONResponse({"status": "running", "message": 'Data downloading in progress.'})
             headers = {"X-API-Key": client_name, "Accept": "application/json"}
-            response = requests.get(url, headers=headers); response.raise_for_status()
+            response = await run_in_threadpool(requests.get, url, headers=headers, timeout=30); response.raise_for_status()
             data = response.json(); df = pd.DataFrame(data["data"])
             gdf = gpd.GeoDataFrame(
                 df, geometry=gpd.points_from_xy(x=df['longitude'], y=df['latitude']), crs='EPSG:4326'
@@ -535,12 +539,11 @@ async def download_nve(request: Request, user=Depends(functions.basic_auth)):
         now = time.time()
         processes[key_process] = {"status": "running", "message": "Preparing NVE data download...",
             "started_at": now, "heartbeat": now}
-        threading.Thread(
-            target=data_functions.nve_downloader, 
-            args=(key, api_key, url, dir, processes, key_process, ids, 
+        _start_job(key_process, data_functions.nve_downloader,
+            (key, api_key, url, dir, processes, key_process, ids,
                 columns, variables, interval, start, end, time_zone, body.get('logFile')
-            ), daemon=True
-        ).start()
+            )
+        )
     return JSONResponse({"status": "ok", "message": "Weather downloading started"})
 
 @router.post("/download_met")
@@ -559,12 +562,10 @@ async def download_met(request: Request, user=Depends(functions.basic_auth)):
         now = time.time()
         processes[key_process] = {"status": "running", "message": "Preparing download...",
             "started_at": now, "heartbeat": now}
-        threading.Thread(
-            target=data_functions.met_downloader, 
-            args=(key, api_key, url, dir, processes, key_process, ids, columns, 
+        _start_job(key_process, data_functions.met_downloader,
+            (key, api_key, url, dir, processes, key_process, ids, columns,
                 variables, start, end, time_zone, body.get('logFile')
-            ), daemon=True
-        ).start()
+        ))
     return JSONResponse({"status": "ok", "message": "Weather downloading started"})
 
 @router.post("/download_dem")
@@ -590,7 +591,7 @@ async def download_dem(request: Request, user=Depends(functions.basic_auth)):
         redis, key_process = request.app.state.redis, f"{project_name}:{key}"
         lock = redis.lock(key_process, timeout=1000, blocking_timeout=10)
         async with lock:
-            content = data_functions.dem_downloader(directory, key, resolution, gdf_WCS, target_crs)
+            content = await run_in_threadpool(data_functions.dem_downloader, directory, key, resolution, gdf_WCS, target_crs)
             return JSONResponse(content)
     except Exception as e: functions.error('/download_dem', e)
 
@@ -607,7 +608,11 @@ async def upload_terrain(projectName: str = Form(...), folder: str = Form(...),
     except Exception as e: functions.error('/upload_terrain', e)
 
 @router.get("/{project_name}/{file_path:path}/{z}/{x}/{y}.png")
-def hyd_terrain_tiles(project_name: str, file_path: str, z: int, x: int, y: int):
+def hyd_terrain_tiles(project_name: str, file_path: str, z: int, x: int, y: int, user=Depends(functions.basic_auth)):
+    # URL = /<owner>/<project>/<file>.tif/{z}/{x}/{y}.png (or /<sample>/<file> for a sample project):
+    # only the owner, users the project is shared with, and (for samples) everyone may read the tiles
+    if not functions.can_read_path(project_name, file_path.split("/", 1)[0], user):
+        return JSONResponse({"status": "error", "message": "Not allowed."}, status_code=403)
     cog_path = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, file_path))
     project_root = os.path.abspath(os.path.join(PROJECT_ROOT, project_name))
     cog_path = os.path.abspath(cog_path)
@@ -658,12 +663,10 @@ async def start_download_soil(request: Request, user=Depends(functions.basic_aut
         now = time.time()
         processes[key_process] = {"status": "running", "message": "Preparing soil data download ...",
             "started_at": now, "heartbeat": now}
-        threading.Thread(
-            target=flow_functions.soil_downloader, 
-            args=(project_name, processes, key_process, flow_name, 
+        _start_job(key_process, flow_functions.soil_downloader,
+            (project_name, processes, key_process, flow_name,
                 soil_source, water_area, terrain_path, catchment_path, body.get('logFile')
-            ), daemon=True
-        ).start()
+        ))
     return JSONResponse({'status': 'ok', 'message': "Soil downloading started."})
 
 @router.post("/start_download_weather")
@@ -687,10 +690,9 @@ async def start_download_weather(request: Request, user=Depends(functions.basic_
             "started_at": now, "heartbeat": now, "cancel": False, "source": source}
         start, end, flow_name = body.get('start'), body.get('end'), body.get('flowName')
         time_zone, log_file = body.get('timeZone'), body.get('logFile')
-        threading.Thread(
-            target=flow_functions.weather_downloader, 
-            args=(project_name, flow_name, processes, key_process, source, api_key, start, end, time_zone, log_file), daemon=True
-        ).start()
+        _start_job(key_process, flow_functions.weather_downloader,
+            (project_name, flow_name, processes, key_process, source, api_key, start, end, time_zone, log_file)
+        )
     return JSONResponse({"status": "ok", "message": "Weather downloading started."})
 
 @router.post("/cancel_download_weather")
@@ -756,11 +758,11 @@ async def wflow_model(request: Request, user=Depends(functions.basic_auth)):
                 with rasterio.open(strord_path) as strord_src:
                     resolution, src_crs = int(abs(strord_src.transform.a)), strord_src.crs
                 soil_layers = [50, 100, 150, 300, 400, 600]
-                threading.Thread(target=flow_functions.wflow_run,
-                    args=(project_name, processes, key_process, flow_name, wflow_model, df, src_crs, 
-                        start, end, step, time_zone, data_lib, resolution, soil_layers, 
+                _start_job(key_process, flow_functions.wflow_run,
+                    (project_name, processes, key_process, flow_name, wflow_model, df, src_crs,
+                        start, end, step, time_zone, data_lib, resolution, soil_layers,
                         params_input, params_output, lulc_fn, lulc_mapping, lai_fn, body.get('logFile')
                     ), daemon=False
-                ).start()
+                )
                 return JSONResponse({"status": "ok", "message": "Model run started."})
     except Exception as e: functions.error('/wflow_model', e)

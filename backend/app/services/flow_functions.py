@@ -7,8 +7,7 @@ from scipy.ndimage import distance_transform_edt
 from rasterio.io import MemoryFile
 from rasterio.enums import Resampling
 from rasterio.features import rasterize, shapes
-from services import functions, flow_functions, \
-    wflow_config, era5_function, weather_functions, constants
+from services import functions, wflow_config, era5_function, weather_functions, constants
 from pyflwdir import dem
 from config import PROJECT_ROOT, WFLOW_PATH, SOURCE_BACKEND
 from dask.distributed import get_client
@@ -17,8 +16,6 @@ from pyproj import CRS, Transformer
 
 if "bool" not in np.__dict__: np.bool = np.bool_
 
-try: HAS_DASK = True
-except ImportError: HAS_DASK = False
 
 class StreamToLogger:
     PROGRESS_PATTERN = re.compile(r'\[\s*[#=]*\s*\]\s*\|\s*\d+%\s*Completed\s*\|')
@@ -891,7 +888,8 @@ def run_hydromt(project_name: str, flow_name:str, model_folder:str, log_path:str
             raise FileNotFoundError(message)
         cmd = [wflow_path, toml_path]
         process = subprocess.Popen(
-            cmd, cwd=model_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            cmd, cwd=model_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            encoding="utf-8", errors="replace"     # Wflow.jl prints UTF-8 (progress bar "█"); Windows would decode cp1252
         )
         if process.stdout is None: 
             raise RuntimeError("stdout is not available; did you pass stdout=PIPE?")

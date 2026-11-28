@@ -1,7 +1,7 @@
 import os, json, chardet, asyncio, stat, time, re, shapely
 import shutil, base64, signal, subprocess, gc, traceback, logging, contextvars, secrets as _secrets
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from redis.asyncio.lock import Lock
 from scipy.spatial import KDTree
 from scipy.ndimage import distance_transform_edt, gaussian_filter
@@ -84,6 +84,64 @@ def current_user(request: Request):
 
 _CURRENT_REQUEST: "contextvars.ContextVar[Request | None]" = contextvars.ContextVar("fjord_request", default=None)
 
+# ---- Path-traversal guard -------------------------------------------------------------------------------------
+# Many routes join user-supplied names (fileName, flowName, folder, logFile, waqName, mapPath …) onto project paths.
+# Instead of checking each route, basic_auth (run for every protected route) rejects any such value that could leave
+# the project folder: a '..' segment, an absolute path / drive letter, or a NUL byte. Sub-folders ('flows/x') stay allowed.
+_PATH_KEY = re.compile(r"(name|file|folder|path|dir|type|key)$", re.I)     # e.g. keyType / key are folder names too
+_SKIP_KEYS = {"projectname", "oldname", "newname", "oldproject", "newproject", "username", "full_name", "fullname"}
+
+def _unsafe_path_value(v: str) -> bool:
+    s = v.replace("\\", "/")
+    return ("\x00" in s or s.startswith("/") or re.match(r"^[A-Za-z]:/", s) is not None
+            or ".." in s.split("/"))
+
+def _find_unsafe(obj, key: str = "") -> str | None:
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            bad = _find_unsafe(v, str(k))
+            if bad: return bad
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            bad = _find_unsafe(v, key)
+            if bad: return bad
+    elif isinstance(obj, str) and key and key.lower() not in _SKIP_KEYS and _PATH_KEY.search(key) and _unsafe_path_value(obj):
+        return key
+    return None
+
+async def check_path_params(request: Request) -> None:
+    """400 when a path-like parameter (query, path, JSON body or form field) tries to escape its folder."""
+    sources = [dict(request.query_params), dict(request.path_params)]
+    ctype = request.headers.get("content-type", "")
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            if ctype.startswith("application/json"): sources.append(await request.json())
+            elif ctype.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+                sources.append({k: v for k, v in (await request.form()).items() if isinstance(v, str)})
+        except Exception: pass                                  # malformed body: the route reports it
+    for src in sources:
+        bad = _find_unsafe(src)
+        if bad: raise HTTPException(status_code=400, detail=f"Invalid value for '{bad}' (path not allowed).")
+
+class RawJSON(str):
+    """Text that is already JSON (e.g. gdf.to_json()) - json_response() inserts it as-is."""
+
+def json_response(payload, status_code: int = 200) -> Response:
+    """Like JSONResponse, but RawJSON parts are inserted without json.loads + json.dumps again. For large GeoJSON
+    (grids, GIS layers) this halves the work and keeps the Python lock (GIL) free for other requests much longer."""
+    def enc(o):
+        if isinstance(o, RawJSON): return str(o)
+        if isinstance(o, dict): return "{" + ",".join(json.dumps(str(k)) + ":" + enc(v) for k, v in o.items()) + "}"
+        if isinstance(o, (list, tuple)): return "[" + ",".join(enc(v) for v in o) + "]"
+        return json.dumps(o, default=str, allow_nan=False)
+    return Response(enc(payload), media_type="application/json", status_code=status_code)
+
+async def json_body(request: Request) -> dict:
+    """JSON body as a dependency, so a route can be a plain `def` (FastAPI runs it in a worker thread and the
+    event loop stays free for other users) instead of `async def` + `await request.json()`."""
+    try: return await request.json()
+    except Exception: raise HTTPException(status_code=400, detail="Invalid JSON body")
+
 async def basic_auth(request: Request) -> str:
     """Keeps the OLD NAME so ~180 routes need no change: returns the session's username, 401 when not signed in.
     (Previously: HTTP Basic + allowed_users.json.)  Async on purpose: the request is stored in a context variable
@@ -93,6 +151,7 @@ async def basic_auth(request: Request) -> str:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     if not user.can_write and is_write_request(request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Read-only account (viewer)")
+    await check_path_params(request)
     _CURRENT_REQUEST.set(request)
     return user.username
 
@@ -120,6 +179,37 @@ _BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 SHARE_SEP = ":"          # a shared project is referenced as "<owner>:<project>" (":" is never part of a folder name)
 PUBLIC_OWNER = "public"  # sample projects: "public:<name>" -> PROJECT_ROOT/<name>, read only except for administrators
 
+_LABEL_BAD = re.compile(r"[^A-Za-z0-9_.\-]+")
+
+def context_label(label) -> str:
+    """File-name safe label for a context file (Wflow scenario name, uploaded file name ...)."""
+    label = _LABEL_BAD.sub("_", os.path.splitext(os.path.basename(str(label or "")))[0]).strip("._")
+    return label[:80] or "default"
+
+def context_file(project_name: str, base: str, label, ext: str) -> str:
+    """Path of <project>/others/<base>__<label><ext> (folder created). One file per scenario, so a new
+    Wflow scenario / depth upload no longer overwrites the previous one."""
+    other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
+    os.makedirs(other_dir, exist_ok=True)
+    return os.path.join(other_dir, f"{base}__{context_label(label)}{ext}")
+
+def remove_context_files(project_name: str, label) -> None:
+    """Delete the context files of one scenario (e.g. when the Wflow scenario is deleted)."""
+    other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
+    if not os.path.isdir(other_dir): return
+    suffix = f"__{context_label(label)}"
+    for f in os.listdir(other_dir):
+        if os.path.splitext(f)[0].endswith(suffix): safe_remove(os.path.join(other_dir, f))
+
+def can_read_path(first: str, second: str, username: str) -> bool:
+    """May `username` read PROJECT_ROOT/<first>/<second>/…? (raw paths used in tile URLs)
+    first = owner and second = project, or first = a sample project folder."""
+    if first in PUBLIC_PROJECTS: return True                        # sample project: everyone may read
+    u = current_user(_CURRENT_REQUEST.get()) if _CURRENT_REQUEST.get() is not None else None
+    if first == username or (u is not None and u.is_admin): return True
+    from services import auth_store
+    return auth_store.share_access(first, second, username) is not None
+
 def public_refs() -> list[str]:
     """References of the sample projects that exist on disk, e.g. ['public:demo']."""
     return [f"{PUBLIC_OWNER}{SHARE_SEP}{p}" for p in PUBLIC_PROJECTS if os.path.isdir(os.path.join(PROJECT_ROOT, p))]
@@ -144,16 +234,25 @@ def split_project_ref(ref, username: str) -> tuple[str, str]:
         return owner, safe_project_name(project)
     return username, safe_project_name(ref)
 
-def project_definer(old_name, username='admin', for_copy: bool = False):
+def _require_project_dir(path: str, ref) -> None:
+    """404 when PROJECT_ROOT/<path> is not an existing project folder."""
+    if not os.path.isdir(os.path.join(PROJECT_ROOT, path)):
+        raise HTTPException(status_code=404, detail=f"Project '{ref}' does not exist.\n"
+            "Create a new project or open an existing one first."
+        )
+
+def project_definer(old_name, username='admin', for_copy: bool = False, must_exist: bool = True):
     """'<owner>/<project>' path relative to PROJECT_ROOT (legacy account 'admin' -> shared demo project).
     - own project: '<project>' (or '<username>:<project>')
     - shared project: '<owner>:<project>' -> allowed only when shared with `username`; a 'view' share
       refuses write requests (403). The real path must stay inside the owner's folder (no '../').
     - sample project: 'public:<name>' -> PROJECT_ROOT/<name>; everyone may read it, only administrators may change it
       (for_copy=True: reading it as the SOURCE of a copy into the user's own folder is allowed).
-    Raises 400 / 403 HTTPException."""
-    if username == 'admin':
-        new_name = 'demo'
+    - must_exist=True (default): the project folder must already exist (404 otherwise), so no route silently creates a
+      project - e.g. a download log for a project that was never created. Only the routes that CREATE a project
+      (setup_new_project, copy_project, save_scenario_calibration, finish_calibration) pass must_exist=False.
+    Raises 400 / 403 / 404 HTTPException."""
+    if username == 'admin': new_name = 'demo'
     else:
         if old_name == '': owner, project = username, ''
         else: owner, project = split_project_ref(old_name, username)
@@ -164,7 +263,9 @@ def project_definer(old_name, username='admin', for_copy: bool = False):
             user = current_user(req) if req is not None else None
             if is_write_request(req) and not for_copy and not (user is not None and user.is_admin):
                 raise HTTPException(status_code=403, detail="The sample project is read-only. "
-                                    "Copy it to your own projects to make changes.")
+                    "Copy it to your own projects to make changes."
+                )
+            if must_exist: _require_project_dir(project, old_name)
             return project, f'{project}/{uuid4()}'
         if owner != username:
             from services import auth_store
@@ -178,8 +279,28 @@ def project_definer(old_name, username='admin', for_copy: bool = False):
         if os.path.commonpath([owner_dir, target]) != owner_dir:
             raise HTTPException(status_code=403, detail="Forbidden project path")
         new_name = f'{owner}/{project}'.rstrip('/')
+        if not project:                         # '' = the user's own folder: only for listing projects
+            if is_write_request(_CURRENT_REQUEST.get()):
+                raise HTTPException(status_code=400, detail="No project selected. Create a new project or open an existing one first.")
+        elif must_exist: _require_project_dir(new_name, old_name)
+        _storage_guard(owner, username)
     name_id = f'{new_name}/{uuid4()}'
     return new_name, name_id
+
+def _storage_guard(owner: str, username: str) -> None:
+    """Storage quota of the project OWNER: 507 for routes that add data when it is full; deleting refreshes the size."""
+    req = _CURRENT_REQUEST.get()
+    if req is None or not is_write_request(req): return
+    from services import storage
+    path = req.url.path
+    if "delete" in path or path.startswith("/reset_"): storage.invalidate(owner); return
+    if not storage.is_growth_route(path): return
+    if owner == username:
+        user = current_user(req); is_admin = bool(user and user.is_admin)
+    else:
+        from services import auth_store
+        o = auth_store.get_user(owner); is_admin = bool(o and o.is_admin)
+    storage.check(owner, is_admin, viewer=username)
 
 # ---------------------------------------------------------------- per-user view state of other people's projects
 def _viewer_of_other(project_path: str):
@@ -412,7 +533,7 @@ def remove_readonly(func, path, excinfo):
 
 def append_log(log_path, text):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "a", encoding=encoding_detect(log_path), errors="replace") as f:
+    with open(log_path, "a", encoding="utf-8", errors="replace") as f:      # app logs are UTF-8 (no re-detection per line)
         f.write(text.strip() + "\n")
         f.flush()
 
@@ -464,19 +585,6 @@ def unstructuredGridCreator(data_map: xr.Dataset) -> gpd.GeoDataFrame:
         else: grid = gpd.GeoDataFrame(geometry=polygons, crs="EPSG:4326")
     else: grid = gpd.GeoDataFrame(geometry=polygons, crs="EPSG:4326")
     return grid
-
-def nodes_from_grid(grid: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    points = []
-    for geometry in grid.geometry:
-        if isinstance(geometry, Polygon): points.extend(geometry.exterior.coords)
-        elif isinstance(geometry, MultiPolygon):
-            for polygon in geometry.geoms:
-                points.extend(polygon.exterior.coords)
-    unique_points = list(set(points))
-    points = gpd.GeoDataFrame(
-        geometry=[shapely.geometry.Point(x, y) for x, y in unique_points], crs=grid.crs
-    )
-    return points
 
 def fileWriter(template_path: str, params: dict) -> str:
     # Open the file and read its contents

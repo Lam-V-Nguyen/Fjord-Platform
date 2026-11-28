@@ -11,13 +11,14 @@ import { pdfOpener, projectModifier } from "./projectManager.js";
 import { initGrid, addWidget, loadWidget, saveWidget, hasWidget } from "./widgetFunctions.js";
 import { startLoading, stopLoading, jsonLoader } from "./commonFunctions.js";
 import { setPendingRequest, clearPendingRequest, origin,
-    getLastProject, getLastTimeZone, setLastTimeZone 
+    getLastProject, setLastProject, getLastTimeZone, setLastTimeZone
 } from "./constant.js";
 import { renderPreview, currentMap } from "./mapManager.js";
 import { TOOL_GROUPS, QUICK_TOOLS, getTool, groupOf, standaloneLabel } from "./toolRegistry.js";
 import { icon } from "./icons.js";
 import { initThresholdEditor } from "./thresholdEditor.js";
 import { initAccountMenu } from "./accountMenu.js";
+import { initStorageBanner } from "./storageBanner.js";
 import { initShareDialog, projectLabel } from "./shareDialog.js";
 import { Dashboard, toast, initSidebarResize } from "./dashboardManager.js";
 
@@ -48,8 +49,11 @@ async function login() {
     currentTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (getLastTimeZone() === '') { setLastTimeZone(currentTimeZone); }
     try {
-        const data = await jsonLoader('auth_check', {});
+        const data = await jsonLoader('auth_check', { projectName: getLastProject() });
         userName = data.user === 'admin' ? '' : data.user;
+        // The last project saved in this browser no longer exists for this user (deleted, renamed, saved by
+        // another account on the same browser…) -> go back to the sample project instead of using a missing one
+        if (data.project_exists === false) setLastProject('public:demo');
     } catch (e) {
         console.error('auth_check failed', e); userName = '';
     }
@@ -207,6 +211,7 @@ function bindShell() {
     });
     settings.addEventListener('click', (e) => e.stopPropagation());
     bindTimezoneSearch();
+    initStorageBanner();
     initAccountMenu({ toast, beforeOpen: () => settings.classList.remove('show') })
         .then(me => initShareDialog({ toast, me, beforeOpen: () => settings.classList.remove('show') }));
     initThresholdEditor({

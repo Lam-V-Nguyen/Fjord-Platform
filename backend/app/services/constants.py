@@ -64,6 +64,21 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 """
 
+# HYD and WAQ configurations
+DIA_LINE_RE = re.compile(r'^\*\*\s*(ERROR|WARNING)\s*:\s*(.*)$', re.IGNORECASE)
+STDOUT_ERROR_RE = re.compile(r'\*\*\s*ERROR\s*:\s*(.*)|(forrtl:.*)', re.IGNORECASE)
+ERROR_HINTS = {
+    "small flow links": "The grid has very small flow links (cells with obtuse angles). "
+        "Re-create the grid in the Grid tab (small flow links are now removed automatically), "
+        "or lower 'Removesmalllinkstrsh' in the [geometry] section of the MDU file.",
+    "nnetnode": "The grid file is not in UGRID format. Save the grid again from the Grid tab.",
+    "nnetlink": "The grid file is not in UGRID format. Save the grid again from the Grid tab.",
+}
+ERROR_GRACE_SECONDS = 10      # time D-Flow FM gets to stop by itself after an error before it is killed
+WAQ_ERROR_RE = re.compile(r'\bERROR\b|forrtl:|did not run correctly', re.IGNORECASE)
+WAQ_ERROR_HINTS = {
+    "gmres": "GMRES solver failed. Increase the maximum number of iterations or the tolerance, or use a smaller time step.",
+}
 
 # Dashboard
 DASH_MOVE_DIR, DASH_VIEW_DIR = "movement",  "viewer"
@@ -529,4 +544,7 @@ FRIENDLY = {
 }
 # Base layers (lake, catchment, rivers, bathymetry): missing file -> None / [] -> the dashboard hides the matching option.
 # Cached by (path, mtime) so files added / edited / deleted after the server has started are still picked up.
-CONTEXT_LAYERS = { "lake": "lake.geojson", "catchment": "catchment.geojson", "river": "river.geojson", "bathymetry": "depth.csv" }
+# Context layers in <project>/others: "<base><ext>" (legacy, one per project) and "<base>__<label><ext>"
+# (one per Wflow scenario / uploaded depth file), e.g. catchment__brusdal.geojson, depth__survey_2024.csv
+CONTEXT_LAYERS = { "lake": ("lake", ".geojson"), "catchment": ("catchment", ".geojson"),
+                   "river": ("river", ".geojson"), "bathymetry": ("depth", ".csv") }

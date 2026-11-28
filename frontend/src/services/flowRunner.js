@@ -111,7 +111,7 @@ mapOptions(mapObj); flowManager(mapObj);
 
 async function getProject() { 
     const userName = await getUser(); currentProject = userName.split('/').pop();
-    const respond = await getProjectList(`${currentProject}/flows`, '');
+    const respond = await getProjectList(currentProject, '', 'getProjects', 'flows');
     await projectRender(obj.projectName, obj.projectList, respond);
 }
 

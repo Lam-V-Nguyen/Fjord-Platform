@@ -13,8 +13,8 @@ export const TOOL_GROUPS = [
     {
         id: 'hyd', title: 'Hydrodynamics (HYD)', icon: 'waves',
         tools: [
-            { id: 'preparation-hyd', title: 'Data Preparation for HYD Scenario', short: 'Data Preparation', label: 'Data Preparation (HYD)', url: '/src_frontend/htmls/hydPreparation.html', w: 12, h: 10, icon: 'clipboard' },
             { id: 'grid-generation', title: 'Grid Generation', url: '/src_frontend/htmls/unstructuredGrid.html', w: 12, h: 10, icon: 'grid' },
+            { id: 'preparation-hyd', title: 'Data Preparation for HYD Scenario', short: 'Data Preparation', label: 'Data Preparation (HYD)', url: '/src_frontend/htmls/hydPreparation.html', w: 12, h: 10, icon: 'clipboard' },
             { id: 'new-hyd', title: 'Create HYD Scenario', url: '/src_frontend/htmls/hydCreator.html', w: 12, h: 9, icon: 'plus' },
             { id: 'run-hyd', title: 'Run HYD Scenario', url: '/src_frontend/htmls/hydRunner.html', w: 12, h: 3, icon: 'play' },
         ],
@@ -33,6 +33,12 @@ export const TOOL_GROUPS = [
         ],
     },
     {
+        id: 'visualization', title: 'Visualization', icon: 'chart',
+        tools: [
+            { id: 'visualization', title: 'Visualization', url: '/src_frontend/htmls/visualization.html', w: 12, h: 9, icon: 'chart' },
+        ],
+    },
+    {
         id: 'flow', title: 'Flow Estimation', icon: 'river',
         tools: [
             { id: 'flow-preparation', title: 'Data Preparation for Flow Estimation', short: 'Data Preparation', label: 'Data Preparation (Wflow)', url: '/src_frontend/htmls/flowPreparation.html', w: 12, h: 11, icon: 'clipboard' },
@@ -40,12 +46,7 @@ export const TOOL_GROUPS = [
             { id: 'flow-estimation', title: 'Flow Estimation', url: '/src_frontend/htmls/flowRunner.html', w: 12, h: 12, icon: 'activity' },
         ],
     },
-    {
-        id: 'visualization', title: 'Visualization', icon: 'chart',
-        tools: [
-            { id: 'visualization', title: 'Visualization', url: '/src_frontend/htmls/visualization.html', w: 12, h: 9, icon: 'chart' },
-        ],
-    },
+
 ];
 
 export const HELP_ITEMS = [

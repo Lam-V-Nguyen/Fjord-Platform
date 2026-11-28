@@ -92,6 +92,11 @@
             <span class="time-zone">...</span>
           </div>
           <div class="github-last-update">Loading last update...</div>
+          <div class="sf-row storage-meter" id="storage-meter" hidden tabindex="0" aria-label="Storage used">
+            <span class="sf-label">Storage <span class="storage-meter-pct" id="storage-meter-pct"></span></span>
+            <div class="storage-track"><span class="storage-fill" id="storage-meter-fill"></span></div>
+            <span class="storage-tip" id="storage-meter-tip" role="tooltip"></span>
+          </div>
         </div>
       </aside>
 
@@ -324,7 +329,8 @@
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px">
           <span data-icon="user"></span>
           <div style="min-width:0; flex:1"><div id="account-name" style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">–</div>
-            <div id="account-role" style="font-size:11px; color: var(--muted)"></div></div>
+            <div id="account-role" style="font-size:11px; color: var(--muted)"></div>
+            <div id="account-storage" class="account-storage"></div></div>
         </div>
         <div style="display:flex; flex-wrap:wrap; gap:6px">
           <button class="btn small" id="btn-change-password"><span data-icon="lock"></span>Change password</button>

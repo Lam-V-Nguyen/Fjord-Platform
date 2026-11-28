@@ -12,9 +12,8 @@ from meshkernel import GeometryList
 router, processes = APIRouter(), {}
 
 @router.post("/polygon_generator")
-async def polygon_generator(request: Request):
+def polygon_generator(request: Request, body: dict = Depends(functions.json_body)):
     try:
-        body = await request.json()
         points = body.get('points', None)
         vertices = [{"id": i, "geometry": Point((coord[1], coord[0]))} for i, coord in enumerate(points)]
         point = gpd.GeoDataFrame(vertices, geometry="geometry", crs="EPSG:4326")
@@ -120,9 +119,8 @@ async def vertex_generator(request: Request):
     except Exception as e: functions.error('/vertex_generator', e)
 
 @router.post("/vertex_refiner")
-async def vertex_refiner(request: Request):
+def vertex_refiner(request: Request, body: dict = Depends(functions.json_body)):
     try:
-        body = await request.json()
         start_point, end_point = int(body.get('startPoint')), int(body.get('endPoint'))
         polygon, distance = body.get('polygon', None), body.get('distance')
         if not polygon or len(polygon) < 3:
@@ -213,19 +211,18 @@ async def grid_creator(request: Request, user=Depends(functions.basic_auth)):
         if points.ndim != 2 or points.shape[1] != 2 or points.shape[0] < 3:
             return JSONResponse({"status": "error", "message": "Polygon must have at least 3 vertexes."})
         try:
-            mk, grid_uds, content = await run_in_threadpool(
+            mk, grid_uds, content, mk_crs = await run_in_threadpool(
                 grid_functions.grid_creator_sync, points, body.get('levelValue')
             )
         except grid_functions.GridError as e:
             return JSONResponse({"status": "error", "message": str(e)})
-        project_cache['grid_uds'], project_cache['mk'], project_cache['mk_crs'] = grid_uds, mk, "EPSG:4326"
+        project_cache['grid_uds'], project_cache['mk'], project_cache['mk_crs'] = grid_uds, mk, mk_crs
         return JSONResponse({'status': 'ok', 'content': content})
     except Exception as e: functions.error('/grid_creator', e)
 
 @router.post("/grid_ortho")
-async def grid_ortho(request: Request, user=Depends(functions.basic_auth)):
+def grid_ortho(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         project_cache = request.app.state.project_cache.setdefault(project_name)
         if not project_cache:
@@ -245,6 +242,30 @@ async def grid_ortho(request: Request, user=Depends(functions.basic_auth)):
         min, max = np.min(values), np.max(values)
         return JSONResponse({'status': 'ok', 'content': {"min": min, "max": max, "data": json.loads(gdf.to_json())}})
     except Exception as e: functions.error('/grid_ortho', e)
+
+@router.post("/grid_quality_check")
+def grid_quality_check(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
+    try:
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        project_cache = request.app.state.project_cache.get(project_name) or {}
+        mk = project_cache.get('mk')
+        if mk is None:
+            return JSONResponse({"status": "error", "message": "No grid in memory. Generate or optimize a grid first."})
+        report = grid_functions.grid_quality_report(mk, project_cache.get('mk_crs', "EPSG:4326"))
+        return JSONResponse({'status': 'ok', 'content': report})
+    except Exception as e: functions.error('/grid_quality_check', e)
+
+@router.post("/grid_fix_small_links")
+def grid_fix_small_links(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
+    try:
+        project_name, _ = functions.project_definer(body.get('projectName'), user)
+        project_cache = request.app.state.project_cache.get(project_name) or {}
+        try: result = grid_functions.fix_cached_grid_small_links(project_cache)
+        except grid_functions.GridError as e: return JSONResponse({"status": "error", "message": str(e)})
+        message = (f"Removed {result['small_links']} small flow link(s) "
+            f"({result['removed_cells']} cells merged). Small flow links left: {result['left']}.")
+        return JSONResponse({'status': 'ok', 'message': message, 'content': result['content']})
+    except Exception as e: functions.error('/grid_fix_small_links', e)
 
 @router.post("/check_grid_optimization")
 async def check_grid_optimization(request: Request, user=Depends(functions.basic_auth)):
@@ -282,19 +303,27 @@ async def start_grid_optimization(request: Request, background_tasks: Background
         lock = redis.lock(process_key, timeout=1000, blocking_timeout=10)
         async with lock:
             info = processes.get(process_key)
-            # Check if optimization already running
-            if info and info["status"] == "running":
+            if info and info["status"] == "running":               # already running: report progress
                 return JSONResponse({
-                    "status": info["status"], "progress": info["progress"], 
+                    "status": info["status"], "progress": info["progress"],
                     "message": info["message"], "his": info["history"]
                 })
-            processes[process_key] = {
-                "status": "running", "progress": 0.0, "history": [], "grid": None,
-                "message": 'Preparing data for optimization ...', "stop": False
-            }
-            info = processes[process_key]
-            iterations, points = int(body.get('iterations')), np.array(body.get('pointCollection'))
-            level_from, level_to = float(body.get('levelFrom')), float(body.get('levelTo'))
+            # validate BEFORE marking the process as running (an early return must not leave it "running")
+            auto_mode, custom_mode = bool(body.get('autoMode')), bool(body.get('customMode'))
+            if not (auto_mode or custom_mode):
+                return JSONResponse({"status": "error", "message": 'Select at least Auto mode or Custom mode.'})
+            try: iterations = int(body.get('iterations'))
+            except (TypeError, ValueError): iterations = 0
+            if not 1 <= iterations <= 5000:
+                return JSONResponse({"status": "error", "message": 'Iterations must be a whole number between 1 and 5000.'})
+            level_range = None
+            if custom_mode:    # the level range only matters for custom mode
+                try: level_from, level_to = float(body.get('levelFrom')), float(body.get('levelTo'))
+                except (TypeError, ValueError): level_from = level_to = 0.0
+                if not (0 < level_from < level_to):
+                    return JSONResponse({"status": "error", "message": 'Level range must satisfy 0 < From < To.'})
+                level_range = [level_from, level_to]
+            points = np.array(body.get('pointCollection'))
             gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(points[:, 1], points[:, 0]), crs="EPSG:4326")
             utm_crs = gdf.estimate_utm_crs()
             utm_crs_str = utm_crs.to_string() if utm_crs is not None else "EPSG:4326"
@@ -305,14 +334,20 @@ async def start_grid_optimization(request: Request, background_tasks: Background
             except grid_functions.GridError as e:
                 return JSONResponse({"status": "error", "message": str(e)})
             polygon = GeometryList(x, y)
+            modes = (['auto'] if auto_mode else []) + (['custom'] if custom_mode else [])
             params = {
-                "level": [level_from, level_to], 'mode': ['auto', 'custom'],
+                "level": level_range, "mode": modes,
                 "outer_iterations": [1, 10], "boundary_iterations": [1, 50],
                 "inner_iterations": [1, 50], "smoothing_factor": [0, 1]
             }
+            # everything is valid: now mark it as running and start
+            processes[process_key] = {
+                "status": "running", "progress": 0.0, "history": [], "grid": None,
+                "message": 'Preparing data for optimization ...', "stop": False
+            }
             background_tasks.add_task(
-                grid_functions.run_grid_optimization, processes, process_key, iterations, 
-                polygon, params, project_cache, utm_crs_str
+                grid_functions.run_grid_optimization, processes, process_key,
+                iterations, polygon, params, project_cache, utm_crs_str
             )
         return JSONResponse({"status": "ok", "message": f"Grid optimization started."})
     except Exception as e: functions.error('/start_grid_optimization', e)
@@ -343,12 +378,11 @@ async def grid_checker(request: Request, user=Depends(functions.basic_auth)):
     else: return JSONResponse({'status': 'error'})
 
 @router.post("/grid_interpolation_upload")
-async def grid_interpolation_upload(projectName: str = Form(...), file: UploadFile = File(...), user=Depends(functions.basic_auth)):
+def grid_interpolation_upload(projectName: str = Form(...), file: UploadFile = File(...), user=Depends(functions.basic_auth)):
     try:
         project_name, _ = functions.project_definer(projectName, user)
-        others_dir = os.path.join(PROJECT_ROOT, project_name, "others")
-        os.makedirs(others_dir, exist_ok=True)
-        csv_path = os.path.join(others_dir, 'depth.csv')
+        # Depth points for the dashboard: <project>/others/depth__<uploaded file name>.csv (one file per upload)
+        csv_path = functions.context_file(project_name, 'depth', file.filename, '.csv')
         df = pd.read_csv(file.file, low_memory=False)
         required_columns = ['Lat', 'Lon', 'Depth']
         missing_columns = [col for col in required_columns if col not in df.columns]
@@ -359,12 +393,11 @@ async def grid_interpolation_upload(projectName: str = Form(...), file: UploadFi
         df.to_csv(csv_path, index=False)
         return JSONResponse({'status': 'ok', 'content': json.loads(content.to_json())})
     except Exception as e: functions.error('/grid_interpolation_upload', e)
-    finally: await file.close()
+    finally: file.file.close()
 
 @router.post("/grid_interpolation")
-async def grid_interpolation(request: Request):
+def grid_interpolation(request: Request, body: dict = Depends(functions.json_body)):
     try:
-        body = await request.json()
         data_point, data_grid = np.array(body.get('pointCollection')), body.get('grid')
         grid = gpd.GeoDataFrame.from_features(
             data_grid['features'] if data_grid['type'] == 'FeatureCollection' else [data_grid], crs="EPSG:4326"
@@ -380,12 +413,13 @@ async def grid_interpolation(request: Request):
     except Exception as e: functions.error('/grid_interpolation', e)
 
 @router.post("/grid_saver")
-async def grid_saver(request: Request, user=Depends(functions.basic_auth)):
+def grid_saver(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     temp_path = None
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         point_data = body.get('gridPoints')
+        if not point_data or not point_data.get('type'):
+            return JSONResponse({"status": "error", "message": "No interpolated grid points. Generate and interpolate the grid first."})
         points = gpd.GeoDataFrame.from_features(
             point_data['features'] if point_data['type'] == 'FeatureCollection' else [point_data], crs="EPSG:4326"
         )
@@ -396,16 +430,23 @@ async def grid_saver(request: Request, user=Depends(functions.basic_auth)):
         grid_uds = project_cache.get('grid_uds')
         if grid_uds is None:
             return JSONResponse({"status": "error", "message": "Grid is not available."})
-        grid = functions.unstructuredGridCreator(grid_uds)
-        nodes = functions.nodes_from_grid(grid)
+        node_x = np.asarray(grid_uds['mesh2d_node_x'].values, dtype=float)
+        node_y = np.asarray(grid_uds['mesh2d_node_y'].values, dtype=float)
+        # Target = the grid nodes IN NODE ORDER (mesh2d_node_z[i] belongs to node i).
+        # nodes_from_grid() returns them in random set() order -> depths ended up on the wrong nodes.
+        nodes = gpd.GeoDataFrame(geometry=gpd.points_from_xy(node_x, node_y), crs="EPSG:4326")
+        depth_col = next((c for c in points.columns if c.lower() == 'depth'), None)   # interpolated nodes carry 'Depth'
+        if depth_col is None:
+            return JSONResponse({"status": "error", "message": "The interpolated points have no depth values. Interpolate the grid again."})
         x_array = points['lon'].to_numpy(dtype=float)
         y_array = points['lat'].to_numpy(dtype=float)
-        z_array = points['depth'].to_numpy(dtype=float)
+        z_array = points[depth_col].to_numpy(dtype=float)
         depth = functions.interpolation_Z(nodes, x_array, y_array, z_array, geo_type='point')
-        grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(depth.astype(np.float32)))
-        with tempfile.NamedTemporaryFile(suffix='.nc', delete=False) as temp_file:
+        depth = np.asarray(depth, dtype=np.float64)
+        grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(depth))
+        with tempfile.NamedTemporaryFile(suffix='_net.nc', delete=False) as temp_file:
             temp_path = temp_file.name
-        grid_uds.to_netcdf(temp_path, engine='netcdf4')
+        grid_functions.save_dflowfm_net(grid_uds, temp_path, node_z=depth)
         def file_iterator():
             try:
                 with open(temp_path, 'rb') as f:
@@ -418,22 +459,3 @@ async def grid_saver(request: Request, user=Depends(functions.basic_auth)):
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
         functions.error('/grid_saver', e)
-
-@router.post("/grid_rechecker")
-async def grid_rechecker(file: UploadFile = File(...)):
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix='.nc', delete=False) as temp_file:
-            temp_path = temp_file.name
-            while chunk := await file.read(1024 * 1024):
-                temp_file.write(chunk)
-        with xr.open_dataset(temp_path, engine='netcdf4') as grid_uds:
-            grid = functions.unstructuredGridCreator(grid_uds)
-            nodes = functions.nodes_from_grid(grid)
-            nodes['Depth'] = 0
-            if 'mesh2d_node_z' in grid_uds: nodes['Depth'] = grid_uds['mesh2d_node_z'].values
-            if 'NetNode_z' in grid_uds: nodes['Depth'] = grid_uds['NetNode_z'].values
-        content = {'grid': json.loads(grid.to_json()), 'nodes': json.loads(nodes.to_json())}
-        return JSONResponse({'status': 'ok', 'content': content})
-    except Exception as e: functions.error('/grid_rechecker', e)
-    finally: await file.close()

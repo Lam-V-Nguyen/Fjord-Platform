@@ -21,7 +21,9 @@ from services import hyd_router, process_router, \
 app = FastAPI(lifespan=lifespan,
     # Auto-generated API docs (/docs) only in development
     docs_url=None if IS_PROD else "/docs", redoc_url=None, openapi_url=None if IS_PROD else "/openapi.json")
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# Production: Caddy compresses (encode zstd gzip) outside Python; GZipMiddleware would compress large GeoJSON on the
+# event loop and block other requests. Development (no reverse proxy): compress here.
+if not IS_PROD: app.add_middleware(GZipMiddleware, minimum_size=1000)
 security.install(app)                                       # security headers, CSRF check, upload limit, error handling, /health
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 

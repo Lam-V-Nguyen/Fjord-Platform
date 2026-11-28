@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
     <link rel="stylesheet" href="/src_frontend/styles/tabControler.css">
     <link rel="stylesheet" href="/src_frontend/styles/flowPreparation.css">
     <link rel="stylesheet" href="/src_frontend/styles/calibration.css">
@@ -136,7 +136,10 @@
                                     <input type="number" id="iteration-number" min="1" value="50">
                                     <button id="iteration-btn">2.1. Run Iterations</button>
                                 </div>
-                                <div class="field-inline">
+                                <p class="init-hint" style="margin-top: -10px; font-weight: bold; color: rgb(251, 255, 0);">
+                                    Number of iteration will <b>significantly</b> affect on the simulation time. Please consider this value carefully.
+                                </p>
+                                <div class="field-inline" style="margin-top: -10px;">
                                     <label style="text-align: center;">From:</label>
                                     <input type="text" id="iteration-start" value="1">
                                     <label style="text-align: center;">To:</label>
@@ -319,9 +322,6 @@
                                     <div><input class="param-check" type="checkbox" id="delete-calibration-checkbox"> Delete calibrated scenario</div>
                                 </div>
                                 <button id="override-btn">Overwrite Calibration &#10132; Original Scenario</button>
-
-                                
-
                             </div>
                         </div>
                         <div class="tile sensitivity-layout" id="plot-container"
@@ -333,7 +333,7 @@
             </div>
         </section>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.26.1.min.js"></script>
     <script>
         flatpickr(".datetime", {

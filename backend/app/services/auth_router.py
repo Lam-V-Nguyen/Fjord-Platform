@@ -14,8 +14,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi import HTTPException
 from config import (PROJECT_ROOT, COOKIE_NAME, COOKIE_SECURE, SESSION_HOURS, SESSION_MAX_DAYS, 
-    PUBLIC_URL, SOURCE_FRONTEND, INVITE_HOURS, RESET_HOURS, SELF_REGISTRATION, ADMIN_EMAILS)
-from services import auth_store as store, mailer, constants
+    PUBLIC_URL, SOURCE_FRONTEND, INVITE_HOURS, RESET_HOURS, SELF_REGISTRATION, ADMIN_EMAILS, USER_QUOTA_GB)
+from services import auth_store as store, mailer, constants, storage
 from services.functions import current_user, require_admin, split_project_ref, SHARE_SEP, PUBLIC_OWNER
 
 router = APIRouter()
@@ -96,6 +96,13 @@ def auth_me(request: Request):
     if user is None: return _fail("Not authenticated", 401)
     return _ok(user=user.public(), session_hours=SESSION_HOURS)
 
+@router.get("/auth/storage")
+def auth_storage(request: Request):
+    """Storage used by the signed-in user (own projects) against their quota – shown as a banner when nearly full."""
+    user = current_user(request)
+    if user is None: return _fail("Not authenticated", 401)
+    return _ok(storage=storage.status(user.username, user.is_admin))
+
 @router.post("/auth/change_password")
 async def auth_change_password(request: Request):
     user = current_user(request)
@@ -167,7 +174,23 @@ async def auth_set_password(request: Request):
 #  administration
 @router.get("/auth/admin/users")
 def admin_users(admin: str = Depends(require_admin)):
-    return _ok(users=store.list_users(), mail_enabled=mailer.enabled(), roles=constants.ROLES, statuses=constants.STATUSES)
+    users = store.list_users()
+    for u in users: u["storage"] = storage.status(u["username"], u.get("role") == "admin")
+    return _ok(users=users, mail_enabled=mailer.enabled(), roles=constants.ROLES, statuses=constants.STATUSES,
+               default_quota_gb=USER_QUOTA_GB)
+
+@router.post("/auth/admin/quota")
+async def admin_quota(request: Request, admin: str = Depends(require_admin)):
+    """Per-user storage quota in GB: number (0 = unlimited) or empty = default of .env (USER_QUOTA_GB)."""
+    body = await _json(request)
+    username = (body.get("username") or "").strip().lower()
+    if store.get_user(username) is None: return _fail("Unknown user")
+    gb = body.get("quota_gb")
+    try: storage.set_quota(username, None if gb in (None, "") else float(gb))
+    except (TypeError, ValueError): return _fail("Quota must be a number of GB (0 = unlimited)")
+    store.audit("quota_changed", actor=admin, target=username, detail=f"{gb or 'default'} GB", ip=_ip(request))
+    u = store.get_user(username)
+    return _ok(storage=storage.status(username, u.is_admin))
 
 @router.post("/auth/admin/invite")
 async def admin_invite(request: Request, admin: str = Depends(require_admin)):
@@ -212,7 +235,7 @@ async def admin_update(request: Request, admin: str = Depends(require_admin)):
 
 @router.post("/auth/admin/reset_link")
 async def admin_reset_link(request: Request, admin: str = Depends(require_admin)):
-    """Create a new password link (or resend the invitation) – e-mailed when SMTP is set up, always returned to the admin."""
+    """Create a new password link (or resend the invitation) - e-mailed when SMTP is set up, always returned to the admin."""
     body = await _json(request)
     user = store.get_user(body.get("username", ""))
     if user is None: return _fail("User not found", 404)

@@ -50,10 +50,10 @@ export const LAYER_DEFS = [
     { key: 'stations', label: 'Observation stations', kind: 'point', color: '#e879f9', icon: 'eye', on: true },
     { key: 'alerts', label: 'Alert zones', kind: 'zone', color: '#f43f5e', on: true },
     // context: true -> always listed, only enabled when the project has the matching file in <project>/others
-    { key: 'lake', label: 'Lake boundary', kind: 'polygon', color: '#38bdf8', on: true, context: true, file: 'lake.geojson' },
-    { key: 'catchment', label: 'Catchment', kind: 'polygon-dashed', color: '#a3e635', on: false, context: true, file: 'catchment.geojson' },
-    { key: 'rivers', label: 'River network', kind: 'line', color: '#60a5fa', on: false, context: true, file: 'river.geojson' },
-    { key: 'bathymetry', label: 'Bathymetry points', kind: 'gradient', palette: 'bathymetry', on: false, context: true, file: 'depth.csv' },
+    { key: 'lake', label: 'Lake boundary', kind: 'polygon', color: '#38bdf8', on: true, context: true, file: 'lake*.geojson' },
+    { key: 'catchment', label: 'Catchment', kind: 'polygon-dashed', color: '#a3e635', on: false, context: true, file: 'catchment*.geojson' },
+    { key: 'rivers', label: 'River network', kind: 'line', color: '#60a5fa', on: false, context: true, file: 'river*.geojson' },
+    { key: 'bathymetry', label: 'Bathymetry points', kind: 'gradient', palette: 'bathymetry', on: false, context: true, file: 'depth*.csv' },
     // Extra layers: can only be enabled when the project has data (see setAvailability / registerExtra)
     { key: 'movement', label: 'Flow movement (HYD)', kind: 'gradient', palette: 'speed_light', on: false, extra: true },
     { key: 'pollution', label: 'Pollutant spread (WAQ)', kind: 'gradient', palette: 'quality', on: false, extra: true },
@@ -115,6 +115,10 @@ export class DashboardMap {
         this.settingsHandlers = {};       // key -> (btn) => open the settings panel
         this.loadingKeys = new Set();
         this.rawField = null;
+        // Context layers can hold several files (one per Wflow scenario / depth upload) – see setContext
+        this.contextItems = {};           // key -> [{id, label}]
+        this.itemLayers = {};             // key -> {id: L.Layer}
+        this.expanded = new Set();        // context keys whose file list is open in the Map Layers panel
     }
 
     setScaleMode(mode) {
@@ -277,8 +281,10 @@ export class DashboardMap {
         const parts = []; layers = layers || {};  // null = project does not exist / cannot be read -> everything greyed out
         const hasGeo = (gj) => !!(gj && (gj.features ? gj.features.length : gj.type));
         this.contextAvail = {
-            lake: hasGeo(layers.lake), catchment: hasGeo(layers.catchment), rivers: hasGeo(layers.rivers),
-            bathymetry: Array.isArray(layers.bathymetry) && layers.bathymetry.length > 0,
+            // each context layer = [{id: file, label, data}] (one per Wflow scenario / depth upload)
+            lake: (layers.lake || []).some(it => hasGeo(it.data)), catchment: (layers.catchment || []).some(it => hasGeo(it.data)),
+            rivers: (layers.rivers || []).some(it => hasGeo(it.data)),
+            bathymetry: (layers.bathymetry || []).some(it => Array.isArray(it.data) && it.data.length > 0),
         };
         // Update the state of ALL base layers (data -> can be enabled; none -> greyed out + reason), remove layers that no longer have data
         Object.entries(this.contextAvail).forEach(([k, ok]) => {
@@ -286,29 +292,32 @@ export class DashboardMap {
             this._setBase(k, ok, `No ${file} in the project folder 'others'`);
             if (!ok && this.groups[k]) { this.map.removeLayer(this.groups[k]); delete this.groups[k]; }
         });
-        if (this.contextAvail.lake) {
-            const g = L.geoJSON(layers.lake, {
-                style: { color: '#7dd3fc', weight: 1.4, fill: false, opacity: 0.9 }, interactive: false,
+        const allDepths = (layers.bathymetry || []).flatMap(it => (it.data || []).map(p => p[2]));
+        const maxD = allDepths.length ? Math.max(...allDepths) : 1;
+        const bathyRenderer = L.canvas({ padding: 0.3 });
+        const makers = {
+            lake: (gj) => L.geoJSON(gj, { style: { color: '#7dd3fc', weight: 1.4, fill: false, opacity: 0.9 }, interactive: false }),
+            catchment: (gj) => L.geoJSON(gj, {
+                style: { color: '#a3e635', weight: 1.3, dashArray: '5 5', fillColor: '#a3e635', fillOpacity: 0.03 }, interactive: false }),
+            rivers: (gj) => L.geoJSON(gj, {
+                style: (f) => ({ color: '#60a5fa', weight: Math.min(4, 1 + (f.properties?.Width || 0.5)), opacity: 0.8 }), interactive: false }),
+            bathymetry: (pts) => L.layerGroup(pts.map(([la, lo, d]) => L.circleMarker([la, lo], {
+                renderer: bathyRenderer, radius: 2.4, stroke: false, fillOpacity: 0.85, fillColor: paletteColor(d / maxD, 'bathymetry'),
+            }).bindTooltip(`${d.toFixed(0)} m`, { className: 'dash-tooltip' }))),
+        };
+        Object.entries(makers).forEach(([key, make]) => {
+            if (!this.contextAvail[key]) { this.contextItems[key] = []; this.itemLayers[key] = {}; return; }
+            const items = layers[key], hidden = new Set(this.state.hiddenItems?.[key] || []), group = L.layerGroup();
+            this.contextItems[key] = items.map(it => ({ id: it.id, label: it.label }));
+            this.itemLayers[key] = {};
+            items.forEach(it => {
+                const lyr = make(it.data);
+                this.itemLayers[key][it.id] = lyr;
+                if (!hidden.has(it.id)) group.addLayer(lyr);
+                if (key === 'lake' && lyr.getBounds) parts.push(lyr.getBounds());
             });
-            this._addGroup('lake', g); parts.push(g.getBounds());
-        }
-        if (this.contextAvail.catchment) {
-            this._addGroup('catchment', L.geoJSON(layers.catchment, {
-                style: { color: '#a3e635', weight: 1.3, dashArray: '5 5', fillColor: '#a3e635', fillOpacity: 0.03 }, interactive: false,
-            }));
-        }
-        if (this.contextAvail.rivers) {
-            this._addGroup('rivers', L.geoJSON(layers.rivers, {
-                style: (f) => ({ color: '#60a5fa', weight: Math.min(4, 1 + (f.properties?.Width || 0.5)), opacity: 0.8 }), interactive: false,
-            }));
-        }
-        if (this.contextAvail.bathymetry) {
-            const maxD = Math.max(...layers.bathymetry.map(p => p[2]));
-            const r = L.canvas({ padding: 0.3 });
-            this._addGroup('bathymetry', L.layerGroup(layers.bathymetry.map(([la, lo, d]) => L.circleMarker([la, lo], {
-                renderer: r, radius: 2.4, stroke: false, fillOpacity: 0.85, fillColor: paletteColor(d / maxD, 'bathymetry'),
-            }).bindTooltip(`${d.toFixed(0)} m`, { className: 'dash-tooltip' }))));
-        }
+            this._addGroup(key, group);
+        });
         // Remove previous GIS layers
         Object.keys(this.groups).filter(k => k.startsWith('gis:')).forEach(k => {
             this.map.removeLayer(this.groups[k]); delete this.groups[k];
@@ -327,7 +336,7 @@ export class DashboardMap {
                 },
             }));
         });
-        this.contextBounds = parts.length ? parts[0] : null;
+        this.contextBounds = parts.length ? parts.reduce((b, x) => b.extend(x), L.latLngBounds(parts[0].getSouthWest(), parts[0].getNorthEast())) : null;
         this.renderLayerList(); this.renderLegend();
     }
 
@@ -387,22 +396,66 @@ export class DashboardMap {
             const on = !disabled && (this.state[d.key] ?? d.on); const loading = this.loadingKeys.has(d.key);
             const sw = d.kind === 'gradient' ? paletteCss(d.palette || this.field?.palette || 'thermal') : d.color;
             const tip = disabled ? this.reasonOf(d) : (d.extra && av?.reason ? `${d.label} – ${av.reason}` : d.label);
-            return `<label class="layer-item${disabled ? ' disabled' : ''}${loading ? ' loading' : ''}" title="${esc(tip)}">
+            const items = (!disabled && this.contextItems[d.key]) || [], multi = items.length > 1, open = multi && this.expanded.has(d.key);
+            const hidden = new Set(this.state.hiddenItems?.[d.key] || []), shown = items.filter(it => !hidden.has(it.id)).length;
+            const name = multi ? `${esc(d.label)} <span class="layer-count">${shown}/${items.length}</span>` : esc(d.label);
+            const itemTip = items.length === 1 && items[0].label !== 'default' ? `${d.label}: ${items[0].label}` : tip;
+            let html = `<label class="layer-item${disabled ? ' disabled' : ''}${loading ? ' loading' : ''}" title="${esc(itemTip)}">
                 <input type="checkbox" data-layer="${esc(d.key)}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
-                <span class="layer-check"></span><span class="layer-name">${esc(d.label)}</span>
+                <span class="layer-check"></span><span class="layer-name">${name}</span>
+                ${multi ? `<button type="button" class="layer-more${open ? ' open' : ''}" data-more="${esc(d.key)}" title="Choose files" aria-expanded="${open}">▾</button>` : ''}
                 ${d.extra && on && this.settingsHandlers[d.key] ? `<button type="button" class="layer-gear" data-settings="${esc(d.key)}" title="${esc(d.label)} settings">⚙</button>` : ''}
                 <span class="swatch" style="background:${sw}"></span></label>`;
+            if (open) {
+                html += `<div class="layer-sub" data-sub="${esc(d.key)}">
+                    <div class="layer-sub-actions"><button type="button" data-items-all="${esc(d.key)}">All</button><button type="button" data-items-none="${esc(d.key)}">None</button></div>
+                    ${items.map(it => `<label class="layer-subitem" title="${esc(it.id)}">
+                        <input type="checkbox" data-item="${esc(d.key)}" data-id="${esc(it.id)}" ${hidden.has(it.id) ? '' : 'checked'}>
+                        <span class="layer-check"></span><span class="layer-name">${esc(it.label)}</span></label>`).join('')}
+                </div>`;
+            }
+            return html;
         }).join('');
-        this.layerListEl.onclick = (e) => {             // ⚙ button inside <label>: does not toggle the checkbox
+        this.layerListEl.onclick = (e) => {             // ⚙ / ▾ buttons inside <label>: do not toggle the checkbox
+            const more = e.target.closest('[data-more]');
+            if (more) {
+                e.preventDefault(); e.stopPropagation();
+                const k = more.dataset.more;
+                this.expanded.has(k) ? this.expanded.delete(k) : this.expanded.add(k);
+                this.renderLayerList(); return;
+            }
+            const all = e.target.closest('[data-items-all],[data-items-none]');
+            if (all) {
+                e.preventDefault();
+                const k = all.dataset.itemsAll || all.dataset.itemsNone;
+                this.setItems(k, (this.contextItems[k] || []).map(it => it.id), !!all.dataset.itemsAll); return;
+            }
             const g = e.target.closest('[data-settings]');
             if (!g) return;
             e.preventDefault(); e.stopPropagation();
             this.settingsHandlers[g.dataset.settings]?.(g);
         };
         this.layerListEl.onchange = (e) => {
+            const item = e.target.closest('[data-item]');
+            if (item) { this.setItems(item.dataset.item, [item.dataset.id], item.checked); return; }
             const input = e.target.closest('[data-layer]');
             if (input && !input.disabled) this.toggle(input.dataset.layer, input.checked);
         };
+    }
+
+    // Show / hide individual files of a context layer (e.g. the catchment of one Wflow scenario).
+    // Hidden file ids are saved per layer, so files added later are shown by default.
+    setItems(key, ids, on) {
+        const hidden = new Set(this.state.hiddenItems?.[key] || []);
+        ids.forEach(id => on ? hidden.delete(id) : hidden.add(id));
+        this.state.hiddenItems = { ...(this.state.hiddenItems || {}), [key]: [...hidden] };
+        saveState(this.state);
+        const group = this.groups[key];
+        if (group) Object.entries(this.itemLayers[key] || {}).forEach(([id, lyr]) => {
+            if (hidden.has(id)) group.removeLayer(lyr); else if (!group.hasLayer(lyr)) group.addLayer(lyr);
+        });
+        if (on && !this.isOn(key)) this.toggle(key, true);   // ticking a file switches its layer on
+        this.renderLayerList(); this.renderLegend();
     }
 
     //  extra layers (movement, wflow)

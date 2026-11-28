@@ -54,6 +54,10 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         if IS_PROD: h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         if path.startswith(("/auth/", "/login", "/admin")): h["Cache-Control"] = "no-store"
+        # UI files (JS/CSS/HTML, also inside the tool iframes): always revalidate with the server, so an edited
+        # file is used on the next load. Unchanged files still come from the cache (304 Not Modified, no re-download).
+        elif path.startswith(("/src_frontend/", "/src_backend/")) or path.endswith(".html") or path in ("/", "/dashboard"):
+            h.setdefault("Cache-Control", "no-cache")
         dt = (time.perf_counter() - t0) * 1000
         if dt > 5000: log.info("Slow request %s %s: %.0f ms", request.method, path, dt)
         return response

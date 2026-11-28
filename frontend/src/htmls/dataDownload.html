@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
     <link rel="stylesheet" href="/src_frontend/styles/tabControler.css">
     <link rel="stylesheet" href="/src_frontend/styles/dataDownload.css">
     <link rel="stylesheet" href="/src_frontend/styles/mapConfiguration.css">
@@ -40,14 +40,13 @@
                     <div class="tabs-content">
                         <div class="tabpanel" data-panel="met-tab-1">
                             <div class="grid">
-                                <div class="tile" style="grid-column: span 2;"><h3>Registration</h3>
+                                <div class="tile" style="grid-column: span 4;"><h3>Registration</h3>
                                     <div class="row">
                                         <div class="field-inline" style="flex-direction: column;">
                                             <div class="field-row">
-                                                <label for="met-client-id" style="min-width: 150px;">Frost API
-                                                    Key:</label>
+                                                <label for="met-client-id" style="min-width: 150px;">Frost API Key:</label>
                                                 <div class="input-with-icon">
-                                                    <input type="password" id="met-client-id">
+                                                    <input type="password" id="met-client-id" autocomplete="new-password">
                                                     <button type="button" data-target="met-client-id" class="toggle-password">👁️</button>
                                                 </div>
                                             </div>
@@ -122,7 +121,7 @@
                                         <div class="field-inline">
                                             <a style="margin-top: 0; font-size: 14px;">References:</a>
                                             <a class="data-link" style="font-size: 14px; color: aqua;"
-                                                href="/src_frontend/pdfs/CropEvapotranspiration.pdf" target="_blank">FAO-56 - Eq. 28
+                                                href="/src_frontend/pdfs/CropEvapotranspiration.pdf" target="_blank">FAO-56 - Eq. 28 (compute TOA)
                                             </a>
                                         </div>
                                     </div>
@@ -151,7 +150,7 @@
                                             <input type="checkbox" value="mean(surface_downwelling_shortwave_flux_in_air PT1H)" checked>Hourly Mean Shortwave Radiation (W/m²)
                                         </label>
                                         <label class="checkbox-right" style="color: yellow; font-weight: bold;">
-                                            <input type="checkbox" value="compute_toa_MET" checked>Compute Top of Atmosphere Incident Solar Radiation (W/m²)
+                                            <input type="checkbox" value="compute_toa_MET" checked>Compute Top of Atmosphere (TOA) Incident Solar Radiation (W/m²)
                                         </label>
                                         <label class="checkbox-right">
                                             <input type="checkbox" value="mean(surface_air_pressure PT1H)" checked>Hourly Mean Surface Air Pressure (at 2m) (Pa)
@@ -204,13 +203,13 @@
                     <div class="tabs-content">
                         <div class="tabpanel" data-panel="nve-tab-1">
                             <div class="grid">
-                                <div class="tile" style="grid-column: span 2;"><h3>Registration</h3>
+                                <div class="tile" style="grid-column: span 4;"><h3>Registration</h3>
                                     <div class="row">
                                         <div class="field-inline" style="flex-direction: column;">
                                             <div class="field-row">
                                                 <label for="nve-client-id" style="min-width: 150px;">NVE API Key:</label>
                                                 <div class="input-with-icon">
-                                                    <input type="password" id="nve-client-id">
+                                                    <input type="password" id="nve-client-id" autocomplete="new-password">
                                                     <button type="button" data-target="nve-client-id"
                                                         class="toggle-password">👁️</button>
                                                 </div>
@@ -248,7 +247,7 @@
                                         </a>
                                         <a class="data-link" style="font-size: 14px; color: aqua;"
                                             href="https://hydapi.nve.no/UserDocumentation"
-                                            target="_blank">NVE HydAPI – API documentation
+                                            target="_blank">NVE HydAPI - API documentation
                                         </a>
                                     </div>
                                 </div>
@@ -383,18 +382,18 @@
                         <div class="tabs-content">
                             <div class="tabpanel" data-panel="regnbyge-tab-1">
                                 <div class="grid">
-                                    <div class="tile" style="grid-column: span 3;"><h3>Registration</h3>
+                                    <div class="tile" style="grid-column: span 4;"><h3>Registration</h3>
                                         <div class="row">
                                             <div class="field-inline" style="flex-direction: column;">
                                                 <div class="field-row">
                                                     <label for="regnbyge-client-id">Client Name:</label>
                                                     <div class="input-with-icon">
-                                                        <input type="password" id="regnbyge-client-id">
+                                                        <input type="password" id="regnbyge-client-id" autocomplete="new-password">
                                                         <button type="button" data-target="regnbyge-client-id" class="toggle-password">👁️</button>
                                                     </div>
                                                     <label for="regnbyge-client-secret">Client Secret:</label>
                                                     <div class="input-with-icon">
-                                                        <input type="password" id="regnbyge-client-secret">
+                                                        <input type="password" id="regnbyge-client-secret" autocomplete="new-password">
                                                         <button type="button" data-target="regnbyge-client-secret" class="toggle-password">👁️</button>
                                                     </div>
                                                 </div>
@@ -403,12 +402,12 @@
                                                 <div class="field-row">
                                                     <label for="regnbyge-client-username">Username:</label>
                                                     <div class="input-with-icon">
-                                                        <input type="password" id="regnbyge-client-username">
+                                                        <input type="password" id="regnbyge-client-username" autocomplete="new-password">
                                                         <button type="button" data-target="regnbyge-client-username" class="toggle-password">👁️</button>
                                                     </div>
                                                     <label for="regnbyge-client-password">Password:</label>
                                                     <div class="input-with-icon">
-                                                        <input type="password" id="regnbyge-client-password">
+                                                        <input type="password" id="regnbyge-client-password" autocomplete="new-password">
                                                         <button type="button" data-target="regnbyge-client-password" class="toggle-password">👁️</button>
                                                     </div>
                                                 </div>
@@ -574,13 +573,13 @@
                         <div class="tabs-content">
                             <div class="tabpanel" data-panel="era5-tab-1">
                                 <div class="grid">
-                                    <div class="tile" style="grid-column: span 2;"><h3>Registration</h3>
+                                    <div class="tile" style="grid-column: span 4;"><h3>Registration</h3>
                                         <div class="row">
                                             <div class="field-inline" style="flex-direction: column;">
                                                 <div class="field-row">
                                                     <label for="era5-api-key">API Key:</label>
                                                     <div class="input-with-icon">
-                                                        <input type="password" id="era5-api-key">
+                                                        <input type="password" id="era5-api-key" autocomplete="new-password">
                                                         <button type="button" data-target="era5-api-key" class="toggle-password">👁️</button>
                                                     </div>
                                                 </div>
@@ -703,8 +702,8 @@
                                                 <label for="other-weather-source">Source:</label>
                                                 <select id="other-weather-source" style="width: 100%;">
                                                     <option value="" selected>--- Please select---</option>
-                                                    <option value="met-nordic">MET Norway - MET Nordic (1 km, Nordic countries)</option>
                                                     <option value="open-meteo">Open-Meteo - Historical API (non-commercial)</option>
+                                                    <option value="met-nordic">MET Norway - MET Nordic (1 km, Nordic countries)</option>
                                                 </select>
                                             </div>
                                             <p class="init-hint" id="weather-source-note" style="display: none;"></p>
@@ -843,7 +842,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.26.1.min.js"></script>
     <script src="/src_frontend/services/tooltipManager.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
     <script>
         flatpickr(".datetime", {
             enableTime: true, enableSeconds: true, dateFormat: "Y-m-d H:i:S", time_24hr: true,

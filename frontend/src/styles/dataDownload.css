@@ -240,3 +240,11 @@ body {
 }
 
 .init-hint { display: none; font-size: 12px; opacity: .75; margin: -10px 0 -10px 0; }
+
+/* Note at the top of a service tab while no API key is saved (dataDownload.js -> keyNote) */
+.api-key-note {
+  margin: 0 auto 10px; max-width: 100%; padding: 8px 12px; border-radius: 6px; font-size: 14px; text-align: center;
+  border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, 0.12); color: #fde68a;
+}
+.api-key-note[data-level="error"] { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.12); color: #fecaca; }
+.api-key-note a { color: aqua; }

@@ -181,7 +181,7 @@
 .waq-field select option { background: var(--panel); color: var(--text); }
 .waq-field select:disabled { opacity: 0.6; cursor: wait; }
 
-.project-chip { max-width: 190px; }
+.project-chip { max-width: 400px; flex-shrink: 0; }
 .project-chip .label { overflow: hidden; text-overflow: ellipsis; }
 
 /*  Views */
@@ -347,3 +347,38 @@ body.sash-dragging iframe, body.sash-dragging .leaflet-container { pointer-event
 /* Settings: shorter time zone list; the panel never exceeds the screen height */
 #settings-popover { max-height: calc(100vh - 20px); overflow-y: auto; box-sizing: border-box; }
 #settings-popover .tz-results { max-height: 132px; }          /* ~5 rows, scrolls when there are more */
+/* ---------- Storage quota (storageBanner.js) ---------- */
+.storage-banner {
+    display: flex; align-items: flex-start; gap: 10px; margin: 8px 16px 0; padding: 9px 12px;
+    border-radius: 8px; font-size: 13px; line-height: 1.4; border: 1px solid;
+}
+.storage-banner[hidden] { display: none; }
+.storage-banner.warn { background: rgba(245, 158, 11, .12); border-color: rgba(245, 158, 11, .45); color: #fbbf24; }
+.storage-banner.full { background: rgba(239, 68, 68, .12); border-color: rgba(239, 68, 68, .5); color: #fca5a5; }
+.storage-banner .storage-text { flex: 1; color: var(--text, inherit); }
+.storage-banner .storage-close {
+    border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 13px; padding: 0 2px; opacity: .8;
+}
+.storage-banner .storage-close:hover { opacity: 1; }
+.account-storage { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.account-storage.warn { color: #f59e0b; }
+.account-storage.full { color: #ef4444; font-weight: 600; }
+
+/* storage bar at the bottom of the left panel (storageBanner.js) */
+.storage-meter { position: relative; cursor: default; outline: none; }
+.storage-meter[hidden] { display: none; }
+.storage-meter .storage-meter-pct { float: right; letter-spacing: 0; text-transform: none; color: var(--text-2); }
+.storage-track { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; margin-top: 3px; }
+.storage-fill { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent); transition: width .4s; }
+.storage-meter.warn .storage-fill { background: #f59e0b; }
+.storage-meter.full .storage-fill { background: #ef4444; }
+.storage-meter.warn .storage-meter-pct { color: #f59e0b; }
+.storage-meter.full .storage-meter-pct { color: #ef4444; font-weight: 700; }
+.storage-meter.unlimited .storage-track { opacity: .5; }
+.storage-tip {
+    position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); padding: 6px 8px; border-radius: 6px;
+    background: var(--panel, #111827); border: 1px solid var(--border-strong, #374151); color: var(--text, #e5e7eb);
+    font-size: 11.5px; line-height: 1.35; box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+    opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity .15s, transform .15s; z-index: 5;
+}
+.storage-meter:hover .storage-tip, .storage-meter:focus .storage-tip { opacity: 1; transform: none; }

@@ -75,7 +75,8 @@ async def delete_project_flow(request: Request, user=Depends(functions.basic_aut
             extend_task = asyncio.create_task(functions.auto_extend(lock))
             if not os.path.exists(flow_dir): 
                 return JSONResponse({"status": 'error', "message": f"Project '{project_name}' does not exist."})
-            shutil.rmtree(flow_dir, onexc=functions.remove_readonly)
+            await run_in_threadpool(shutil.rmtree, flow_dir, onexc=functions.remove_readonly)   # large folders: worker thread
+            functions.remove_context_files(project_name, flow_name)       # its catchment / water area / rivers in 'others'
             if hasattr(request.app.state, "project_cache"): request.app.state.project_cache.pop(project_name, None)
             return JSONResponse({"status": "ok", "message": f"Project '{flow_name}' was deleted successfully."})
     except Exception as e: functions.error('/delete_project_flow', e)
@@ -86,7 +87,7 @@ async def delete_project_flow(request: Request, user=Depends(functions.basic_aut
             except asyncio.CancelledError: pass
 
 @router.post("/water_upload")
-async def water_upload(projectName: str = Form(...), file: UploadFile = File(...), 
+def water_upload(projectName: str = Form(...), file: UploadFile = File(...), 
     flowName: str = Form(...), user=Depends(functions.basic_auth)):
     try:
         project_name, _ = functions.project_definer(projectName, user)
@@ -102,11 +103,9 @@ async def water_upload(projectName: str = Form(...), file: UploadFile = File(...
             shutil.copyfileobj(file.file, buffer)
         file.file.close()
         water_gdf = gpd.read_file(water_path)
-        # Write catchment to 'others' directory
-        other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
-        os.makedirs(other_dir, exist_ok=True)
-        path = os.path.join(other_dir, 'lake.geojson')
-        water_gdf.to_file(path, driver='GeoJSON')
+        # Water area for the dashboard: <project>/others/lake__<scenario>.geojson (one file per Wflow scenario)
+        path = functions.context_file(project_name, 'lake', flowName, '.geojson')
+        (water_gdf.to_crs("EPSG:4326") if water_gdf.crs else water_gdf).to_file(path, driver='GeoJSON')
         content = {
             'message': 'Water area uploaded successfully.',
             "water_area": json.loads(water_gdf.to_json())
@@ -115,9 +114,8 @@ async def water_upload(projectName: str = Form(...), file: UploadFile = File(...
     except Exception as e: functions.error('/water_upload', e)
 
 @router.post("/water_delete")
-async def water_delete(request: Request, user=Depends(functions.basic_auth)):
+def water_delete(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name = body.get('flowName')
         flow_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "flows", flow_name, 'water_area'))
@@ -156,9 +154,8 @@ async def catchment_definer(request: Request, user=Depends(functions.basic_auth)
     except Exception as e: functions.error('/catchment_definer', e)
 
 @router.post("/clip_dem")
-async def clip_dem(request: Request, user=Depends(functions.basic_auth)):
+def clip_dem(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name, catchment = body.get('flowName'), body.get('catchment')
         lat, lon = float(body.get('lat')), float(body.get('lon'))
@@ -189,11 +186,9 @@ async def clip_dem(request: Request, user=Depends(functions.basic_auth)):
             os.makedirs(catch_dir, exist_ok=True)
             catchment_path = os.path.normpath(os.path.join(catch_dir, 'catchment.geojson'))
             catchment_buffer.to_file(catchment_path, driver='GeoJSON')
-            # Write catchment to 'others' directory
-            other_dir = os.path.join(PROJECT_ROOT, project_name, "others")
-            os.makedirs(other_dir, exist_ok=True)
-            catch_path = os.path.join(other_dir, 'catchment.geojson')
-            catchment_buffer.to_file(catch_path, driver='GeoJSON')
+            # Catchment for the dashboard: <project>/others/catchment__<scenario>.geojson (one file per Wflow scenario)
+            catch_path = functions.context_file(project_name, 'catchment', flow_name, '.geojson')
+            catchment_WGS84.to_file(catch_path, driver='GeoJSON')
             # Write outlet
             point = gpd.GeoDataFrame([{'geometry': Point(lon, lat)}], crs='EPSG:4326')
             point_path = os.path.normpath(os.path.join(catch_dir, 'outlet.geojson'))
@@ -211,7 +206,7 @@ async def clip_dem(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/clip_dem', e)
 
 @router.post("/geojson_upload")
-async def geojson_upload(file: UploadFile = File(...)):
+def geojson_upload(file: UploadFile = File(...)):
     try:
         catchment = gpd.read_file(file.file)
         if catchment.empty: 
@@ -219,12 +214,11 @@ async def geojson_upload(file: UploadFile = File(...)):
         if catchment.crs != "EPSG:4326": catchment = catchment.to_crs("EPSG:4326")
         return JSONResponse({'status': 'ok', 'content': json.loads(catchment.to_json())})
     except Exception as e: functions.error('/geojson_upload', e)
-    finally: await file.close()
+    finally: file.file.close()
 
 @router.post("/data_upload")
-async def data_upload(request: Request, user=Depends(functions.basic_auth)):
+def data_upload(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         status, key, content = 'ok', body.get('key'), None
         if key == "soil":
             soil_type, soil_depth, content = constants.SOILS[0], constants.SOILS[1], []
@@ -354,9 +348,8 @@ async def check_soil(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/check_soil', e)
 
 @router.post("/soil_upload")
-async def soil_upload(request: Request, user=Depends(functions.basic_auth)):
+def soil_upload(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name, layer = body.get('flowName'), body.get('layerName')
         if not flow_name or not layer:
@@ -383,7 +376,7 @@ async def soil_upload(request: Request, user=Depends(functions.basic_auth)):
     except Exception as e: functions.error('/soil_upload', e)
 
 @router.post("/river_upload")
-async def river_upload(file: UploadFile = File(...), key: str = Form(...), threshold: float = Form(...)):
+def river_upload(file: UploadFile = File(...), key: str = Form(...), threshold: float = Form(...)):
     river_path = None
     try:
         filename = file.filename or ""
@@ -424,6 +417,7 @@ async def river_upload(file: UploadFile = File(...), key: str = Form(...), thres
             gdf = gdf[gdf.is_valid].reset_index(drop=True)
             # Process river
             gdf["geometry"] = gdf.geometry.apply(lambda g: force_2d(g))
+            if river_path is not None: functions.safe_remove(river_path)
         elif ext == ".geojson":
             gdf = gpd.read_file(file.file)
             columns = {col.lower(): col for col in gdf.columns}
@@ -432,7 +426,6 @@ async def river_upload(file: UploadFile = File(...), key: str = Form(...), thres
             width_col, depth_col = columns['width'], columns['depth']
             gdf = gdf.rename(columns={width_col: 'Width', depth_col: 'Depth'})
             gdf = gdf[['Width', 'Depth', 'geometry']]
-        functions.safe_remove(river_path)
         if gdf is None: return JSONResponse({'status': 'error', 'message': 'Unsupported file format.'}, status_code=400)
         if gdf.empty: 
             message = "No river is detected.\nPlease check the input vector."
@@ -445,7 +438,7 @@ async def river_upload(file: UploadFile = File(...), key: str = Form(...), thres
         if river_path and os.path.isfile(river_path):
             try: functions.safe_remove(river_path)
             except OSError: traceback.print_exc()
-        await file.close()
+        file.file.close()
 
 @router.post("/polygon_clip")
 async def polygon_clip(request: Request):
@@ -468,9 +461,8 @@ async def polygon_clip(request: Request):
     except Exception as e: functions.error('/polygon_clip', e)
 
 @router.post("/river_saver")
-async def river_saver(request: Request, user=Depends(functions.basic_auth)):
+def river_saver(request: Request, body: dict = Depends(functions.json_body), user=Depends(functions.basic_auth)):
     try:
-        body = await request.json()
         project_name, _ = functions.project_definer(body.get('projectName'), user)
         flow_name, data = body.get('flowName'), body.get('data')
         flow_dir = os.path.normpath(os.path.join(PROJECT_ROOT, project_name, "flows", flow_name))
@@ -488,6 +480,8 @@ async def river_saver(request: Request, user=Depends(functions.basic_auth)):
         with xr.open_dataset(terrain_path, engine="rasterio") as ds:
             var_name = list(ds.data_vars)[0]
             terrain = ds[var_name].squeeze(drop=True).load()
+        # River network for the dashboard (lon/lat): <project>/others/river__<scenario>.geojson
+        gdf.to_file(functions.context_file(project_name, 'river', flow_name, '.geojson'), driver='GeoJSON')   # keeps Width / Depth
         result_new = result_new.to_crs(terrain.rio.crs)
         result_new.to_file(river_gpkg, driver='GPKG')
         df = pd.read_csv(os.path.normpath(os.path.join(SOURCE_BACKEND, 'flow_samples', 'river_manning_mapping.csv')))

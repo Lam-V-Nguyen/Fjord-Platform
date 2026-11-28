@@ -1,12 +1,14 @@
-import os, pickle, warnings, optuna, json
+import os, pickle, warnings, optuna, json, netCDF4, shutil
+from pyproj import Transformer
+from scipy.spatial import KDTree
 from config import SOURCE_BACKEND
 import geopandas as gpd, numpy as np
 import xarray as xr, dask.array as da
 from shapely.geometry import Polygon, MultiPolygon
-from meshkernel import MeshKernel, GeometryList, OrthogonalizationParameters, ProjectToLandBoundaryOption
+from meshkernel import MeshKernel, GeometryList, \
+    OrthogonalizationParameters, ProjectToLandBoundaryOption, Mesh2d
 from services import functions, constants
 from pyproj import CRS
-from optuna.pruners import MedianPruner
 from functools import partial
 import multiprocessing as mp, queue, time
 
@@ -15,6 +17,10 @@ optuna.logging.set_verbosity(optuna.logging.ERROR)
 
 class GridError(ValueError):
     """Grid error"""
+
+SMALL_FLOW_EDGE_THRESHOLD = 0.15
+DFM_SMALL_LINK_THRESHOLD = 0.1      # D-Flow FM default (Removesmalllinkstrsh)
+_FILL_INT, _FILL_DBL = -999, -999.0
 
 def lake_generation(folder, project_cache):
     lake_pkl_path = os.path.normpath(os.path.join(folder, 'lakes.pkl'))
@@ -161,34 +167,72 @@ def netCDF_creator(mk: MeshKernel, depth: gpd.GeoDataFrame | None = None):
         node_z = np.zeros(len(node_x))
     # Convert to Ugrid
     grid_uds = meshkernel_to_Ugrid(mk, crs_str)
-    grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(node_z.astype(np.float32)))    
-    grid_uds.attrs.update({ "institution": 'Private', "references": 'vanlnNTNU@gmail.com'})
+    grid_uds['mesh2d_node_z'] = (("mesh2d_nNodes",), da.from_array(np.asarray(node_z, dtype=np.float64)))
+    grid_uds.attrs.update({ "institution": 'Private', "references": 'vanlnNTNU@gmail.com',
+        "Conventions": "CF-1.8 UGRID-1.0 Deltares-0.10"})
     return grid_uds
+
+def ugrid_to_wgs84(ds: xr.Dataset, src_crs: str) -> xr.Dataset:
+    """UGRID dataset whose coordinates are in `src_crs` (e.g. the UTM grid of the optimization) -> lon/lat (EPSG:4326),
+    so every saved grid uses the same coordinate system as the grids made by /grid_creator."""
+    if CRS.from_user_input(src_crs).equals(CRS.from_epsg(4326)): return ds
+    from pyproj import Transformer
+    tr = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+    ds = ds.copy()
+    for xv, yv in (("mesh2d_node_x", "mesh2d_node_y"), ("mesh2d_edge_x", "mesh2d_edge_y"),
+        ("mesh2d_face_x", "mesh2d_face_y"), ("mesh2d_face_x_bnd", "mesh2d_face_y_bnd")):
+        if xv not in ds or yv not in ds: continue
+        lon, lat = tr.transform(np.asarray(ds[xv].values, dtype=np.float64), np.asarray(ds[yv].values, dtype=np.float64))
+        ds[xv] = (ds[xv].dims, da.from_array(np.asarray(lon, dtype=np.float64)), ds[xv].attrs)
+        ds[yv] = (ds[yv].dims, da.from_array(np.asarray(lat, dtype=np.float64)), ds[yv].attrs)
+    ds["crs"].attrs.update({"grid_mapping_name": "latitude_longitude", "crs_wkt": CRS.from_epsg(4326).to_wkt()})
+    return ds
+
+def remove_small_flow_edges(mk: MeshKernel, threshold: float = SMALL_FLOW_EDGE_THRESHOLD) -> int:
+    """Xoá các 'small flow link' mà D-Flow FM sẽ báo lỗi (khoảng cách 2 tâm ngoại tiếp quá nhỏ so với kích
+    thước ô; D-Flow FM mặc định Removesmalllinkstrsh = 0.1). Lưới trong mk PHẢI ở hệ mét (UTM).
+    threshold > 0.1 để có biên an toàn. Trả về số ô đã bị xoá."""
+    n_before = mk.mesh2d_get().face_x.size
+    if mk.mesh2d_get_small_flow_edge_centers(threshold).x_coordinates.size == 0: return 0
+    mk.mesh2d_delete_small_flow_edges_and_small_triangles(
+        small_flow_edges_length_threshold=threshold, min_fractional_area_triangles=0.0)
+    if mk.mesh2d_get().face_x.size == 0:
+        raise GridError("Removing small flow links left an empty grid.")
+    return n_before - mk.mesh2d_get().face_x.size
 
 def grid_creator_sync(points, level):
     scale = None if level in ('', None) else float(level)
     if scale is not None and not (np.isfinite(scale) and scale > 0):
         raise GridError("Scale factor must be a positive number.")
-    x, y = clean_ring(points[:, 1], points[:, 0])
+    lon, lat = clean_ring(points[:, 1], points[:, 0])
+    # Tạo lưới trong hệ mét (UTM), giống chế độ optimization. Tạo trực tiếp trên lon/lat thì MeshKernel coi độ
+    # là mét -> ở vĩ độ 62° tam giác bị kéo giãn ~2 lần theo phương x, nhiều góc tù -> small flow links.
+    utm_crs = gpd.GeoSeries(gpd.points_from_xy(lon, lat), crs="EPSG:4326").estimate_utm_crs()
+    utm_crs_str = utm_crs.to_string()
+    from pyproj import Transformer
+    x, y = Transformer.from_crs("EPSG:4326", utm_crs, always_xy=True).transform(lon, lat)
+    x, y = clean_ring(np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64))
     mk = build_triangular_mesh(x, y, scale)
-    grid_uds = netCDF_creator(mk)
+    remove_small_flow_edges(mk)
+    grid_uds = ugrid_to_wgs84(netCDF_creator(mk), utm_crs_str)
     grid = functions.unstructuredGridCreator(grid_uds)
     nodes = functions.nodes_from_grid(grid)
     nodes['Lat'], nodes['Lon'] = nodes.geometry.y, nodes.geometry.x
     content = {'point': json.loads(nodes.to_json()), 'polygon': json.loads(grid.to_json())}
-    return mk, grid_uds, content
+    return mk, grid_uds, content, utm_crs_str
 
 def meshkernel_to_Ugrid(mk: MeshKernel, crs: str):
     mesh = mk.mesh2d_get()
-    node_x = np.asarray(mesh.node_x, dtype=np.float32)
-    node_y = np.asarray(mesh.node_y, dtype=np.float32)
-    edge_x = np.asarray(mesh.edge_x, dtype=np.float32)
-    edge_y = np.asarray(mesh.edge_y, dtype=np.float32)
+    # float64: float32 chỉ có ~7 chữ số -> sai ~0.5 m với toạ độ UTM (northing ~6.9e6 m)
+    node_x = np.asarray(mesh.node_x, dtype=np.float64)
+    node_y = np.asarray(mesh.node_y, dtype=np.float64)
+    edge_x = np.asarray(mesh.edge_x, dtype=np.float64)
+    edge_y = np.asarray(mesh.edge_y, dtype=np.float64)
     edge_nodes = mesh.edge_nodes.reshape((-1, 2)).astype(np.int32)  # 0-based
     face_nodes_flat = mesh.face_nodes.astype(np.int32)
     nodes_per_face = mesh.nodes_per_face.astype(np.int32)
-    face_x = np.asarray(mesh.face_x, dtype=np.float32)
-    face_y = np.asarray(mesh.face_y, dtype=np.float32)
+    face_x = np.asarray(mesh.face_x, dtype=np.float64)
+    face_y = np.asarray(mesh.face_y, dtype=np.float64)
     nEdges, nFaces = edge_x.size, face_x.size
     max_n = int(nodes_per_face.max()) if nFaces > 0 else 0
     face_nodes = np.full((nFaces, max_n), np.nan, dtype=np.float32)
@@ -237,8 +281,8 @@ def meshkernel_to_Ugrid(mk: MeshKernel, crs: str):
     ds["mesh2d_node_y"] = (("mesh2d_nNodes",), da.from_array(node_y))
     ds["mesh2d_node_x"].attrs["grid_mapping"] = "crs"
     ds["mesh2d_node_y"].attrs["grid_mapping"] = "crs"
-    x_bnd = np.full_like(face_nodes, np.nan, dtype=np.float32)
-    y_bnd = np.full_like(face_nodes, np.nan, dtype=np.float32)
+    x_bnd = np.full_like(face_nodes, np.nan, dtype=np.float64)
+    y_bnd = np.full_like(face_nodes, np.nan, dtype=np.float64)
     for i in range(nFaces):
         fn = face_nodes[i]
         valid = ~np.isnan(fn)
@@ -254,10 +298,10 @@ def meshkernel_to_Ugrid(mk: MeshKernel, crs: str):
             "cf_role": "mesh_topology", "topology_dimension": 2,
             "long_name": "Topology data of 2D mesh",
             "node_coordinates": "mesh2d_node_x mesh2d_node_y",
-            "node dimensions": "mesh2d_nNodes", 
+            "node_dimension": "mesh2d_nNodes",
             "max_face_nodes_dimension": "mesh2d_nMax_face_nodes",
             "edge_node_connectivity": "mesh2d_edge_nodes",
-            "edge_dimensions": "mesh2d_nEdges",
+            "edge_dimension": "mesh2d_nEdges",
             "face_node_connectivity": "mesh2d_face_nodes",
             "edge_face_connectivity": "mesh2d_edge_faces",
             "face_dimension": "mesh2d_nFaces",
@@ -269,13 +313,26 @@ def meshkernel_to_Ugrid(mk: MeshKernel, crs: str):
     ds = ds.set_coords(["mesh2d_node_x", "mesh2d_node_y"])
     return ds
 
-def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=None):
+def _start_kernel(mode, level, polygon, base_meshes=None) -> MeshKernel:
+    """Triangular mesh to orthogonalize. 'auto' always gives the same mesh -> reuse the one built once
+    (base_meshes['auto']) instead of triangulating the polygon again in every trial."""
+    mk = MeshKernel()
+    base = (base_meshes or {}).get('auto') if mode == 'auto' else None
+    if base is not None: mk.mesh2d_set(base)
+    elif mode == 'auto': mk.mesh2d_make_triangular_mesh_from_polygon(polygon)
+    else: mk.mesh2d_make_triangular_mesh_from_polygon(polygon, scale_factor=float(level))
+    return mk
+
+def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=None, base_meshes=None):
     if stop_checker and stop_checker():
         trial.study.stop()
         raise optuna.TrialPruned("Stopped by user before execution.")
     try:
         type_choice = trial.suggest_categorical("mode", space['mode'])
-        level = trial.suggest_float("level", space['level'][0], space['level'][1])
+        # 'level' (scale factor) is only used by custom mode -> only sampled there (log scale: range spans decades)
+        level = (trial.suggest_float("level", space['level'][0], space['level'][1], log=True)
+            if type_choice == 'custom' else None
+        )
         outer_iterations = trial.suggest_int(
             "outer_iterations", space['outer_iterations'][0], space['outer_iterations'][1]
         )
@@ -288,17 +345,10 @@ def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=N
         smoothing_factor = trial.suggest_float(
             "smoothing_factor", space['smoothing_factor'][0], space['smoothing_factor'][1]
         )
-        # Remove outliers
-        if type_choice == 'custom' and level <= 0:
-            trial.set_user_attr("min", None); trial.set_user_attr("mean", None)
-            return 1e6
-        mk = MeshKernel()
-        if type_choice == 'auto': mk.mesh2d_make_triangular_mesh_from_polygon(polygon)
-        else: mk.mesh2d_make_triangular_mesh_from_polygon(polygon, scale_factor=float(level))        
+        mk = _start_kernel(type_choice, level, polygon, base_meshes)
         ortho_params = OrthogonalizationParameters(
             outer_iterations=outer_iterations, boundary_iterations=boundary_iterations,
-            inner_iterations=inner_iterations,
-            orthogonalization_to_smoothing_factor=smoothing_factor
+            inner_iterations=inner_iterations, orthogonalization_to_smoothing_factor=smoothing_factor
         )        
         mk.mesh2d_compute_orthogonalization(
             project_to_land_boundary_option=ProjectToLandBoundaryOption.DO_NOT_PROJECT_TO_LANDBOUNDARY,
@@ -309,11 +359,9 @@ def objective_function(trial: optuna.trial.Trial, polygon, space, stop_checker=N
         if len(orth_valid) == 0: 
             trial.set_user_attr("min", None); trial.set_user_attr("mean", None)
             return 1e6
-        min_value = float(np.min(orth_valid))
-        mean_value = float(np.mean(orth_valid))
+        min_value = float(np.min(orth_valid)); mean_value = float(np.mean(orth_valid))
         max_value = float(np.max(orth_valid))
-        trial.set_user_attr("min", min_value)
-        trial.set_user_attr("mean", mean_value)
+        trial.set_user_attr("min", min_value); trial.set_user_attr("mean", mean_value)
         if stop_checker and stop_checker(): trial.study.stop()
         if max_value <= 0.01: trial.study.stop()
         return max_value
@@ -331,11 +379,12 @@ def optuna_callback(study: optuna.study.Study, trial: optuna.trial.FrozenTrial, 
     try:
         best_trial = study.best_trial; best_ortho = best_trial.value
         best_type = best_trial.params.get("mode", "")
-        best_level = best_trial.params.get("level", 0.0)
+        best_level = best_trial.params.get("level")          # None when the best trial used auto mode
     except ValueError:
-        best_ortho, best_type, best_level = current_ortho, "", 0.0
-    message = f"Completed: {progress:.1f}% ({trial.number}/{n}) - Current orthogonality: {current_ortho:.4f}"
-    message += f" [Best orthogonality: {best_ortho:.4f} (mode: '{best_type:^6}' - level: {best_level:.2f})]"
+        best_ortho, best_type, best_level = current_ortho, "", None
+    level_txt = f"{best_level:.2f}" if best_level is not None else "-"
+    message = f"Completed: {progress:.1f}% ({iteration}/{n}) - Current orthogonality: {current_ortho:.4f}"
+    message += f" [Best orthogonality: {best_ortho:.4f} (mode: '{best_type:^6}' - level: {level_txt})]"
     info["progress"], info["message"] = progress, message
     info["history"].append({"iteration": iteration, "min": min_value, "mean": mean_value, "max": current_ortho})
     if info.get("stop"): study.stop()
@@ -347,13 +396,24 @@ def run_grid_optimization(processes: dict, key: str, iterations: int,
         def stop_checker():
             current = processes.get(key)
             return current.get("stop", False) if current else True
+        base_meshes = {}
+        if 'auto' in space['mode']:
+            # Auto mode: the triangular mesh does not depend on any parameter -> build it ONCE (in a separate
+            # process, so a MeshKernel crash cannot take the server down); trials only tune the orthogonalization
+            info["message"] = "Generating the base grid (auto mode) ..."
+            try:
+                base_meshes['auto'] = build_triangular_mesh(
+                    np.asarray(polygon.x_coordinates, dtype=np.float64), np.asarray(polygon.y_coordinates, dtype=np.float64)
+                ).mesh2d_get()
+            except GridError as e:
+                if space['mode'] == ['auto']:                 # auto only: nothing left to optimize
+                    info["status"], info["message"], info["grid"] = "failed", f"Auto grid generation failed: {e}", None
+                    return
+                space = {**space, 'mode': [m for m in space['mode'] if m != 'auto']}   # continue with custom only
         optuna_func = partial(
-            objective_function, polygon=polygon, space=space, stop_checker=stop_checker
+            objective_function, polygon=polygon, space=space, stop_checker=stop_checker, base_meshes=base_meshes
         )
-        study = optuna.create_study(
-            sampler=optuna.samplers.TPESampler(seed=42), direction="minimize", 
-            pruner=MedianPruner(n_startup_trials=10, n_warmup_steps=20),
-        )
+        study = optuna.create_study(sampler=optuna.samplers.TPESampler(seed=42), direction="minimize")
         callback = partial(optuna_callback, info=info, n=iterations)
         study.optimize(optuna_func, n_trials=iterations, callbacks=[callback])
         completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
@@ -367,37 +427,30 @@ def run_grid_optimization(processes: dict, key: str, iterations: int,
         if "[" in notice: notice = notice.split("[", 1)[1].split("(", 1)[0]
         info["status"], info["message"] = 'finalizing', "Generating final grid..."
         try:
-            mk = mk_from_params(best_params, polygon)
+            mk = mk_from_params(best_params, polygon, base_meshes)
+            remove_small_flow_edges(mk)          # mk đang ở UTM (mét)
         except Exception as grid_err:
             info["status"] = "stopped" if info.get("stop") else "failed"
             info["message"] = f"Optimization found best params but grid generation failed: {grid_err}"
             info["grid"], info["best_params"] = None, best_params
             return
         project_cache["mk"], project_cache["mk_crs"] = mk, utm_crs
-        grid_uds = netCDF_creator(mk)
+        # The optimization works in metres (UTM); the grid that is shown / saved / interpolated is in lon/lat
+        # (netCDF_creator labels it EPSG:4326, so it must really be lon/lat – before, it held UTM metres)
+        grid_uds = ugrid_to_wgs84(netCDF_creator(mk), utm_crs)
         best_grid = functions.unstructuredGridCreator(grid_uds)
-        best_grid = best_grid.set_crs(utm_crs, allow_override=True).to_crs("EPSG:4326")
         info["grid"] = json.loads(best_grid.to_json())
-        display_params = dict(best_params)
-        display_params["level"] = f'{best_params["level"]:.3f}'
-        display_params["mode"] = f'{best_params["mode"]:^6}'
-        display_params["outer_iterations"] = f'{best_params["outer_iterations"]:.3f}'
-        display_params["boundary_iterations"] = f'{best_params["boundary_iterations"]:.3f}'
-        display_params["inner_iterations"] = f'{best_params["inner_iterations"]:.3f}'
-        display_params["smoothing_factor"] = f'{best_params["smoothing_factor"]:.3f}'
+        # 'level' exists only when the best trial used custom mode (auto has no level -> was KeyError: 'level')
+        display_params = {k: (f"{v:.3f}" if isinstance(v, float) else v) for k, v in best_params.items()}
         notice += f" - Best parameters: {display_params})"
-        project_cache['grid_uds'] = grid_uds
-        info["best_params"] = study.best_params
-        info["status"] = "finished"
-        info["message"] = f"Completed: {notice}"
+        project_cache['grid_uds'] = grid_uds; info["best_params"] = study.best_params
+        info["status"] = "finished"; info["message"] = f"Completed: {notice}"
     except Exception as e:
         if info:
             info["status"], info["message"] = "failed", f"Internal Error: {e}"
 
-def mk_from_params(params, polygon):
-    mk = MeshKernel()
-    if params['mode'] == 'auto': mk.mesh2d_make_triangular_mesh_from_polygon(polygon)
-    else: mk.mesh2d_make_triangular_mesh_from_polygon(polygon, scale_factor=float(params['level']))
+def mk_from_params(params, polygon, base_meshes=None):
+    mk = _start_kernel(params['mode'], params.get('level'), polygon, base_meshes)
     ortho_params = OrthogonalizationParameters(
         outer_iterations=params['outer_iterations'],
         boundary_iterations=params['boundary_iterations'],
@@ -409,3 +462,287 @@ def mk_from_params(params, polygon):
         orthogonalization_parameters=ortho_params, land_boundaries=polygon
     )
     return mk
+
+def write_dflowfm_net(path, node_x, node_y, node_z, face_nodes, spherical=True, epsg=4326):
+    import netCDF4
+    node_x = np.asarray(node_x, dtype=np.float64)
+    node_y = np.asarray(node_y, dtype=np.float64)
+    node_z = np.asarray(node_z, dtype=np.float64)
+    fn = np.asarray(face_nodes, dtype=np.float64)
+    fn = np.where(np.isfinite(fn), fn, -1).astype(np.int64)
+    nmax, nnode, faces = fn.shape[1], node_x.size, []
+    for row in fn:
+        ids = row[row >= 0]
+        _, first = np.unique(ids, return_index=True); ids = ids[np.sort(first)]
+        if ids.size < 3: continue
+        xs, ys = node_x[ids], node_y[ids]
+        if np.sum(xs * np.roll(ys, -1) - np.roll(xs, -1) * ys) < 0: ids = ids[::-1]
+        faces.append(ids)
+    if not faces: raise GridError("Grid has no valid cells to save.")
+    nface = len(faces)
+    edge_index, edge_nodes, edge_faces = {}, [], []
+    for f, ids in enumerate(faces):
+        for a, b in zip(ids, np.roll(ids, -1)):
+            key = (int(min(a, b)), int(max(a, b)))
+            e = edge_index.get(key)
+            if e is None:
+                edge_index[key] = len(edge_nodes); edge_nodes.append(key); edge_faces.append([f, -1])
+            else: edge_faces[e][1] = f
+    edge_nodes = np.asarray(edge_nodes, dtype=np.int32)
+    edge_faces = np.asarray(edge_faces, dtype=np.int32)
+    fn_out = np.full((nface, nmax), _FILL_INT, dtype=np.int32)
+    xb = np.full((nface, nmax), _FILL_DBL); yb = np.full((nface, nmax), _FILL_DBL)
+    fx, fy = np.empty(nface), np.empty(nface)
+    for f, ids in enumerate(faces):
+        k = ids.size
+        fn_out[f, :k] = ids + 1
+        xb[f, :k], yb[f, :k] = node_x[ids], node_y[ids]
+        fx[f], fy[f] = node_x[ids].mean(), node_y[ids].mean()
+    ex, ey = node_x[edge_nodes].mean(axis=1), node_y[edge_nodes].mean(axis=1)
+    if spherical:
+        xunit, yunit, xstd, ystd, crs_name = "degrees_east", "degrees_north", "longitude", "latitude", "wgs84"
+    else:
+        xunit = yunit = "m"; xstd, ystd = "projection_x_coordinate", "projection_y_coordinate"
+        crs_name = "projected_coordinate_system"
+    with netCDF4.Dataset(path, "w", format="NETCDF3_CLASSIC") as d:
+        d.setncatts({"institution": "Private", "references": "vanlnNTNU@gmail.com",
+            "source": "Fjord-Platform", "Conventions": "CF-1.8 UGRID-1.0 Deltares-0.10"
+        })
+        for name, size in (("Two", 2), ("mesh2d_nEdges", len(edge_nodes)), ("mesh2d_nNodes", nnode),
+            ("mesh2d_nFaces", nface), ("mesh2d_nMax_face_nodes", nmax)):
+            d.createDimension(name, size)
+        crs = d.createVariable(crs_name, "i4")
+        crs_attrs = {"name": "WGS 84" if spherical else f"EPSG:{epsg}", "epsg": np.int32(epsg),
+            "EPSG_code": f"EPSG:{epsg}", "grid_mapping_name": "latitude_longitude" if spherical else "transverse_mercator"
+        }
+        if spherical:
+            crs_attrs.update({"longitude_of_prime_meridian": 0.0, "semi_major_axis": 6378137.0,
+                "semi_minor_axis": 6356752.314245, "inverse_flattening": 298.257223563
+            })
+        crs.setncatts(crs_attrs); crs.assignValue(epsg)
+        m = d.createVariable("mesh2d", "i4")
+        m.setncatts({
+            "cf_role": "mesh_topology", "long_name": "Topology data of 2D mesh", "topology_dimension": np.int32(2),
+            "node_coordinates": "mesh2d_node_x mesh2d_node_y", "node_dimension": "mesh2d_nNodes",
+            "max_face_nodes_dimension": "mesh2d_nMax_face_nodes",
+            "edge_node_connectivity": "mesh2d_edge_nodes", "edge_dimension": "mesh2d_nEdges",
+            "edge_coordinates": "mesh2d_edge_x mesh2d_edge_y",
+            "face_node_connectivity": "mesh2d_face_nodes", "face_dimension": "mesh2d_nFaces",
+            "edge_face_connectivity": "mesh2d_edge_faces", "face_coordinates": "mesh2d_face_x mesh2d_face_y"})
+        def var(name, dtype, dims, data, fill=None, **attrs):
+            v = d.createVariable(name, dtype, dims, fill_value=fill)
+            v.setncatts(attrs); v[:] = data
+            return v
+        var("mesh2d_node_x", "f8", ("mesh2d_nNodes",), node_x, units=xunit, standard_name=xstd, long_name="x-coordinate of mesh nodes")
+        var("mesh2d_node_y", "f8", ("mesh2d_nNodes",), node_y, units=yunit, standard_name=ystd, long_name="y-coordinate of mesh nodes")
+        var("mesh2d_node_z", "f8", ("mesh2d_nNodes",), np.where(np.isfinite(node_z), node_z, _FILL_DBL), _FILL_DBL,
+            mesh="mesh2d", location="node", coordinates="mesh2d_node_x mesh2d_node_y", standard_name="altitude",
+            long_name="z-coordinate of mesh nodes", units="m", grid_mapping=crs_name)
+        var("mesh2d_edge_x", "f8", ("mesh2d_nEdges",), ex, units=xunit, standard_name=xstd, long_name="characteristic x-coordinate of the mesh edge (e.g. midpoint)")
+        var("mesh2d_edge_y", "f8", ("mesh2d_nEdges",), ey, units=yunit, standard_name=ystd, long_name="characteristic y-coordinate of the mesh edge (e.g. midpoint)")
+        var("mesh2d_edge_nodes", "i4", ("mesh2d_nEdges", "Two"), edge_nodes + 1,
+            cf_role="edge_node_connectivity", long_name="Start and end nodes of mesh edges", start_index=np.int32(1))
+        var("mesh2d_face_nodes", "i4", ("mesh2d_nFaces", "mesh2d_nMax_face_nodes"), fn_out, _FILL_INT,
+            cf_role="face_node_connectivity", long_name="Vertex nodes of mesh faces (counterclockwise)", start_index=np.int32(1))
+        var("mesh2d_edge_faces", "i4", ("mesh2d_nEdges", "Two"), edge_faces + 1, _FILL_INT,   # cạnh biên: 0
+            cf_role="edge_face_connectivity", long_name="Neighboring faces of mesh edges", start_index=np.int32(1))
+        var("mesh2d_face_x", "f8", ("mesh2d_nFaces",), fx, units=xunit, standard_name=xstd, long_name="Characteristic x-coordinate of mesh face", bounds="mesh2d_face_x_bnd")
+        var("mesh2d_face_y", "f8", ("mesh2d_nFaces",), fy, units=yunit, standard_name=ystd, long_name="Characteristic y-coordinate of mesh face", bounds="mesh2d_face_y_bnd")
+        var("mesh2d_face_x_bnd", "f8", ("mesh2d_nFaces", "mesh2d_nMax_face_nodes"), xb, _FILL_DBL, units=xunit, standard_name=xstd, long_name="x-coordinate bounds of mesh faces (i.e. corner coordinates)")
+        var("mesh2d_face_y_bnd", "f8", ("mesh2d_nFaces", "mesh2d_nMax_face_nodes"), yb, _FILL_DBL, units=yunit, standard_name=ystd, long_name="y-coordinate bounds of mesh faces (i.e. corner coordinates)")
+
+def save_dflowfm_net(grid_uds: xr.Dataset, path: str, node_z=None):
+    fn = np.asarray(grid_uds['mesh2d_face_nodes'].values, dtype=np.float64)
+    start = grid_uds['mesh2d_face_nodes'].attrs.get('start_index', 1)
+    if node_z is None: node_z = grid_uds['mesh2d_node_z'].values
+    write_dflowfm_net(path, grid_uds['mesh2d_node_x'].values, 
+        grid_uds['mesh2d_node_y'].values, node_z, fn - start, spherical=True, epsg=4326
+    )
+
+# ---------------------------------------------------------------------------
+# Grid quality check / repair of small flow links
+# ---------------------------------------------------------------------------
+def to_metric_kernel(mk: MeshKernel, crs: str):
+    """MeshKernel in metres. A grid in lon/lat is copied to its UTM zone (small-flow-link and angle checks need metres)."""
+    c = CRS.from_user_input(crs)
+    if not c.is_geographic: return mk, c.to_string()
+    from pyproj import Transformer
+    mesh = mk.mesh2d_get()
+    utm = gpd.GeoSeries(gpd.points_from_xy(mesh.node_x, mesh.node_y), crs="EPSG:4326").estimate_utm_crs()
+    x, y = Transformer.from_crs("EPSG:4326", utm, always_xy=True).transform(mesh.node_x, mesh.node_y)
+    k = MeshKernel()
+    k.mesh2d_set(Mesh2d(np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64), mesh.edge_nodes.astype(np.int32)))
+    return k, utm.to_string()
+
+def _face_matrix(mesh):
+    npf = np.asarray(mesh.nodes_per_face, dtype=int)
+    fn = np.full((npf.size, max(int(npf.max()), 3) if npf.size else 3), -1, dtype=np.int64)
+    off = np.r_[0, np.cumsum(npf)[:-1]]
+    for i, (o, n) in enumerate(zip(off, npf)): fn[i, :n] = mesh.face_nodes[o:o + n]
+    return fn
+
+def _triangle_angles(mesh):
+    """(min angle, max angle) in degrees of every triangle."""
+    fn = _face_matrix(mesh)
+    tri = fn[(fn[:, :3] >= 0).all(axis=1) & ((fn.shape[1] == 3) | (fn[:, 3:] < 0).all(axis=1)), :3]
+    if tri.size == 0: return np.array([]), np.array([])
+    P = np.stack([mesh.node_x[tri], mesh.node_y[tri]], axis=-1)
+    ang = []
+    for j in range(3):
+        u, v = P[:, (j + 1) % 3] - P[:, j], P[:, (j + 2) % 3] - P[:, j]
+        cos = (u * v).sum(-1) / (np.linalg.norm(u, axis=-1) * np.linalg.norm(v, axis=-1))
+        ang.append(np.degrees(np.arccos(np.clip(cos, -1, 1))))
+    ang = np.stack(ang, axis=1)
+    return ang.min(axis=1), ang.max(axis=1)
+
+def grid_quality_report(mk: MeshKernel, crs: str) -> dict:
+    """What D-Flow FM will complain about, plus the angle/orthogonality statistics of the grid."""
+    from pyproj import Transformer
+    k, crs_m = to_metric_kernel(mk, crs)
+    mesh = k.mesh2d_get()
+    centers = k.mesh2d_get_small_flow_edge_centers(DFM_SMALL_LINK_THRESHOLD)
+    cx, cy = np.asarray(centers.x_coordinates), np.asarray(centers.y_coordinates)
+    points = []
+    if cx.size:
+        lon, lat = Transformer.from_crs(crs_m, "EPSG:4326", always_xy=True).transform(cx, cy)
+        points = [[float(a), float(b)] for a, b in zip(lat, lon)]
+    amin, amax = _triangle_angles(mesh)
+    orth = np.asarray(k.mesh2d_get_orthogonality().values); orth = orth[orth != -999]
+    return {
+        "n_nodes": int(mesh.node_x.size), "n_edges": int(mesh.edge_x.size), "n_faces": int(mesh.face_x.size),
+        "small_links": int(cx.size), "small_link_points": points,           # [lat, lon] for Leaflet
+        "obtuse_cells": int((amax > 90).sum()),
+        "max_angle": round(float(amax.max()), 1) if amax.size else None,
+        "min_angle": round(float(amin.min()), 1) if amin.size else None,
+        "max_orthogonality": round(float(orth.max()), 4) if orth.size else None,
+        "mean_orthogonality": round(float(orth.mean()), 4) if orth.size else None,
+    }
+
+def grid_content(grid_uds: xr.Dataset) -> dict:
+    """GeoJSON of cells and nodes for the map (same as grid_creator_sync returns)."""
+    grid = functions.unstructuredGridCreator(grid_uds)
+    nodes = functions.nodes_from_grid(grid)
+    nodes['Lat'], nodes['Lon'] = nodes.geometry.y, nodes.geometry.x
+    return {'point': json.loads(nodes.to_json()), 'polygon': json.loads(grid.to_json())}
+
+def fix_cached_grid_small_links(project_cache: dict) -> dict:
+    """Remove the small flow links of the grid in memory (grid page). Updates mk, mk_crs and grid_uds."""
+    mk = project_cache.get('mk')
+    if mk is None: raise GridError("No grid in memory. Generate or optimize a grid first.")
+    k, crs_m = to_metric_kernel(mk, project_cache.get('mk_crs', "EPSG:4326"))
+    n_links = k.mesh2d_get_small_flow_edge_centers(DFM_SMALL_LINK_THRESHOLD).x_coordinates.size
+    removed = remove_small_flow_edges(k)
+    left = k.mesh2d_get_small_flow_edge_centers(DFM_SMALL_LINK_THRESHOLD).x_coordinates.size
+    grid_uds = ugrid_to_wgs84(netCDF_creator(k), crs_m)
+    project_cache['mk'], project_cache['mk_crs'], project_cache['grid_uds'] = k, crs_m, grid_uds
+    return {"small_links": int(n_links), "removed_cells": int(removed), "left": int(left), "content": grid_content(grid_uds)}
+
+def fix_net_file_small_flow_links(path: str, threshold: float = SMALL_FLOW_EDGE_THRESHOLD) -> dict:
+    """Remove small flow links from a saved *_net.nc (scenario input). The original file is kept as a backup;
+    the depth of every node is taken from the nearest node of the original grid."""
+    with netCDF4.Dataset(path) as d:
+        d.set_auto_mask(False)
+        if 'mesh2d_node_x' not in d.variables or 'mesh2d_edge_nodes' not in d.variables:
+            raise GridError("The grid file is not a UGRID (mesh2d) file. Save the grid again from the Grid tab.")
+        x, y = d['mesh2d_node_x'][:].astype(np.float64), d['mesh2d_node_y'][:].astype(np.float64)
+        z = d['mesh2d_node_z'][:].astype(np.float64) if 'mesh2d_node_z' in d.variables else np.zeros_like(x)
+        ev = d['mesh2d_edge_nodes']; en = ev[:].astype(np.int64) - int(getattr(ev, 'start_index', 1))
+        spherical = 'degree' in str(getattr(d['mesh2d_node_x'], 'units', '')).lower()
+        epsg = 4326
+        for v in d.variables.values():
+            if hasattr(v, 'epsg'): epsg = int(np.asarray(v.epsg).ravel()[0]); break
+    if spherical:
+        utm = gpd.GeoSeries(gpd.points_from_xy(x, y), crs="EPSG:4326").estimate_utm_crs()
+        xm, ym = Transformer.from_crs("EPSG:4326", utm, always_xy=True).transform(x, y)
+        xm, ym = np.asarray(xm, dtype=np.float64), np.asarray(ym, dtype=np.float64)
+    else: xm, ym = x, y
+    k = MeshKernel(); k.mesh2d_set(Mesh2d(xm, ym, en.ravel().astype(np.int32)))
+    n_links = k.mesh2d_get_small_flow_edge_centers(DFM_SMALL_LINK_THRESHOLD).x_coordinates.size
+    n_before = k.mesh2d_get().face_x.size
+    removed = remove_small_flow_edges(k, threshold)
+    if removed == 0: return {"changed": False, "small_links": int(n_links), "removed_cells": 0, "backup": None,
+        "message": "No small flow links found in the grid."}
+    mesh = k.mesh2d_get()
+    z_new = z[KDTree(np.c_[xm, ym]).query(np.c_[mesh.node_x, mesh.node_y])[1]]
+    nx, ny = mesh.node_x, mesh.node_y
+    if spherical: nx, ny = Transformer.from_crs(utm, "EPSG:4326", always_xy=True).transform(nx, ny)
+    # Write to a temporary file first, then replace the old grid in one step (no half-written grid on errors)
+    root, ext = os.path.splitext(path)
+    tmp = f"{root}_tmp{ext}"
+    try:
+        write_dflowfm_net(tmp, nx, ny, z_new, _face_matrix(mesh), spherical=spherical, epsg=epsg)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp): os.remove(tmp)
+    deleted = remove_old_grid_files(os.path.dirname(path), keep_file=os.path.basename(path))
+    left = k.mesh2d_get_small_flow_edge_centers(DFM_SMALL_LINK_THRESHOLD).x_coordinates.size
+    return {"changed": True, "small_links": int(n_links), "removed_cells": int(n_before - mesh.face_x.size),
+        "left": int(left), "deleted": deleted,
+        "message": f"Removed {n_links} small flow link(s) ({n_before - mesh.face_x.size} of {n_before} cells merged). "
+        f"The grid file '{os.path.basename(path)}' was replaced."
+    }
+
+def remove_old_grid_files(folder: str, keep_file: str, old_file: str | None = None) -> list:
+    """Delete the previous grid of a scenario and all backup copies. Only grid files are touched:
+    the old NetFile, other *_net.nc files and *_backup_*.nc / *_tmp.nc copies. Other .nc inputs
+    (meteo, boundary data, ...) are never deleted. Returns the names of the deleted files."""
+    import glob, re
+    keep = os.path.normcase(os.path.abspath(os.path.join(folder, keep_file)))
+    candidates = set(glob.glob(os.path.join(folder, "*_net.nc")))
+    candidates |= {p for p in glob.glob(os.path.join(folder, "*.nc"))
+        if re.search(r"_backup_\d{8}_\d{6}\.nc$|_tmp\.nc$", os.path.basename(p), re.IGNORECASE)
+    }
+    if old_file: candidates.add(os.path.join(folder, old_file))
+    deleted = []
+    for p in candidates:
+        if os.path.normcase(os.path.abspath(p)) == keep or not os.path.isfile(p): continue
+        try: os.remove(p); deleted.append(os.path.basename(p))
+        except OSError as e: print(f"Could not delete old grid file {p}: {e}")
+    return sorted(deleted)
+
+def update_scenario_grid(input_dir: str, mdu_path: str, new_grid_path: str, new_name: str | None = None) -> dict:
+    """Put a new grid into a scenario: copy it to the input folder, point NetFile in the MDU to it,
+    then delete the old grid file and its backups."""
+    import shutil, re
+    new_name = new_name or os.path.basename(new_grid_path)
+    dst = os.path.join(input_dir, new_name)
+    with open(mdu_path, 'r', encoding='utf-8', errors='ignore') as f: lines = f.readlines()
+    old_name = None
+    for i, line in enumerate(lines):
+        m = re.match(r'^(\s*NetFile\s*=\s*)([^#\r\n]*?)(\s*(#.*)?)(\r?\n?)$', line, re.IGNORECASE)
+        if m:
+            old_name = m.group(2).strip() or None
+            lines[i] = f"{m.group(1)}{new_name}{m.group(3)}{m.group(5) or os.linesep}"
+            break
+    else: raise GridError("NetFile not found in the MDU file.")
+    if os.path.normcase(os.path.abspath(new_grid_path)) != os.path.normcase(os.path.abspath(dst)):
+        tmp = dst + ".copying"
+        shutil.copy2(new_grid_path, tmp); os.replace(tmp, dst)
+    with open(mdu_path, 'w', encoding='utf-8') as f: f.writelines(lines)
+    deleted = remove_old_grid_files(input_dir, keep_file=new_name, old_file=old_name)
+    return {"grid": new_name, "old_grid": old_name, "deleted": deleted}
+
+def inspect_net_file(path: str) -> dict:
+    """Check an uploaded grid file: format (UGRID / old D-Flow FM 'NetNode' format) and number of small flow links."""
+    import netCDF4
+    from pyproj import Transformer
+    try: d = netCDF4.Dataset(path)
+    except OSError: raise GridError("The file is not a NetCDF file.")
+    with d:
+        d.set_auto_mask(False)
+        if 'mesh2d_node_x' in d.variables and 'mesh2d_edge_nodes' in d.variables:
+            if 'UGRID' not in str(getattr(d, 'Conventions', '')).upper():
+                raise GridError("The grid file has no 'Conventions = UGRID-1.0' attribute, so D-Flow FM cannot read it. "
+                    "Save the grid again from the Grid tab.")
+            x, y = d['mesh2d_node_x'][:].astype(np.float64), d['mesh2d_node_y'][:].astype(np.float64)
+            ev = d['mesh2d_edge_nodes']; en = ev[:].astype(np.int64) - int(getattr(ev, 'start_index', 1))
+            spherical = 'degree' in str(getattr(d['mesh2d_node_x'], 'units', '')).lower()
+            fmt = "UGRID"
+        elif 'NetNode_x' in d.variables:
+            return {"format": "old", "small_links": None}      # old D-Flow FM format: readable, not checked here
+        else: raise GridError("The file does not contain a 2D grid (no mesh2d or NetNode variables).")
+    if spherical:
+        utm = gpd.GeoSeries(gpd.points_from_xy(x, y), crs="EPSG:4326").estimate_utm_crs()
+        x, y = (np.asarray(v, dtype=np.float64) for v in Transformer.from_crs("EPSG:4326", utm, always_xy=True).transform(x, y))
+    k = MeshKernel(); k.mesh2d_set(Mesh2d(x, y, en.ravel().astype(np.int32)))
+    return {"format": fmt, "small_links": int(k.mesh2d_get_small_flow_edge_centers(DFM_SMALL_LINK_THRESHOLD).x_coordinates.size)}

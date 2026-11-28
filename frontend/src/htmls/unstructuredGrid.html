@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
         <link rel="stylesheet" href="/src_frontend/styles/unstructuredGrid.css">
         <link rel="stylesheet" href="/src_frontend/styles/tabControler.css">
@@ -122,13 +122,19 @@
                     <div class="tabpanel main-panel" data-panel="grid-optimization-tab">
                         <div class="single-line">
                             <label class="checkbox-item">
-                                <span>Iterations</span>
-                                <input type="text" id="iterations" value="500">
+                                <input type="checkbox" id="grid-op-auto-checkbox" checked><span>Use Auto Mode</span>
                             </label>
-                            <label class="checkbox-item">
+                            <label class="checkbox-item" style="margin-left: 100px;">
+                                <input type="checkbox" id="grid-op-level-checkbox" checked><span>Use Custom Mode</span>
+                            </label>
+                            <label class="checkbox-item" id="iteration-container">
+                                <span>Iterations</span>
+                                <input type="text" id="iterations" value="1000">
+                            </label>
+                            <label class="checkbox-item" id="level-container">
                                 <span>Level</span>
                                 <input type="text" id="detail-level-from" value="5"> 
-                                <span style="width: 22px;"> --> </span> 
+                                <span style="width: 22px;"> --> </span>
                                 <input type="text" id="detail-level-to" value="500"> 
                             </label>
                             <button class="button-grid" id="optimize-grid">Optimize Orthogonality</button>
@@ -153,9 +159,10 @@
                     </div>
                     <div class="tabpanel main-panel" data-panel="grid-save-tab">
                         <div class="single-line">
+                            <button class="save-grid" id="check-grid" 
+                                title="Check the grid for problems D-Flow FM will reject (small flow links, obtuse cells)">Check Grid
+                            </button>
                             <button class="save-grid" id="save-grid">Save Grid</button>
-                            <button class="save-grid" id="recheck-grid">Recheck Grid</button>
-                            <input type="file" id="recheck-grid-file" accept=".nc" hidden>
                         </div>
                     </div>
                 </div>
